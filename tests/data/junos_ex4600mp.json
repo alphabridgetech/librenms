@@ -6,24 +6,6 @@
                     "sysName": "<private>",
                     "sysObjectID": ".1.3.6.1.4.1.2636.1.1.1.4.63.9",
                     "sysDescr": "hostname.example.org",
-                    "sysContact": null,
-                    "version": "18.4R4",
-                    "hardware": "Juniper Virtual Chassis Switch",
-                    "features": null,
-                    "os": "junos",
-                    "type": "network",
-                    "serial": "XR0123456789",
-                    "icon": "junos.png",
-                    "location": "<private>"
-                }
-            ]
-        },
-        "poller": {
-            "devices": [
-                {
-                    "sysName": "<private>",
-                    "sysObjectID": ".1.3.6.1.4.1.2636.1.1.1.4.63.9",
-                    "sysDescr": "hostname.example.org",
                     "sysContact": "<private>",
                     "version": "18.4R4",
                     "hardware": "Juniper Virtual Chassis Switch",
@@ -35,7 +17,8 @@
                     "location": "<private>"
                 }
             ]
-        }
+        },
+        "poller": "matches discovery"
     },
     "ports": {
         "discovery": {
