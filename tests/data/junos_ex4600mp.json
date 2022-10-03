@@ -10,11 +10,11 @@
                     "version": "18.4R4",
                     "hardware": "Juniper Virtual Chassis Switch",
                     "features": null,
+                    "location": "<private>",
                     "os": "junos",
                     "type": "network",
                     "serial": "XR0123456789",
-                    "icon": "junos.png",
-                    "location": "<private>"
+                    "icon": "junos.png"
                 }
             ]
         },
