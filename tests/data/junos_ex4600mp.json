@@ -179906,7 +179906,7 @@
                 {
                     "entPhysicalIndex": 2110,
                     "entPhysicalDescr": "Power Supply 0 @ 0/0/*",
-                    "entPhysicalClass": "",
+                    "entPhysicalClass": null,
                     "entPhysicalName": "Power Supply 0 @ 0/0/*",
                     "entPhysicalHardwareRev": "REV 03",
                     "entPhysicalFirmwareRev": null,
@@ -179925,7 +179925,7 @@
                 {
                     "entPhysicalIndex": 2210,
                     "entPhysicalDescr": "Power Supply 0 @ 1/0/*",
-                    "entPhysicalClass": "",
+                    "entPhysicalClass": null,
                     "entPhysicalName": "Power Supply 0 @ 1/0/*",
                     "entPhysicalHardwareRev": "REV 03",
                     "entPhysicalFirmwareRev": null,
@@ -179944,7 +179944,7 @@
                 {
                     "entPhysicalIndex": 2310,
                     "entPhysicalDescr": "Power Supply 0 @ 2/0/*",
-                    "entPhysicalClass": "",
+                    "entPhysicalClass": null,
                     "entPhysicalName": "Power Supply 0 @ 2/0/*",
                     "entPhysicalHardwareRev": "REV 03",
                     "entPhysicalFirmwareRev": null,
@@ -179963,7 +179963,7 @@
                 {
                     "entPhysicalIndex": 2410,
                     "entPhysicalDescr": "Power Supply 0 @ 3/0/*",
-                    "entPhysicalClass": "",
+                    "entPhysicalClass": null,
                     "entPhysicalName": "Power Supply 0 @ 3/0/*",
                     "entPhysicalHardwareRev": "REV 03",
                     "entPhysicalFirmwareRev": null,
@@ -179982,7 +179982,7 @@
                 {
                     "entPhysicalIndex": 2510,
                     "entPhysicalDescr": "Power Supply 0 @ 4/0/*",
-                    "entPhysicalClass": "",
+                    "entPhysicalClass": null,
                     "entPhysicalName": "Power Supply 0 @ 4/0/*",
                     "entPhysicalHardwareRev": "REV 03",
                     "entPhysicalFirmwareRev": null,
@@ -180001,7 +180001,7 @@
                 {
                     "entPhysicalIndex": 2610,
                     "entPhysicalDescr": "Power Supply 0 @ 5/0/*",
-                    "entPhysicalClass": "",
+                    "entPhysicalClass": null,
                     "entPhysicalName": "Power Supply 0 @ 5/0/*",
                     "entPhysicalHardwareRev": "REV 03",
                     "entPhysicalFirmwareRev": null,
@@ -180020,7 +180020,7 @@
                 {
                     "entPhysicalIndex": 2710,
                     "entPhysicalDescr": "Power Supply 0 @ 6/0/*",
-                    "entPhysicalClass": "",
+                    "entPhysicalClass": null,
                     "entPhysicalName": "Power Supply 0 @ 6/0/*",
                     "entPhysicalHardwareRev": "REV 03",
                     "entPhysicalFirmwareRev": null,
@@ -180039,7 +180039,7 @@
                 {
                     "entPhysicalIndex": 2810,
                     "entPhysicalDescr": "Power Supply 0 @ 7/0/*",
-                    "entPhysicalClass": "",
+                    "entPhysicalClass": null,
                     "entPhysicalName": "Power Supply 0 @ 7/0/*",
                     "entPhysicalHardwareRev": "REV 03",
                     "entPhysicalFirmwareRev": null,
@@ -180058,7 +180058,7 @@
                 {
                     "entPhysicalIndex": 4110,
                     "entPhysicalDescr": "Fan Tray 0 @ 0/0/*",
-                    "entPhysicalClass": "",
+                    "entPhysicalClass": null,
                     "entPhysicalName": "Fan Tray 0 @ 0/0/*",
                     "entPhysicalHardwareRev": "",
                     "entPhysicalFirmwareRev": null,
@@ -180077,7 +180077,7 @@
                 {
                     "entPhysicalIndex": 4120,
                     "entPhysicalDescr": "Fan Tray 1 @ 0/1/*",
-                    "entPhysicalClass": "",
+                    "entPhysicalClass": null,
                     "entPhysicalName": "Fan Tray 1 @ 0/1/*",
                     "entPhysicalHardwareRev": "",
                     "entPhysicalFirmwareRev": null,
@@ -180096,7 +180096,7 @@
                 {
                     "entPhysicalIndex": 4210,
                     "entPhysicalDescr": "Fan Tray 0 @ 1/0/*",
-                    "entPhysicalClass": "",
+                    "entPhysicalClass": null,
                     "entPhysicalName": "Fan Tray 0 @ 1/0/*",
                     "entPhysicalHardwareRev": "",
                     "entPhysicalFirmwareRev": null,
@@ -180115,7 +180115,7 @@
                 {
                     "entPhysicalIndex": 4220,
                     "entPhysicalDescr": "Fan Tray 1 @ 1/1/*",
-                    "entPhysicalClass": "",
+                    "entPhysicalClass": null,
                     "entPhysicalName": "Fan Tray 1 @ 1/1/*",
                     "entPhysicalHardwareRev": "",
                     "entPhysicalFirmwareRev": null,
@@ -180134,7 +180134,7 @@
                 {
                     "entPhysicalIndex": 4310,
                     "entPhysicalDescr": "Fan Tray 0 @ 2/0/*",
-                    "entPhysicalClass": "",
+                    "entPhysicalClass": null,
                     "entPhysicalName": "Fan Tray 0 @ 2/0/*",
                     "entPhysicalHardwareRev": "",
                     "entPhysicalFirmwareRev": null,
@@ -180153,7 +180153,7 @@
                 {
                     "entPhysicalIndex": 4320,
                     "entPhysicalDescr": "Fan Tray 1 @ 2/1/*",
-                    "entPhysicalClass": "",
+                    "entPhysicalClass": null,
                     "entPhysicalName": "Fan Tray 1 @ 2/1/*",
                     "entPhysicalHardwareRev": "",
                     "entPhysicalFirmwareRev": null,
@@ -180172,7 +180172,7 @@
                 {
                     "entPhysicalIndex": 4410,
                     "entPhysicalDescr": "Fan Tray 0 @ 3/0/*",
-                    "entPhysicalClass": "",
+                    "entPhysicalClass": null,
                     "entPhysicalName": "Fan Tray 0 @ 3/0/*",
                     "entPhysicalHardwareRev": "",
                     "entPhysicalFirmwareRev": null,
@@ -180191,7 +180191,7 @@
                 {
                     "entPhysicalIndex": 4420,
                     "entPhysicalDescr": "Fan Tray 1 @ 3/1/*",
-                    "entPhysicalClass": "",
+                    "entPhysicalClass": null,
                     "entPhysicalName": "Fan Tray 1 @ 3/1/*",
                     "entPhysicalHardwareRev": "",
                     "entPhysicalFirmwareRev": null,
@@ -180210,7 +180210,7 @@
                 {
                     "entPhysicalIndex": 4510,
                     "entPhysicalDescr": "Fan Tray 0 @ 4/0/*",
-                    "entPhysicalClass": "",
+                    "entPhysicalClass": null,
                     "entPhysicalName": "Fan Tray 0 @ 4/0/*",
                     "entPhysicalHardwareRev": "",
                     "entPhysicalFirmwareRev": null,
@@ -180229,7 +180229,7 @@
                 {
                     "entPhysicalIndex": 4520,
                     "entPhysicalDescr": "Fan Tray 1 @ 4/1/*",
-                    "entPhysicalClass": "",
+                    "entPhysicalClass": null,
                     "entPhysicalName": "Fan Tray 1 @ 4/1/*",
                     "entPhysicalHardwareRev": "",
                     "entPhysicalFirmwareRev": null,
@@ -180248,7 +180248,7 @@
                 {
                     "entPhysicalIndex": 4610,
                     "entPhysicalDescr": "Fan Tray 0 @ 5/0/*",
-                    "entPhysicalClass": "",
+                    "entPhysicalClass": null,
                     "entPhysicalName": "Fan Tray 0 @ 5/0/*",
                     "entPhysicalHardwareRev": "",
                     "entPhysicalFirmwareRev": null,
@@ -180267,7 +180267,7 @@
                 {
                     "entPhysicalIndex": 4620,
                     "entPhysicalDescr": "Fan Tray 1 @ 5/1/*",
-                    "entPhysicalClass": "",
+                    "entPhysicalClass": null,
                     "entPhysicalName": "Fan Tray 1 @ 5/1/*",
                     "entPhysicalHardwareRev": "",
                     "entPhysicalFirmwareRev": null,
@@ -180286,7 +180286,7 @@
                 {
                     "entPhysicalIndex": 4710,
                     "entPhysicalDescr": "Fan Tray 0 @ 6/0/*",
-                    "entPhysicalClass": "",
+                    "entPhysicalClass": null,
                     "entPhysicalName": "Fan Tray 0 @ 6/0/*",
                     "entPhysicalHardwareRev": "",
                     "entPhysicalFirmwareRev": null,
@@ -180305,7 +180305,7 @@
                 {
                     "entPhysicalIndex": 4720,
                     "entPhysicalDescr": "Fan Tray 1 @ 6/1/*",
-                    "entPhysicalClass": "",
+                    "entPhysicalClass": null,
                     "entPhysicalName": "Fan Tray 1 @ 6/1/*",
                     "entPhysicalHardwareRev": "",
                     "entPhysicalFirmwareRev": null,
@@ -180324,7 +180324,7 @@
                 {
                     "entPhysicalIndex": 4810,
                     "entPhysicalDescr": "Fan Tray 0 @ 7/0/*",
-                    "entPhysicalClass": "",
+                    "entPhysicalClass": null,
                     "entPhysicalName": "Fan Tray 0 @ 7/0/*",
                     "entPhysicalHardwareRev": "",
                     "entPhysicalFirmwareRev": null,
@@ -180343,7 +180343,7 @@
                 {
                     "entPhysicalIndex": 4820,
                     "entPhysicalDescr": "Fan Tray 1 @ 7/1/*",
-                    "entPhysicalClass": "",
+                    "entPhysicalClass": null,
                     "entPhysicalName": "Fan Tray 1 @ 7/1/*",
                     "entPhysicalHardwareRev": "",
                     "entPhysicalFirmwareRev": null,
@@ -180362,7 +180362,7 @@
                 {
                     "entPhysicalIndex": 7100,
                     "entPhysicalDescr": "FPC: EX4300-48MP @ 0/*/*",
-                    "entPhysicalClass": "",
+                    "entPhysicalClass": null,
                     "entPhysicalName": "FPC: EX4300-48MP @ 0/*/*",
                     "entPhysicalHardwareRev": "REV 05",
                     "entPhysicalFirmwareRev": null,
@@ -180381,7 +180381,7 @@
                 {
                     "entPhysicalIndex": 7200,
                     "entPhysicalDescr": "FPC: EX4300-48MP @ 1/*/*",
-                    "entPhysicalClass": "",
+                    "entPhysicalClass": null,
                     "entPhysicalName": "FPC: EX4300-48MP @ 1/*/*",
                     "entPhysicalHardwareRev": "REV 05",
                     "entPhysicalFirmwareRev": null,
@@ -180400,7 +180400,7 @@
                 {
                     "entPhysicalIndex": 7300,
                     "entPhysicalDescr": "FPC: EX4300-48MP @ 2/*/*",
-                    "entPhysicalClass": "",
+                    "entPhysicalClass": null,
                     "entPhysicalName": "FPC: EX4300-48MP @ 2/*/*",
                     "entPhysicalHardwareRev": "REV 05",
                     "entPhysicalFirmwareRev": null,
@@ -180419,7 +180419,7 @@
                 {
                     "entPhysicalIndex": 7400,
                     "entPhysicalDescr": "FPC: EX4300-48MP @ 3/*/*",
-                    "entPhysicalClass": "",
+                    "entPhysicalClass": null,
                     "entPhysicalName": "FPC: EX4300-48MP @ 3/*/*",
                     "entPhysicalHardwareRev": "REV 05",
                     "entPhysicalFirmwareRev": null,
@@ -180438,7 +180438,7 @@
                 {
                     "entPhysicalIndex": 7500,
                     "entPhysicalDescr": "FPC: EX4300-48MP @ 4/*/*",
-                    "entPhysicalClass": "",
+                    "entPhysicalClass": null,
                     "entPhysicalName": "FPC: EX4300-48MP @ 4/*/*",
                     "entPhysicalHardwareRev": "REV 05",
                     "entPhysicalFirmwareRev": null,
@@ -180457,7 +180457,7 @@
                 {
                     "entPhysicalIndex": 7600,
                     "entPhysicalDescr": "FPC: EX4300-48MP @ 5/*/*",
-                    "entPhysicalClass": "",
+                    "entPhysicalClass": null,
                     "entPhysicalName": "FPC: EX4300-48MP @ 5/*/*",
                     "entPhysicalHardwareRev": "REV 05",
                     "entPhysicalFirmwareRev": null,
@@ -180476,7 +180476,7 @@
                 {
                     "entPhysicalIndex": 7700,
                     "entPhysicalDescr": "FPC: EX4300-48MP @ 6/*/*",
-                    "entPhysicalClass": "",
+                    "entPhysicalClass": null,
                     "entPhysicalName": "FPC: EX4300-48MP @ 6/*/*",
                     "entPhysicalHardwareRev": "REV 05",
                     "entPhysicalFirmwareRev": null,
@@ -180495,7 +180495,7 @@
                 {
                     "entPhysicalIndex": 7800,
                     "entPhysicalDescr": "FPC: EX4300-48MP @ 7/*/*",
-                    "entPhysicalClass": "",
+                    "entPhysicalClass": null,
                     "entPhysicalName": "FPC: EX4300-48MP @ 7/*/*",
                     "entPhysicalHardwareRev": "REV 05",
                     "entPhysicalFirmwareRev": null,
@@ -180514,7 +180514,7 @@
                 {
                     "entPhysicalIndex": 8110,
                     "entPhysicalDescr": "PIC: 24x10M/100M/1G Base-T & 24x 100M/1G/2.5G/5G/10G Base-T @ 0/0/*",
-                    "entPhysicalClass": "",
+                    "entPhysicalClass": null,
                     "entPhysicalName": "PIC: 24x10M/100M/1G Base-T & 24x 100M/1G/2.5G/5G/10G Base-T @ 0/0/*",
                     "entPhysicalHardwareRev": "REV 05",
                     "entPhysicalFirmwareRev": null,
@@ -180533,7 +180533,7 @@
                 {
                     "entPhysicalIndex": 8120,
                     "entPhysicalDescr": "PIC: 4x40G QSFP+ @ 0/1/*",
-                    "entPhysicalClass": "",
+                    "entPhysicalClass": null,
                     "entPhysicalName": "PIC: 4x40G QSFP+ @ 0/1/*",
                     "entPhysicalHardwareRev": "REV 05",
                     "entPhysicalFirmwareRev": null,
@@ -180552,7 +180552,7 @@
                 {
                     "entPhysicalIndex": 8130,
                     "entPhysicalDescr": "PIC: 2x40G/1x100G QSFP+/QSFP28 @ 0/2/*",
-                    "entPhysicalClass": "",
+                    "entPhysicalClass": null,
                     "entPhysicalName": "PIC: 2x40G/1x100G QSFP+/QSFP28 @ 0/2/*",
                     "entPhysicalHardwareRev": "REV 05",
                     "entPhysicalFirmwareRev": null,
@@ -180571,7 +180571,7 @@
                 {
                     "entPhysicalIndex": 8210,
                     "entPhysicalDescr": "PIC: 24x10M/100M/1G Base-T & 24x 100M/1G/2.5G/5G/10G Base-T @ 1/0/*",
-                    "entPhysicalClass": "",
+                    "entPhysicalClass": null,
                     "entPhysicalName": "PIC: 24x10M/100M/1G Base-T & 24x 100M/1G/2.5G/5G/10G Base-T @ 1/0/*",
                     "entPhysicalHardwareRev": "REV 05",
                     "entPhysicalFirmwareRev": null,
@@ -180590,7 +180590,7 @@
                 {
                     "entPhysicalIndex": 8220,
                     "entPhysicalDescr": "PIC: 4x40G QSFP+ @ 1/1/*",
-                    "entPhysicalClass": "",
+                    "entPhysicalClass": null,
                     "entPhysicalName": "PIC: 4x40G QSFP+ @ 1/1/*",
                     "entPhysicalHardwareRev": "REV 05",
                     "entPhysicalFirmwareRev": null,
@@ -180609,7 +180609,7 @@
                 {
                     "entPhysicalIndex": 8230,
                     "entPhysicalDescr": "PIC: 2x40G/1x100G QSFP+/QSFP28 @ 1/2/*",
-                    "entPhysicalClass": "",
+                    "entPhysicalClass": null,
                     "entPhysicalName": "PIC: 2x40G/1x100G QSFP+/QSFP28 @ 1/2/*",
                     "entPhysicalHardwareRev": "REV 05",
                     "entPhysicalFirmwareRev": null,
@@ -180628,7 +180628,7 @@
                 {
                     "entPhysicalIndex": 8310,
                     "entPhysicalDescr": "PIC: 24x10M/100M/1G Base-T & 24x 100M/1G/2.5G/5G/10G Base-T @ 2/0/*",
-                    "entPhysicalClass": "",
+                    "entPhysicalClass": null,
                     "entPhysicalName": "PIC: 24x10M/100M/1G Base-T & 24x 100M/1G/2.5G/5G/10G Base-T @ 2/0/*",
                     "entPhysicalHardwareRev": "REV 05",
                     "entPhysicalFirmwareRev": null,
@@ -180647,7 +180647,7 @@
                 {
                     "entPhysicalIndex": 8320,
                     "entPhysicalDescr": "PIC: 4x40G QSFP+ @ 2/1/*",
-                    "entPhysicalClass": "",
+                    "entPhysicalClass": null,
                     "entPhysicalName": "PIC: 4x40G QSFP+ @ 2/1/*",
                     "entPhysicalHardwareRev": "REV 05",
                     "entPhysicalFirmwareRev": null,
@@ -180666,7 +180666,7 @@
                 {
                     "entPhysicalIndex": 8410,
                     "entPhysicalDescr": "PIC: 24x10M/100M/1G Base-T & 24x 100M/1G/2.5G/5G/10G Base-T @ 3/0/*",
-                    "entPhysicalClass": "",
+                    "entPhysicalClass": null,
                     "entPhysicalName": "PIC: 24x10M/100M/1G Base-T & 24x 100M/1G/2.5G/5G/10G Base-T @ 3/0/*",
                     "entPhysicalHardwareRev": "REV 05",
                     "entPhysicalFirmwareRev": null,
@@ -180685,7 +180685,7 @@
                 {
                     "entPhysicalIndex": 8420,
                     "entPhysicalDescr": "PIC: 4x40G QSFP+ @ 3/1/*",
-                    "entPhysicalClass": "",
+                    "entPhysicalClass": null,
                     "entPhysicalName": "PIC: 4x40G QSFP+ @ 3/1/*",
                     "entPhysicalHardwareRev": "REV 05",
                     "entPhysicalFirmwareRev": null,
@@ -180704,7 +180704,7 @@
                 {
                     "entPhysicalIndex": 8510,
                     "entPhysicalDescr": "PIC: 24x10M/100M/1G Base-T & 24x 100M/1G/2.5G/5G/10G Base-T @ 4/0/*",
-                    "entPhysicalClass": "",
+                    "entPhysicalClass": null,
                     "entPhysicalName": "PIC: 24x10M/100M/1G Base-T & 24x 100M/1G/2.5G/5G/10G Base-T @ 4/0/*",
                     "entPhysicalHardwareRev": "REV 05",
                     "entPhysicalFirmwareRev": null,
@@ -180723,7 +180723,7 @@
                 {
                     "entPhysicalIndex": 8520,
                     "entPhysicalDescr": "PIC: 4x40G QSFP+ @ 4/1/*",
-                    "entPhysicalClass": "",
+                    "entPhysicalClass": null,
                     "entPhysicalName": "PIC: 4x40G QSFP+ @ 4/1/*",
                     "entPhysicalHardwareRev": "REV 05",
                     "entPhysicalFirmwareRev": null,
@@ -180742,7 +180742,7 @@
                 {
                     "entPhysicalIndex": 8610,
                     "entPhysicalDescr": "PIC: 24x10M/100M/1G Base-T & 24x 100M/1G/2.5G/5G/10G Base-T @ 5/0/*",
-                    "entPhysicalClass": "",
+                    "entPhysicalClass": null,
                     "entPhysicalName": "PIC: 24x10M/100M/1G Base-T & 24x 100M/1G/2.5G/5G/10G Base-T @ 5/0/*",
                     "entPhysicalHardwareRev": "REV 05",
                     "entPhysicalFirmwareRev": null,
@@ -180761,7 +180761,7 @@
                 {
                     "entPhysicalIndex": 8620,
                     "entPhysicalDescr": "PIC: 4x40G QSFP+ @ 5/1/*",
-                    "entPhysicalClass": "",
+                    "entPhysicalClass": null,
                     "entPhysicalName": "PIC: 4x40G QSFP+ @ 5/1/*",
                     "entPhysicalHardwareRev": "REV 05",
                     "entPhysicalFirmwareRev": null,
@@ -180780,7 +180780,7 @@
                 {
                     "entPhysicalIndex": 8710,
                     "entPhysicalDescr": "PIC: 24x10M/100M/1G Base-T & 24x 100M/1G/2.5G/5G/10G Base-T @ 6/0/*",
-                    "entPhysicalClass": "",
+                    "entPhysicalClass": null,
                     "entPhysicalName": "PIC: 24x10M/100M/1G Base-T & 24x 100M/1G/2.5G/5G/10G Base-T @ 6/0/*",
                     "entPhysicalHardwareRev": "REV 05",
                     "entPhysicalFirmwareRev": null,
@@ -180799,7 +180799,7 @@
                 {
                     "entPhysicalIndex": 8720,
                     "entPhysicalDescr": "PIC: 4x40G QSFP+ @ 6/1/*",
-                    "entPhysicalClass": "",
+                    "entPhysicalClass": null,
                     "entPhysicalName": "PIC: 4x40G QSFP+ @ 6/1/*",
                     "entPhysicalHardwareRev": "REV 05",
                     "entPhysicalFirmwareRev": null,
@@ -180818,7 +180818,7 @@
                 {
                     "entPhysicalIndex": 8810,
                     "entPhysicalDescr": "PIC: 24x10M/100M/1G Base-T & 24x 100M/1G/2.5G/5G/10G Base-T @ 7/0/*",
-                    "entPhysicalClass": "",
+                    "entPhysicalClass": null,
                     "entPhysicalName": "PIC: 24x10M/100M/1G Base-T & 24x 100M/1G/2.5G/5G/10G Base-T @ 7/0/*",
                     "entPhysicalHardwareRev": "REV 05",
                     "entPhysicalFirmwareRev": null,
@@ -180837,7 +180837,7 @@
                 {
                     "entPhysicalIndex": 8820,
                     "entPhysicalDescr": "PIC: 4x40G QSFP+ @ 7/1/*",
-                    "entPhysicalClass": "",
+                    "entPhysicalClass": null,
                     "entPhysicalName": "PIC: 4x40G QSFP+ @ 7/1/*",
                     "entPhysicalHardwareRev": "REV 05",
                     "entPhysicalFirmwareRev": null,
@@ -180856,7 +180856,7 @@
                 {
                     "entPhysicalIndex": 9100,
                     "entPhysicalDescr": "Routing Engine 1",
-                    "entPhysicalClass": "",
+                    "entPhysicalClass": null,
                     "entPhysicalName": "Routing Engine 1",
                     "entPhysicalHardwareRev": "",
                     "entPhysicalFirmwareRev": null,
@@ -180875,7 +180875,7 @@
                 {
                     "entPhysicalIndex": 9200,
                     "entPhysicalDescr": "Routing Engine 0",
-                    "entPhysicalClass": "",
+                    "entPhysicalClass": null,
                     "entPhysicalName": "Routing Engine 0",
                     "entPhysicalHardwareRev": "",
                     "entPhysicalFirmwareRev": null,
