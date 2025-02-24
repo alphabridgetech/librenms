@@ -10773,7 +10773,7 @@
                     "sensor_index": "ifSfpParameterTable.sfpLostStatus.178",
                     "sensor_type": "ifSfpParameterTable",
                     "sensor_descr": "LOS",
-                    "group": "Transceiverr: TGigaEthernet0/2 (Vendor: FS PN:  S/N: F2220943223-1 256nm)",
+                    "group": "Transceiver: TGigaEthernet0/2 (Vendor: FS PN:  S/N: F2220943223-1 256nm)",
                     "sensor_divisor": 1,
                     "sensor_multiplier": 1,
                     "sensor_current": 1,
