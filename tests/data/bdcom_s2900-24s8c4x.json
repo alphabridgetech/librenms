@@ -10722,14 +10722,14 @@
                     "state_descr": "power-A-normal",
                     "state_draw_graph": 1,
                     "state_value": 1,
-                    "state_generic_value": 1
+                    "state_generic_value": 2
                 },
                 {
                     "state_name": "powerStatus",
                     "state_descr": "power-B-normal",
                     "state_draw_graph": 1,
                     "state_value": 2,
-                    "state_generic_value": 1
+                    "state_generic_value": 2
                 },
                 {
                     "state_name": "powerStatus",
@@ -203305,6 +203305,34 @@
                 {
                     "duration": 31536000,
                     "availability_perc": "100.000000"
+                }
+            ]
+        }
+    },
+    "discovery-protocols": {
+        "discovery": {
+            "links": [
+                {
+                    "active": 1,
+                    "protocol": "lldp",
+                    "remote_hostname": "sw11831",
+                    "remote_port": "903C.B323.7BAE",
+                    "remote_platform": null,
+                    "remote_version": "ECS4120-28Fv2",
+                    "ifAlias": "TGigaEthernet0/3",
+                    "ifDescr": "TGigaEthernet0/3",
+                    "ifName": "TGigaEthernet0/3"
+                },
+                {
+                    "active": 1,
+                    "protocol": "lldp",
+                    "remote_hostname": "sw11824",
+                    "remote_port": "TGi0/3",
+                    "remote_platform": null,
+                    "remote_version": "BDCOM(tm) S2900-24S8C4X Software, Version 2.2.0F\nSerial: 2007301973973019739\nCopyright by Shanghai Baud Data Communication CO. LTD.\nCompiled: 2024-2-2 10:20:21 by SYS",
+                    "ifAlias": "TGigaEthernet0/4",
+                    "ifDescr": "TGigaEthernet0/4",
+                    "ifName": "TGigaEthernet0/4"
                 }
             ]
         }
