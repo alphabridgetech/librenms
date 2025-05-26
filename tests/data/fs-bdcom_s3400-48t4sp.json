@@ -10689,21 +10689,7 @@
                     "inetCidrRouteDest": "0.0.0.0",
                     "inetCidrRouteNextHopType": "ipv4",
                     "inetCidrRouteNextHop": "10.64.127.254",
-                    "inetCidrRoutePolicy": "ccitt.0",
-                    "inetCidrRoutePfxLen": 0
-                },
-                {
-                    "context_name": "",
-                    "inetCidrRouteIfIndex": 194,
-                    "inetCidrRouteType": 3,
-                    "inetCidrRouteProto": 3,
-                    "inetCidrRouteNextHopAS": 0,
-                    "inetCidrRouteMetric1": 1,
-                    "inetCidrRouteDestType": "ipv4",
-                    "inetCidrRouteDest": "0.0.0.0",
-                    "inetCidrRouteNextHopType": "ipv4",
-                    "inetCidrRouteNextHop": "10.64.127.254",
-                    "inetCidrRoutePolicy": "SNMPv2-SMI::zeroDotZero",
+                    "inetCidrRoutePolicy": "zeroDotZero",
                     "inetCidrRoutePfxLen": 0
                 },
                 {
@@ -10717,21 +10703,7 @@
                     "inetCidrRouteDest": "10.64.0.0",
                     "inetCidrRouteNextHopType": "ipv4",
                     "inetCidrRouteNextHop": "0.0.0.0",
-                    "inetCidrRoutePolicy": "ccitt.0",
-                    "inetCidrRoutePfxLen": 17
-                },
-                {
-                    "context_name": "",
-                    "inetCidrRouteIfIndex": 194,
-                    "inetCidrRouteType": 3,
-                    "inetCidrRouteProto": 2,
-                    "inetCidrRouteNextHopAS": 0,
-                    "inetCidrRouteMetric1": 0,
-                    "inetCidrRouteDestType": "ipv4",
-                    "inetCidrRouteDest": "10.64.0.0",
-                    "inetCidrRouteNextHopType": "ipv4",
-                    "inetCidrRouteNextHop": "0.0.0.0",
-                    "inetCidrRoutePolicy": "SNMPv2-SMI::zeroDotZero",
+                    "inetCidrRoutePolicy": "zeroDotZero",
                     "inetCidrRoutePfxLen": 17
                 }
             ]
