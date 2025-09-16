@@ -7,7 +7,7 @@
                 <span class="icon-bar"></span>
             </button>
             <a class="navbar-brand" href>
-                <x-logo responsive="lg" class="tw:h-full tw:max-w-[170px]" />
+                <x-logo :image="asset(\LibreNMS\Config::get('title_image', 'images/telequill_loginpage.svg'))"  class="tw:h-full tw:max-w-[170px]" />
             </a>
         </div>
 
