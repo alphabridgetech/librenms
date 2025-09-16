@@ -38,7 +38,7 @@ return [
         'retry' => 'Retry',
         'settings' => 'Additional Settings',
         'success' => 'Install Complete',
-        'thanks' => 'Thank you for setting up LibreNMS.',
+        'thanks' => 'Thank you for setting up Telequill.',
         'title' => 'Finish Install',
         'validate_button' => 'Validate Install',
     ],

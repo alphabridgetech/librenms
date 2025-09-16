@@ -1,11 +1,18 @@
 <x-panel class="tw:rounded-lg tw:overflow-hidden">
     <x-slot name="title">
-        <x-logo class="logon-logo tw:h-auto tw:w-full" />
+        <x-logo 
+    :image="asset(\LibreNMS\Config::get('title_image', 'images/telequill_loginpage.svg'))"
+    class="logon-logo tw:h-auto tw:w-full"
+/>
+
+        {{-- <img class="tw:h-auto tw:w-full" src="{{ asset(\LibreNMS\Config::get('title_image', 'images/telequill_loginpage.svg')) }}"> --}}
     </x-slot>
 
     @config('login_message')
     <x-slot name="footer" class="text-center">
-        <div class="logon-message">{{ \App\Facades\LibrenmsConfig::get('login_message') }}</div>
+        {{-- <div class="logon-message">{{ \App\Facades\LibrenmsConfig::get('login_message') }}</div> --}}
+        <div class="logon-message">Alpha Bridge Technologies Pvt Ltd.</div>
+        <span>Version 1.0</span>
     </x-slot>
     @endconfig
 
