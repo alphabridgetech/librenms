@@ -6223,7 +6223,7 @@
             "type": "text"
         },
         "project_name": {
-            "default": "LibreNMS",
+            "default": "Telequill",
             "type": "text"
         },
         "prometheus.enable": {

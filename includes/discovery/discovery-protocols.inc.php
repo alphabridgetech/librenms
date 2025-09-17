@@ -147,7 +147,7 @@ if (($device['os'] == 'routeros') && version_compare($device['version'], '7.7', 
         }//end foreach
     }
     echo PHP_EOL;
-} elseif ($device['os'] == 'pbn' || $device['os'] == 'bdcom' || $device['os'] == 'fs-bdcom') {
+} elseif ($device['os'] == 'pbn' || $device['os'] == 'bdcom' || $device['os'] == 'fs-bdcom' || $device['os'] == 'switchv1alphabridge' || $device['os'] == 'switchv2alphabridge' || $device['os'] == 'switchv3alphabridge') {
     echo ' NMS-LLDP-MIB: ';
     $lldp_array = SnmpQuery::hideMib()->walk('NMS-LLDP-MIB::lldpRemoteSystemsData')->table(2);
     foreach ($lldp_array as $key => $lldp_array_inner) {
