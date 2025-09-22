@@ -58,7 +58,7 @@ return [
         'migrate' => 'Build Database',
         'user' => 'Create User',
     ],
-    'title' => 'LibreNMS Install',
+    'title' => 'Telequill Install',
     'user' => [
         'button' => 'Add User',
         'created' => 'User Created',
