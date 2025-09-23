@@ -1,0 +1,4 @@
+show cpu
+CPU utilization for one second: 6%; one minute: 6%; five minutes: 6%
+CPU MAX utilization: 18%(2000-1-4 21:9:0)
+switch#

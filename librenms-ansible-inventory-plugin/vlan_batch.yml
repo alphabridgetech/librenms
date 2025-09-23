@@ -1,0 +1,65 @@
+---
+- name: Creating and deleting VLANs
+  hosts: alphabridge_devices
+  gather_facts: no
+  become: true
+  become_method: sudo
+
+  tasks:
+
+    - name: Create Telnet script for VLAN add/delete
+      ansible.builtin.copy:
+        dest: "/home/alphanms/Desktop/Scripts/python_scripts/vlan_batch.py"
+        mode: '0755'
+        content: |
+          import telnetlib
+          import time
+
+          HOST = "{{ ansible_host }}"
+          USER = "{{ ansible_user }}"
+          PASSWORD = "{{ ansible_password }}"
+          ADD_VLAN = "{{ add_vlan | default('') }}"
+          DEL_VLAN = "{{ del_vlan | default('') }}"
+
+          try:
+              tn = telnetlib.Telnet(HOST, timeout=10)
+
+              tn.read_until(b"Username:")
+              tn.write(USER.encode('ascii') + b"\n")
+
+              tn.read_until(b"Password:")
+              tn.write(PASSWORD.encode('ascii') + b"\n")
+
+              tn.read_until(b">")
+              tn.write(b"enable\n")
+              tn.read_until(b"#")
+
+              tn.write(b"config\n")
+              tn.read_until(b"config#", timeout=5)
+
+              if ADD_VLAN:
+                  tn.write(f"vlan {ADD_VLAN}\n".encode('ascii'))
+                  output = tn.read_until(b"config#", timeout=5)
+                  print(f"VLAN {ADD_VLAN} Created:\n" + output.decode('ascii'))
+
+              if DEL_VLAN:
+                  tn.write(f"no vlan {DEL_VLAN}\n".encode('ascii'))
+                  output = tn.read_until(b"config#", timeout=5)
+                  print(f"VLAN {DEL_VLAN} Deleted:\n" + output.decode('ascii'))
+
+              tn.write(b"exit\n")
+              tn.write(b"exit\n")
+              tn.close()
+
+          except Exception as e:
+              with open("/home/alphanms/Desktop/Scripts/errors/vlan_batch_error.txt", "w") as f:
+                  f.write("Error: " + str(e))
+
+    - name: Execute Telnet script
+      ansible.builtin.command: python3 /home/alphanms/Desktop/Scripts/python_scripts/vlan_batch.py
+      register: output
+      changed_when: false
+
+    - name: Show Telnet script output
+      ansible.builtin.debug:
+        var: output.stdout

@@ -1,0 +1,52 @@
+---
+- name: Configure VLAN on Network Device
+  hosts: alphabridge_devices
+  gather_facts: no
+  become: true
+  become_method: sudo
+  tasks:
+    - name: Create Telnet script for VLAN
+      ansible.builtin.copy:
+        dest: "/opt/librenms/librenms-ansible-inventory-plugin/tmp/show_vlan_interface_script.py"
+        mode: '0755'
+        content: |
+          import telnetlib
+          import time
+
+          HOST = "{{ ansible_host }}"
+          USER = "{{ ansible_user }}"
+          PASSWORD = "{{ ansible_password }}"
+
+          try:
+              tn = telnetlib.Telnet(HOST, timeout=10)
+
+              tn.read_until(b"Username:")
+              tn.write(USER.encode('ascii') + b"\n")
+
+              tn.read_until(b"Password:")
+              tn.write(PASSWORD.encode('ascii') + b"\n")
+
+              tn.read_until(b">")
+              tn.write(b"enable\n")
+              tn.read_until(b"#")
+
+              tn.write(b"show interface brief \n")
+              output = tn.read_until(b"#", timeout=5)
+              print(output.decode('ascii'))
+
+              tn.write(b"exit\n")
+              tn.write(b"exit\n")
+              tn.close()
+
+          except Exception as e:
+              with open("/opt/librenms/librenms-ansible-inventory-plugin/tmp/show_vlan_interface_error.txt", "w") as f:
+                  f.write("Error: " + str(e))
+
+    - name: Execute Telnet script
+      ansible.builtin.command: python3 /opt/librenms/librenms-ansible-inventory-plugin/tmp/show_vlan_interface_script.py
+      register: output
+      changed_when: false
+
+    - name: Show Telnet script output
+      ansible.builtin.debug:
+        var: output.stdout
