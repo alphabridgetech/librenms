@@ -148,6 +148,10 @@ class EditTabs extends Component
             'text' => __('Custom OID'),
             'link' => url('/device/device=' . $this->device->device_id . '/tab=edit/section=customoid/'),
         ];
+        $this->tabs['mibsupload'] = [
+            'text' => __('MibsUpload'),
+            'link' => url('/device/device=' . $this->device->device_id . '/tab=edit/section=mibsupload/'),
+        ];
     }
 
     /**

@@ -1,7 +1,7 @@
 import telnetlib
 import time
 
-HOST = "192.168.200.244"
+HOST = "192.168.200.242"
 USER = "admin"
 PASSWORD = "admin"
 
