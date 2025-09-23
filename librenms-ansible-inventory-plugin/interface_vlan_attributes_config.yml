@@ -1,0 +1,106 @@
+---
+- name: Interface VLAN attribute config
+  hosts: alphabridge_devices
+  gather_facts: no
+  become: true
+  become_method: sudo
+
+  tasks:
+
+    - name: Create Telnet script for VLAN interface configuration
+      ansible.builtin.copy:
+        dest: "/home/alphanms/Desktop/Scripts/python_scripts/Interface_vlan_attribute_config.py"
+        mode: '0755'
+        content: |
+          import telnetlib
+          import time
+
+          HOST = "{{ ansible_host }}"
+          USER = "{{ ansible_user }}"
+          PASSWORD = "{{ ansible_password }}"
+          
+          PORT_NAME = "{{ port_name }}"
+          PVID = "{{ pvid | default('1') }}"
+          MODE = "{{ mode | default('access') }}" 
+          VLAN_ALLOWED_RANGE = "{{ vlan_allowed_range | default('1-4094') }}"
+          VLAN_UNTAGGED_RANGE = "{{ vlan_untagged_range | default('1') }}"
+          ADD_VLAN_ALLOWED_RANGE = "{{ add_vlan_allowed_range | default('') }}"
+          REMOVE_VLAN_ALLOWED_RANGE = "{{ remove_vlan_allowed_range | default('') }}"
+          ADD_VLAN_UNTAGGED_RANGE = "{{ add_vlan_untagged_range | default('1') }}"
+          REMOVE_VLAN_UNTAGGED_RANGE = "{{ remove_vlan_untagged_range | default('1') }}"
+
+          try:
+              tn = telnetlib.Telnet(HOST, timeout=10)
+
+              tn.read_until(b"Username:")
+              tn.write(USER.encode('ascii') + b"\n")
+
+              tn.read_until(b"Password:")
+              tn.write(PASSWORD.encode('ascii') + b"\n")
+
+              tn.read_until(b">")
+              tn.write(b"enable\n")
+              tn.read_until(b"#")
+
+              tn.write(b"config\n")
+              tn.read_until(b"config#", timeout=5)
+              
+              MODE = MODE.lower()
+
+              if MODE == "access":
+                  tn.write(f"interface {PORT_NAME}\n".encode('ascii'))
+                  tn.read_until(b"#", timeout=5)
+                  tn.write(f"switchport mode {MODE}\n".encode('ascii'))
+                  tn.read_until(b"#", timeout=5)
+                  tn.write(f"switchport pvid {PVID}\n".encode('ascii'))
+                  tn.read_until(b"#", timeout=5)
+
+              elif MODE == "trunk":
+                  tn.write(f"interface {PORT_NAME}\n".encode('ascii'))
+                  tn.read_until(b"#", timeout=5)
+                  tn.write(f"switchport mode {MODE}\n".encode('ascii'))
+                  tn.read_until(b"#", timeout=5)
+                  tn.write(f"switchport trunk vlan-allowed {VLAN_ALLOWED_RANGE}\n".encode('ascii'))
+                  tn.read_until(b"#", timeout=5)
+                  tn.write(f"switchport trunk vlan-allowed add {ADD_VLAN_ALLOWED_RANGE}\n".encode('ascii'))
+                  tn.read_until(b"#", timeout=5)
+                  tn.write(f"switchport trunk vlan-allowed remove {REMOVE_VLAN_ALLOWED_RANGE}\n".encode('ascii'))
+                  tn.read_until(b"#", timeout=5)
+                  tn.write(f"switchport trunk vlan-untag {VLAN_UNTAGGED_RANGE}\n".encode('ascii'))
+                  tn.read_until(b"#", timeout=5)
+                  tn.write(f"switchport trunk vlan-untag add {ADD_VLAN_UNTAGGED_RANGE}\n".encode('ascii'))
+                  tn.read_until(b"#", timeout=5)
+                  tn.write(f"switchport trunk vlan-untag remove {REMOVE_VLAN_UNTAGGED_RANGE}\n".encode('ascii'))
+                  tn.read_until(b"#", timeout=5)
+
+              elif MODE == "reset":
+                  tn.write(f"default interface {PORT_NAME}\n".encode('ascii'))
+                  tn.read_until(b"#", timeout=5)
+                  tn.write(f"interface {PORT_NAME}\n".encode('ascii'))
+                  tn.read_until(b"#", timeout=5)
+                  tn.write(b"no shutdown\n")
+                  tn.read_until(b"#", timeout=5)
+
+              else:
+                  print("Invalid mode. Use 'access', 'trunk' or 'reset'.")
+
+              tn.write(f"show run int {PORT_NAME}\n".encode('ascii'))
+              output = tn.read_until(b"config#", timeout=5)
+              print(output.decode('ascii'))
+
+              tn.write(b"exit\n")
+              tn.write(b"exit\n")
+              tn.close()
+
+          except Exception as e:
+              with open("/home/alphanms/Desktop/Scripts/errors/Interface_vlan_attribute_config_error.txt", "w") as f:
+                  f.write("Error: " + str(e))
+
+    - name: Execute Telnet script
+      ansible.builtin.command: python3 /home/alphanms/Desktop/Scripts/python_scripts/Interface_vlan_attribute_config.py
+      register: output
+      changed_when: false
+
+    - name: Show Telnet script output
+      ansible.builtin.debug:
+        var: output.stdout

@@ -1,0 +1,73 @@
+---
+- name: Creating and deleting voice VLAN
+  hosts: alphabridge_devices
+  gather_facts: no
+  become: true
+  become_method: sudo
+
+  tasks:
+
+    - name: Create Telnet script for voice VLAN add/delete
+      ansible.builtin.copy:
+        dest: "/opt/librenms/librenms-ansible-inventory-plugin/tmp/show_voice_vlan_script.py"
+        mode: '0755'
+        content: |
+          import telnetlib
+          import time
+
+          HOST = "{{ ansible_host }}"
+          USER = "{{ ansible_user }}"
+          PASSWORD = "{{ ansible_password }}"
+          ACTION = "{{ action | default('') }}"
+          MAC_ADDRESS = "{{ mac_address | default('') }}"
+          MAC_MASK = "{{ mac_mask | default('') }}"
+
+          try:
+              tn = telnetlib.Telnet(HOST, timeout=10)
+
+              tn.read_until(b"Username:")
+              tn.write(USER.encode('ascii') + b"\n")
+
+              tn.read_until(b"Password:")
+              tn.write(PASSWORD.encode('ascii') + b"\n")
+
+              tn.read_until(b">")
+              tn.write(b"enable\n")
+              tn.read_until(b"#")
+
+              tn.write(b"config\n")
+              tn.read_until(b"config#", timeout=5)
+
+              ACTION = ACTION.lower()
+              
+              if ACTION == "add":
+                  tn.write(f"voice-vlan mac-address {MAC_ADDRESS} mask {MAC_MASK}\n".encode('ascii'))
+                  tn.read_until(b"config#", timeout=5)
+              
+              elif ACTION in ["del", "delete"]:
+                  tn.write(f"no voice-vlan mac-address {MAC_ADDRESS} mask {MAC_MASK}\n".encode('ascii'))
+                  tn.read_until(b"config#", timeout=5)
+              
+              else:
+                  print("Invalid action. Use 'add' or 'delete'.")
+
+              tn.write(b"show running-config | include voice-vlan\n")
+              output = tn.read_until(b"config#", timeout=5)
+              print(output.decode('ascii'))
+
+              tn.write(b"exit\n")
+              tn.write(b"exit\n")
+              tn.close()
+
+          except Exception as e:
+              with open("/opt/librenms/librenms-ansible-inventory-plugin/tmp/show_voice_vlan_error.txt", "w") as f:
+                  f.write("Error: " + str(e))
+
+    - name: Execute Telnet script
+      ansible.builtin.command: python3 /opt/librenms/librenms-ansible-inventory-plugin/tmp/show_voice_vlan_script.py
+      register: output
+      changed_when: false
+
+    - name: Show Telnet script output
+      ansible.builtin.debug:
+        var: output.stdout

@@ -1,0 +1,10 @@
+- name: Run command on remote device via Telnet
+  hosts: localhost
+  tasks:
+    - name: Execute Telnet command
+      expect:
+        command: "telnet 192.168.200.242"
+        responses:
+          "Username:": "admin"
+          "Password:": "admin"
+          ">": "{{ cmd }}"

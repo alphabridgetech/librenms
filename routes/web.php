@@ -49,6 +49,8 @@ use App\Http\Controllers\WirelessSensorController;
 use App\Http\Middleware\AuthenticateGraph;
 use Illuminate\Support\Facades\Auth as AuthFacade;
 use Illuminate\Support\Facades\Route;
+use App\Http\Controllers\Device\Tabs\alphabridgeController;
+use App\Http\Controllers\VLANController;
 
 /*
 |--------------------------------------------------------------------------
@@ -77,6 +79,81 @@ Route::get('graph/{path?}', GraphController::class)
 
 // WebUI
 Route::middleware(['auth'])->group(function () {
+    Route::get('/submenu1-1', [VLANController::class, 'showSubmenu']);
+
+    // Optional: If you want AJAX-based loading:
+    Route::get('/tabs/vlan-config', [VLANController::class, 'vlanConfigTab'])->name('vlan-config-page');
+    //vlan edit
+    Route::get('/vlan/edit/{id}', [VLANController::class, 'editVlan']);
+    Route::post('/vlan/update', [VLANController::class, 'updateVlan']);
+
+    //vlan add 
+     Route::get('/vlan/add', [VLANController::class, 'addVlan']);
+     Route::post('/vlan/store', [VLANController::class, 'storeVlan'])->name('vlan.store');
+
+     //for delete
+     Route::post('/vlan/delete-batch', [VLANController::class, 'deleteBatch'])->name('vlan.deleteBatch');
+
+
+
+//     Route::get('/tabs/vlan-batch', function () {
+// return "vgcbvgc";
+//     });
+
+
+    Route::get('tabs/vlan-batch', [VLANController::class, 'vlanBatchTab'])->name('vlan-batch-page');
+    Route::post('/vlan/batch/store', [VLANController::class, 'storeBatchVlan'])->name('vlan.batch.store');
+
+
+
+
+
+
+
+    Route::get('tabs/interface-vlan-attr', [VLANController::class, 'interfaceVlanAttrTab']);
+
+    //voice vlan part
+    Route::get('tabs/voice-vlan', [VLANController::class, 'voiceVlanTab']);
+    Route::get('/voice/vlan/add', [VLANController::class, 'addVoiceVlan']);
+    Route::post('/voice/vlan/store', [VLANController::class, 'storeVoiceVlan'])->name('voice.vlan.store');
+    Route::post('/voice/vlan/delete', [VLANController::class, 'deleteVoiceVlan'])->name('voice.vlan.delete');
+
+
+
+
+//interface part
+    Route::get('tabs/interface-voice-vlan', [VLANController::class, 'interfaceVoiceVlanTab']);
+    Route::get('/vlan/interface/edit', [VLANController::class, 'editVlanInterface']);
+    Route::post('/vlan-interface/save', [VLANController::class, 'runVlanAttributeinterface'])->name('vlan.interface.save');
+
+
+
+
+
+
+    Route::post('/run-ansible', [alphabridgeController::class, 'runPlaybook'])->name('run.ansible');
+    Route::post('/vlan-config', [alphabridgeController::class, 'configureVlan'])->name('vlan.configure');
+    Route::get('/ansible-log', function () {
+        $logFile = "/opt/librenms/librenms-ansible-inventory-plugin/ansible_log.txt";
+    
+        if (!file_exists($logFile)) {
+            return response()->json(['message' => 'No logs available yet.'], 404);
+        }
+    
+        return response()->json(['log' => file_get_contents($logFile)]);
+    });
+    
+
+
+
+
+
+
+
+
+
+
+
     // pages
     Route::post('alert/{alert}/ack', [AlertController::class, 'ack'])->name('alert.ack');
     Route::resource('device-groups', DeviceGroupController::class);
