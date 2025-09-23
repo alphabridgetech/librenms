@@ -56,6 +56,8 @@ if (! Auth::user()->hasGlobalAdmin()) {
 
     $panes['customoid'] = 'Custom OID';
 
+    $panes['mibsupload'] = 'MibsUpload';
+
     print_optionbar_start();
 
     $sep = '';
