@@ -531,6 +531,23 @@
                         </ul>
                     </li>
                 @endif
+
+{{--chatbot--}}
+
+<li class="dropdown">
+    <a href="{{ url('ports') }}" class="dropdown-toggle" data-hover="dropdown" data-toggle="dropdown"><i
+            class="fa fa-message fa-fw fa-lg fa-nav-icons" aria-hidden="true"></i> <span
+            class="tw:md:hidden tw:lg:inline-block">{{ __('Chatbot') }}</span></a>
+    <ul class="dropdown-menu">
+        
+        <li role="presentation" class="divider"></li>
+        <li><a href="{{ url('chatbot') }}"><i class="fa fa-list fa-fw fa-lg"
+                                                    aria-hidden="true"></i> {{ __('Chat Bot') }}</a></li>
+    </ul>
+</li>
+
+
+
 {{-- Alerts --}}
                 <li class="dropdown">
                     <a href="#" class="dropdown-toggle" data-hover="dropdown" data-toggle="dropdown"><i
@@ -559,6 +576,10 @@
                         @endadmin
                     </ul>
                 </li>
+
+                       
+
+
                 @includeIf('menu.custom')
             </ul>
 
@@ -606,9 +627,13 @@
                                                                aria-hidden="true"></i> {{ __('Global Settings') }}</a></li>
                         <li><a href="{{ url('validate') }}"><i class="fa fa-check-circle fa-fw fa-lg"
                                                                aria-hidden="true"></i> {{ __('Validate Config') }}</a></li>
+                                    <li><a href="{{ route('mibs.index') }}"><i class="fa fa-upload fa-fw fa-lg"
+                                                                    aria-hidden="true"></i> {{ __('MIbs Upload') }}</a>
                         <li role="presentation" class="divider"></li>
                         <li><a href="{{ route('users.index') }}"><i class="fa fa-user-circle-o fa-fw fa-lg"
                                                                     aria-hidden="true"></i> {{ __('Manage Users') }}</a>
+                        </li>
+            
                         </li>
                         <li><a href="{{ url('authlog') }}"><i class="fa fa-shield fa-fw fa-lg"
                                                               aria-hidden="true"></i> {{ __('Auth History') }}</a></li>

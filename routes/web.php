@@ -51,6 +51,7 @@ use Illuminate\Support\Facades\Auth as AuthFacade;
 use Illuminate\Support\Facades\Route;
 use App\Http\Controllers\Device\Tabs\alphabridgeController;
 use App\Http\Controllers\VLANController;
+use App\Http\Controllers\MibsUploadController;
 
 /*
 |--------------------------------------------------------------------------
@@ -178,6 +179,8 @@ Route::middleware(['auth'])->group(function () {
     Route::get('locations', [LocationController::class, 'index']);
     Route::resource('preferences', UserPreferencesController::class)->only('index', 'store');
     Route::resource('users', UserController::class);
+    Route::resource('mibs', MibsUploadController::class);
+    Route::get('mibs/download/{id}', [MibsUploadController::class,'download'])->name('mibs.download');
     Route::get('about', [AboutController::class, 'index'])->name('about');
     Route::delete('reporting', [AboutController::class, 'clearReportingData'])->name('reporting.clear');
     Route::get('authlog', [UserController::class, 'authlog']);
