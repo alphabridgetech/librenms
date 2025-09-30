@@ -3,14 +3,28 @@ text: 'Alphabridge Switch V1'
 type: network
 icon: alphabridge1
 over:
-    - { graph: device_bits, text: 'Device Traffic' }
-    - { graph: device_processor, text: 'Processor Usage' }
-    - { graph: device_mempool, text: 'Memory Usage' }
+  - { graph: device_bits,     text: 'Device Traffic' }
+  - { graph: device_processor,text: 'Processor Usage' }
+  - { graph: device_mempool,  text: 'Memory Usage' }
+
 discovery:
-    -
-        sysObjectID:
-            - .1.3.6.1.4.1.58158.1.439.0
-            - .1.3.6.1.4.1.58158.1.315.0
-            - .1.3.6.1.4.1.58158.1.311.0
-            - .1.3.6.1.4.1.58158.1.458.0
-            - .1.3.6.1.4.1.58158.1.695601
+  -
+    sysObjectID:
+      - .1.3.6.1.4.1.58158.1.439.0
+    mib_dirs: [ custom/general, custom/439 ]
+  -
+    sysObjectID:
+      - .1.3.6.1.4.1.58158.1.315.0
+    mib_dirs: [ custom/general, custom/315 ]
+  -
+    sysObjectID:
+      - .1.3.6.1.4.1.58158.1.311.0
+    mib_dirs: [ custom/general, custom/311 ]
+  -
+    sysObjectID:
+      - .1.3.6.1.4.1.58158.1.458.0
+    mib_dirs: [ custom/general, custom/458 ]
+  -
+    sysObjectID:
+      - .1.3.6.1.4.1.58158.1.695601
+    mib_dirs: [ custom/general, custom/695601 ]

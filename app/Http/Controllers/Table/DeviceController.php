@@ -346,6 +346,13 @@ class DeviceController extends TableController
             'icon' => 'fa-globe',
         ];
 
+        $actions[$row][] = [
+            'title' => 'Launch browser to ' . $device->hostname,
+            'href' => 'http://' . $device->hostname,
+            'onclick' => 'http_fallback(this); return false;',
+            'icon' => 'fa-link',
+        ];
+
         foreach (array_values(Arr::wrap(LibrenmsConfig::get('html.device.links'))) as $index => $custom) {
             if ($custom['action'] ?? false) {
                 $row = $this->isDetailed() ? $index % 2 : 0;

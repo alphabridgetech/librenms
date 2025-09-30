@@ -1,125 +1,123 @@
 #!/usr/bin/env python3
 from flask import Flask, request, jsonify
 from flask_cors import CORS
-import requests
+import requests, json, re
 
-LIBRENMS_URL   = "http://172.18.0.5:8000"
-LIBRENMS_TOKEN = "96c999c679ca673c0b3b5910c0e1b581"
+# -------- CONFIGURATION --------
+TELEQUILL_URL = "http://127.0.0.1:8000"
 GEMINI_API_KEY = "AIzaSyDMYopkI7e4B1zHuSgTRu7wWcxaQjWKTko"
 
+# -------- FLASK APP --------
 app = Flask(__name__)
 CORS(app)
 
-HEADERS = {"X-Auth-Token": LIBRENMS_TOKEN}
-
-# ---------------- Helper Functions ----------------
-def fetch_librenms_data(endpoint):
-    """Fetch data from LibreNMS API for given endpoint."""
+# -------- HELPER FUNCTIONS --------
+def fetch_telequill_data(endpoint, token):
+    headers = {"X-Auth-Token": token}
     try:
-        r = requests.get(f"{LIBRENMS_URL}/api/v0/{endpoint}", headers=HEADERS, timeout=10)
+        r = requests.get(f"{TELEQUILL_URL}/api/v0/{endpoint}", headers=headers, timeout=10)
         if r.ok:
             return r.json()
-        return {"error": f"LibreNMS API returned {r.status_code}"}
+        return {"error": f"Telequill API returned {r.status_code}: {r.text}"}
     except Exception as e:
         return {"error": str(e)}
 
-# ---------------- Gemini API ----------------
+def add_device(device_info, token):
+    headers = {"X-Auth-Token": token, "Content-Type": "application/json"}
+    payload = {"hostname": device_info}
+    try:
+        r = requests.post(f"{TELEQUILL_URL}/api/v0/devices", headers=headers, json=payload, timeout=10)
+        if r.ok:
+            return f"Device '{device_info}' added successfully."
+        return f"Failed to add device '{device_info}': {r.status_code} {r.text}"
+    except Exception as e:
+        return f"Exception while adding device: {e}"
+
+def delete_device(device_info, token):
+    headers = {"X-Auth-Token": token}
+    try:
+        r = requests.delete(f"{TELEQUILL_URL}/api/v0/devices/{device_info}", headers=headers, timeout=10)
+        if r.ok:
+            return f"Device '{device_info}' deleted successfully."
+        return f"Failed to delete device '{device_info}': {r.status_code} {r.text}"
+    except Exception as e:
+        return f"Exception while deleting device: {e}"
+
 def query_gemini(prompt):
     url = "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent"
     payload = {"contents": [{"parts": [{"text": prompt}]}]}
-    headers = {
-        "Content-Type": "application/json",
-        "X-goog-api-key": GEMINI_API_KEY
-    }
+    headers = {"Content-Type": "application/json", "X-goog-api-key": GEMINI_API_KEY}
     try:
         r = requests.post(url, headers=headers, json=payload, timeout=15)
         if r.ok:
             resp_json = r.json()
-            text = resp_json.get("candidates", [{}])[0].get("content", "")
-            return text if text else "No response from Gemini."
+            if "candidates" in resp_json and resp_json["candidates"]:
+                parts = resp_json["candidates"][0].get("content", {}).get("parts", [])
+                return "\n".join(p.get("text", "") for p in parts)
+            return "No response from Gemini."
         return f"Gemini API error: {r.status_code} {r.text}"
     except Exception as e:
         return f"Exception contacting Gemini API: {e}"
 
-# ---------------- Flask Routes ----------------
+# -------- NATURAL LANGUAGE DETECTION --------
+def detect_action(question):
+    """
+    Detect add/delete commands anywhere in the sentence and extract IP/hostname.
+    Returns action and the device info.
+    """
+    q = question.lower()
+    
+    # Match patterns like "add device 192.168.200.244" anywhere
+    add_match = re.search(r'add\s+device\s+([^\s]+)', q)
+    del_match = re.search(r'(delete|remove)\s+device\s+([^\s]+)', q)
+
+    if add_match:
+        return "add_device", add_match.group(1).strip()
+    if del_match:
+        return "delete_device", del_match.group(2).strip()
+    return "info", ""
+
+# -------- FLASK ROUTES --------
 @app.route("/ping")
 def ping():
     return "pong"
 
 @app.route("/ask", methods=["POST"])
 def ask():
-    data = request.json or {}
-    question = data.get("question", "")
-    devices_data = fetch_librenms_data("devices")
-    
-    devices_text = ""
-    if "devices" in devices_data:
-        devices_text = "\n".join(
-            f"{d.get('hostname', 'Unknown')} ({d.get('ip', 'Unknown')}) - status: {d.get('status', 'Unknown')}"
-            for d in devices_data["devices"]
-        )
-    
-    prompt = f"LibreNMS Device Data:\n{devices_text}\n\nUser question: {question}\nAnswer concisely and clearly."
-    answer = query_gemini(prompt)
-    return jsonify({"answer": answer})
+    user_token = request.headers.get("Authorization", "").replace("Bearer ", "")
+    if not user_token:
+        return jsonify({"answer": "No API token provided."}), 401
 
-# ---------------- LibreNMS Endpoints ----------------
+    data = request.json or {}
+    question = data.get("question", "").strip()
+    if not question:
+        return jsonify({"answer": "Please type a question."}), 400
+
+    action, device_info = detect_action(question)
+
+    # Handle add/delete device commands
+    if action == "add_device" and device_info:
+        return jsonify({"answer": add_device(device_info, user_token)})
+    if action == "delete_device" and device_info:
+        return jsonify({"answer": delete_device(device_info, user_token)})
+
+    # Default: ask Gemini LLM with Telequill context
+    devices_data = fetch_telequill_data("devices", user_token)
+    devices_text = json.dumps(devices_data, indent=2)
+    prompt = f"Answer the user question: \"{question}\" concisely.\n\nTelequill Device Data:\n{devices_text}"
+    llm_answer = query_gemini(prompt)
+    return jsonify({"answer": llm_answer})
+
 @app.route("/devices")
 def get_devices():
-    return jsonify(fetch_librenms_data("devices"))
-
-@app.route("/devicegroups")
-def get_devicegroups():
-    return jsonify(fetch_librenms_data("devicegroups"))
+    token = request.headers.get("Authorization", "").replace("Bearer ", "")
+    return jsonify(fetch_telequill_data("devices", token))
 
 @app.route("/ports")
 def get_ports():
-    return jsonify(fetch_librenms_data("ports"))
+    token = request.headers.get("Authorization", "").replace("Bearer ", "")
+    return jsonify(fetch_telequill_data("ports", token))
 
-@app.route("/portgroups")
-def get_portgroups():
-    return jsonify(fetch_librenms_data("portgroups"))
-
-@app.route("/alerts")
-def get_alerts():
-    return jsonify(fetch_librenms_data("alerts"))
-
-@app.route("/routing")
-def get_routing():
-    return jsonify(fetch_librenms_data("routing"))
-
-@app.route("/switching")
-def get_switching():
-    return jsonify(fetch_librenms_data("switching"))
-
-@app.route("/inventory")
-def get_inventory():
-    return jsonify(fetch_librenms_data("inventory"))
-
-@app.route("/bills")
-def get_bills():
-    return jsonify(fetch_librenms_data("bills"))
-
-@app.route("/arp")
-def get_arp():
-    return jsonify(fetch_librenms_data("arp"))
-
-@app.route("/services")
-def get_services():
-    return jsonify(fetch_librenms_data("services"))
-
-@app.route("/logs")
-def get_logs():
-    return jsonify(fetch_librenms_data("logs"))
-
-@app.route("/system")
-def get_system():
-    return jsonify(fetch_librenms_data("system"))
-
-@app.route("/locations")
-def get_locations():
-    return jsonify(fetch_librenms_data("locations"))
-
-# ---------------- Run Server ----------------
+# -------- RUN SERVER --------
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=5000)
