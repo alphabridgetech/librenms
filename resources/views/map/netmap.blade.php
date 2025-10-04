@@ -100,6 +100,7 @@
             data: {disabled: 0, disabled_alerts: null, url_type: "links", group: group, highlight_node: highlight},
             dataType: 'json',
             success: function (data) {
+                console.log(data);
                 if (Object.keys(data).length === 0) {
                     $("#alert").text("No devices found");
                     $("#alert-row").show();

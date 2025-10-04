@@ -11,6 +11,54 @@
         @if($device->feature)({{ $device->features }})@endif
         @if($device->location)[{{ $device->location }}]@endif
     </span>
+ 
+
+   @if($device->ports && $device->ports->count())
+   <div class="tw:border-b tw:font-semibold mb-2">
+        Ports
+    </div>
+    <div class="tw:flex tw:flex-wrap" style="width: 600px;margin-top: 7px;">
+        @foreach($device->ports as $port)
+            @php
+                // Shorten ifName
+                $shortName = preg_replace([
+                    '/GigabitEthernet/', 
+                    '/FastEthernet/',
+                    '/TenGigabitEthernet/',
+                    '/Ethernet/'
+                ], [
+                    'g', 
+                    'f',
+                    'tg',
+                    'e'
+                ], $port->ifName);
+            @endphp
+
+            <div class="tw:flex tw:flex-col tw:items-center tw:mx-1 tw:my-1">
+                <!-- Short Name Label -->
+                <div style="font-size:9px; line-height:1; margin-bottom:2px;">
+                    {{ $shortName }}
+                </div>
+                
+                <!-- Box -->
+                <div class="border rounded"
+                     style="width:40px;height:40px;font-size:7px;line-height:1;padding:2px;text-transform:lowercase;overflow:hidden; margin:5px 5px 5px 5px;
+                            @if($port->ifOperStatus == 'up') background-color:#0000FF;color:white;
+                            @else background-color:#dc3545;color:white; @endif"
+                     title="{{ $port->ifDescr }}">
+                </div>
+            </div>
+        @endforeach
+    </div>
+@endif
+
+
+
+
+
+
+
+
     @foreach($graphs as $graph)
         @isset($graph['text'], $graph['graph'])
             <x-graph-row loading="lazy" :device="$device" :type="$graph['graph']" :title="$graph['text']" :graphs="[['from' => '-1d'], ['from' => '-7d']]"></x-graph-row>
