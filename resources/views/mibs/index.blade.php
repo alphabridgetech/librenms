@@ -30,23 +30,36 @@
     @csrf
     <div class="row g-3 align-items-center">
         <div class="col-md-3">
-            <label class="form-label">{{ __('Link to device (optionalS)') }}</label>
+            <label class="form-label">{{ __('Link to device (optional)') }}</label>
             <select name="model_name" class="form-control">
                 <option value="">{{ __('-- None --') }}</option>
                 @foreach($devices as $dev)
-                    @php
-                        // Some DB columns might be sysObjectID or sysObjectId—handle both
-                        $oid = $dev->sysObjectID ?? $dev->sysObjectID ?? '';
-                        // Trim leading/trailing dots and explode
-                        $parts = explode('.', trim($oid, '.'));
-                        // Get the second-last piece as model number
-                        $modelNum = count($parts) >= 2 ? $parts[count($parts) - 2] : '';
-                    @endphp
-                    <option value="{{ $modelNum }}">
-                        {{ ($dev->sysName ?? '') . '(' . ($modelNum ?? '') . ')' }}
+                @php
+                    // Get OID from device
+                    $oid = $dev->sysObjectID ?? $dev->sysObjectId ?? '';
 
-                    </option>
-                @endforeach
+                    // Trim extra dots and split
+                    $parts = explode('.', trim($oid, '.'));
+
+                    $modelNum = '';
+                    $count = count($parts);
+
+                    if ($count > 0) {
+                        if (isset($parts[$count - 1]) && $parts[$count - 1] == '0') {
+                            $modelNum = $parts[$count - 2] ?? '';
+                        } else {
+                            $modelNum = $parts[$count - 1];
+                        }
+                    }
+                @endphp
+
+                <option value="{{ $modelNum }}">
+                    {{ ($dev->sysName ?? '') . ' (' . ($modelNum ?: 'Unknown') . ')' }}
+                </option>
+            @endforeach
+
+
+
             </select>
 
         </div>
