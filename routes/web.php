@@ -52,6 +52,7 @@ use Illuminate\Support\Facades\Route;
 use App\Http\Controllers\Device\Tabs\alphabridgeController;
 use App\Http\Controllers\VLANController;
 use App\Http\Controllers\MibsUploadController;
+use App\Http\Controllers\ChatBotController;
 
 /*
 |--------------------------------------------------------------------------
@@ -179,8 +180,14 @@ Route::middleware(['auth'])->group(function () {
     Route::get('locations', [LocationController::class, 'index']);
     Route::resource('preferences', UserPreferencesController::class)->only('index', 'store');
     Route::resource('users', UserController::class);
+    //added by kunal 
     Route::resource('mibs', MibsUploadController::class);
     Route::get('mibs/download/{id}', [MibsUploadController::class,'download'])->name('mibs.download');
+    //kunal add 
+    Route::resource('chatbot', ChatBotController::class);
+   Route::post('chatbot/message', [ChatBotController::class, 'message'])
+    ->name('chatbot.message');
+
     Route::get('about', [AboutController::class, 'index'])->name('about');
     Route::delete('reporting', [AboutController::class, 'clearReportingData'])->name('reporting.clear');
     Route::get('authlog', [UserController::class, 'authlog']);

@@ -534,17 +534,13 @@
 
 {{--chatbot--}}
 
-<li class="dropdown">
-    <a href="{{ url('ports') }}" class="dropdown-toggle" data-hover="dropdown" data-toggle="dropdown"><i
-            class="fa fa-message fa-fw fa-lg fa-nav-icons" aria-hidden="true"></i> <span
-            class="tw:md:hidden tw:lg:inline-block">{{ __('Chatbot') }}</span></a>
-    <ul class="dropdown-menu">
-        
-        <li role="presentation" class="divider"></li>
-        <li><a href="{{ url('chatbot') }}"><i class="fa fa-list fa-fw fa-lg"
-                                                    aria-hidden="true"></i> {{ __('Chat Bot') }}</a></li>
-    </ul>
+<li>
+    <a href="{{ url('chatbot') }}">
+        <i class="fa fa-message fa-fw fa-lg fa-nav-icons" aria-hidden="true"></i> 
+        <span class="tw:md:hidden tw:lg:inline-block">{{ __('Chatbot') }}</span>
+    </a>
 </li>
+
 
 
 
