@@ -185,7 +185,7 @@ Route::middleware(['auth'])->group(function () {
     Route::get('mibs/download/{id}', [MibsUploadController::class,'download'])->name('mibs.download');
     //kunal add 
     Route::resource('chatbot', ChatBotController::class);
-   Route::post('chatbot/message', [ChatBotController::class, 'message'])
+    Route::post('chatbot/message', [ChatBotController::class, 'message'])
     ->name('chatbot.message');
 
     Route::get('about', [AboutController::class, 'index'])->name('about');

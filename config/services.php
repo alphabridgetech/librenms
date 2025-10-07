@@ -9,12 +9,12 @@ return [
         'scheme' => 'https',
     ],
     'librenms' => [
-    'url' => env('LIBRENMS_URL'),
+    'url' => 'http://localhost:8000/',
     'token' => env('LIBRENMS_TOKEN'),
     ],
     'gemini' => [
-    'key' => env('GEMINI_API_KEY'),
-    'endpoint' => env('GEMINI_ENDPOINT'),
+    'key' => 'AIzaSyBI8LgWDpvKsogtG0A1o-J-wcQl4oUQdKI',
+    'endpoint' => 'https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent',
     'model' => env('GEMINI_MODEL', 'gemini-2.0-flash'),
     ],
 

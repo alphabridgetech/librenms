@@ -5,6 +5,9 @@ namespace App\Http\Controllers;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Log;
+use App\Models\ApiToken;
+use Illuminate\Support\Facades\Auth;
+use Illuminate\Database\Eloquent\ModelNotFoundException;
 
 class ChatBotController extends Controller
 {
@@ -22,249 +25,305 @@ class ChatBotController extends Controller
 
         $userMessage = $request->input('message');
 
-        // 1️⃣ Gather structured NMS data for LLM
-        $nmsData = $this->getAllLibreNMSData();
+        // 1️⃣ Determine dynamic token for this user
+        $token = $this->getUserLibreNMSToken();
 
-        // 2️⃣ Build prompt for LLM
-        $prompt = [
-            'user_message' => $userMessage,
-            'nms_data' => $nmsData,
-            'instructions' => 'You are a network assistant. Respond in structured JSON if any action is needed (POST, PUT, DELETE) with keys: action, endpoint, params. 
-            If no action, return only "reply" text.'
-        ];
-
-        // 3️⃣ Send prompt to LLM
-        $llmResponse = $this->handleLLMQuery(json_encode($prompt, JSON_PRETTY_PRINT));
-
-        $responseJson = $llmResponse->getData();
-
-        // 4️⃣ Execute LLM-suggested actions dynamically
-        if (!empty($responseJson->action) && in_array(strtoupper($responseJson->action), ['POST','PUT','DELETE'])) {
+        if (!$token) {
             return response()->json([
-                'reply' => $this->executeDynamicAction($responseJson),
-                'type' => 'librenms'
+                'reply' => 'No TeleQuillNMS API token found for your account. Please contact the admin.',
+                'type' => 'error'
             ]);
         }
 
-        // 5️⃣ Otherwise return LLM textual reply
-        return $llmResponse;
-    }
 
-    // ======== DYNAMIC ACTION EXECUTION ========
-    private function executeDynamicAction($llmData)
-    {
-        $method = strtoupper($llmData->action);
-        $endpoint = $llmData->endpoint ?? '';
-        $params = (array)($llmData->params ?? []);
 
-        if (!$endpoint) return "Error: Endpoint not specified.";
 
-        $url = rtrim(config('services.librenms.url'), '/') . '/' . $endpoint;
-        $token = config('services.librenms.token');
-
-        try {
-            $res = match($method) {
-                'POST' => Http::withHeaders(['X-Auth-Token'=>$token])->post($url, $params),
-                'PUT' => Http::withHeaders(['X-Auth-Token'=>$token])->put($url, $params),
-                'DELETE' => Http::withHeaders(['X-Auth-Token'=>$token])->delete($url, $params),
-                default => null
-            };
-
-            if ($res && $res->successful()) {
-                return ucfirst(strtolower($method)) . " action on {$endpoint} executed successfully.";
-            }
-
-            $error = $res ? ($res->json()['message'] ?? $res->body()) : 'Unknown error';
-            return "Failed {$method} on {$endpoint}: {$error}";
-
-        } catch (\Exception $e) {
-            Log::error("LibreNMS {$method} API error", ['err'=>$e->getMessage()]);
-            return "Error executing {$method} on {$endpoint}: " . $e->getMessage();
+        // 2️⃣ Detect if the message is a POST action (add/edit/delete)
+        $postAction = $this->parsePostAction($userMessage);
+        if ($postAction) {
+            $response = $this->handlePostAction($postAction, $token);
+            return response()->json(['reply' => $response, 'type' => 'librenms']);
         }
-    }
 
-    // ======== LLM QUERY ========
-    private function handleLLMQuery($prompt)
-{
-    try {
-        $endpoint = config('services.gemini.endpoint'); 
-        $apiKey = config('services.gemini.key');
+        // 3️⃣ Gather structured GET NMS data
+        $nmsData = $this->getAllLibreNMSData($token);
 
-        $payload = [
-            'contents' => [
-                ['parts' => [['text' => $prompt]]]
-            ]
+        // 4️⃣ Build JSON prompt for LLM
+        $prompt = [
+            'user_message' => $userMessage,
+            'nms_data' => $nmsData,
+            'instructions' => 'Use this structured NMS data to answer user queries accurately. Respond concisely and return data systematically for all endpoints (devices, ports, services, alerts, graphs, groups, locations). If user intends to add/update/delete, provide POST instructions in structured JSON format for the chatbot to process.'
         ];
 
-        $response = Http::withHeaders([
-            'x-goog-api-key' => $apiKey,
-            'Content-Type' => 'application/json',
-        ])->timeout(30)->post($endpoint, $payload);
-
-        $data = $response->json();
-        Log::info('Gemini raw response', $data);
-
-        $replyText = 'No response from LLM.';
-        if (isset($data['candidates'][0]['content']['parts'][0]['text'])) {
-            $replyText = $data['candidates'][0]['content']['parts'][0]['text'];
-        }
-
-        // Try to extract JSON from LLM reply
-        $jsonPart = $this->extractJson($replyText);
-        if ($jsonPart && isset($jsonPart->action)) {
-            // Return full JSON so we can execute action
-            return response()->json($jsonPart);
-        }
-
-        return response()->json(['reply' => $replyText, 'type'=>'llm']);
-
-    } catch (\Exception $e) {
-        Log::error('LLM request failed', ['err' => $e->getMessage()]);
-        return response()->json(['reply' => 'LLM server failed.', 'type' => 'llm']);
+        // 5️⃣ Send prompt to LLM
+        return $this->handleLLMQuery(json_encode($prompt, JSON_PRETTY_PRINT));
     }
-}
 
-/**
- * Extract JSON from a string even if wrapped in ```json ... ```
- */
-private function extractJson($text)
-{
-    // Remove ```json and ```
-    $text = preg_replace('/```json|```/i', '', $text);
-    $text = trim($text);
+    /** -----------------------
+     * GET USER TOKEN DYNAMICALLY
+     * --------------------- */
+    private function getUserLibreNMSToken()
+    {
+        try {
+            $apiToken = ApiToken::select('token_hash')
+                ->where('user_id', Auth::user()->user_id)
+                ->firstOrFail();
+               
+            return $apiToken->token_hash;
+        } catch (ModelNotFoundException $e) {
+            return null;
+        }
+    }
 
-    $decoded = json_decode($text);
-    return $decoded ?: null;
-}
+    /** -----------------------
+     * POST ACTION PARSER
+     * --------------------- */
+    private function parsePostAction($message)
+    {
+        if (preg_match('/add device/i', $message)) {
+            preg_match_all('/(\w+)=([^\s]+)/', $message, $matches, PREG_SET_ORDER);
+            $params = [];
+            foreach ($matches as $m) $params[$m[1]] = $m[2];
 
+            return [
+                'endpoint' => 'devices',
+                'identifier' => $params['hostname'] ?? ($params['ip'] ?? null),
+                'params' => $params
+            ];
+        }
+        // Additional POST actions (edit/delete) can be added here
+        return null;
+    }
 
-    // ======== FETCH ALL LIBRENMS DATA ========
-    private function getAllLibreNMSData()
+    private function handlePostAction($action, $token)
+    {
+        if (!$action['identifier']) return "Error: Missing identifier (hostname or IP).";
+
+        return $this->postLibreNMSData(
+            $action['endpoint'],
+            $action['identifier'],
+            $action['params'],
+            $token
+        );
+    }
+
+    /** -----------------------
+     * GET METHODS
+     * --------------------- */
+    private function getAllLibreNMSData($token)
     {
         return [
-            'devices' => $this->getStructuredDevices(),
-            'ports' => $this->getStructuredPorts(),
-            'services' => $this->getStructuredServices(),
-            'alerts' => $this->getStructuredAlerts(),
-            'graphs' => $this->getStructuredGraphs(),
-            'device_groups' => $this->getStructuredDeviceGroups(),
-            'locations' => $this->getStructuredLocations()
+            'devices' => $this->getStructuredDevices($token),
+            'ports' => $this->getStructuredPorts($token),
+            'services' => $this->getStructuredServices($token),
+            'alerts' => $this->getStructuredAlerts($token),
+            'graphs' => $this->getStructuredGraphs($token),
+            'device_groups' => $this->getStructuredDeviceGroups($token),
+            'locations' => $this->getStructuredLocations($token)
         ];
     }
 
-    private function getStructuredDevices()
+    private function getStructuredDevices($token)
     {
-        $devices = $this->callLibreNMS('devices');
+        $devices = $this->callLibreNMS('devices', 'GET', [], $token);
         if ($devices === false || !isset($devices['devices'])) return [];
 
-        return array_map(fn($d) => [
-            'hostname' => $d['hostname'] ?? '',
-            'ip' => $d['ip'] ?? '',
-            'sysName' => $d['sysName'] ?? '',
-            'status' => ($d['status'] === 1 || strtolower($d['status']) === 'up') ? 'up' : 'down',
-            'uptime' => isset($d['uptime']) ? gmdate("H:i:s", $d['uptime']) : 'N/A',
-            'last_polled' => $d['last_polled'] ?? '',
-            'location' => $d['location'] ?? '',
-            'os' => $d['os'] ?? '',
-            'version' => $d['version'] ?? '',
-        ], $devices['devices']);
+        return array_map(function($d){
+            return [
+                'hostname' => $d['hostname'] ?? '',
+                'ip' => $d['ip'] ?? '',
+                'sysName' => $d['sysName'] ?? '',
+                'status' => ($d['status'] === 1 || strtolower($d['status']) === 'up') ? 'up' : 'down',
+                'uptime' => isset($d['uptime']) ? gmdate("H:i:s", $d['uptime']) : 'N/A',
+                'last_polled' => $d['last_polled'] ?? '',
+                'location' => $d['location'] ?? '',
+                'os' => $d['os'] ?? '',
+                'version' => $d['version'] ?? '',
+            ];
+        }, $devices['devices']);
     }
 
-    private function getStructuredPorts()
+    private function getStructuredPorts($token)
     {
-        $ports = $this->callLibreNMS('ports');
+        $ports = $this->callLibreNMS('ports', 'GET', [], $token);
         if ($ports === false || !isset($ports['ports'])) return [];
 
-        return array_map(fn($p) => [
-            'port_id' => $p['port_id'] ?? '',
-            'hostname' => $p['hostname'] ?? '',
-            'ifName' => $p['ifName'] ?? '',
-            'ifAlias' => $p['ifAlias'] ?? '',
-            'admin_status' => $p['admin_status'] ?? '',
-            'oper_status' => $p['oper_status'] ?? '',
-            'last_polled' => $p['last_polled'] ?? '',
-        ], $ports['ports']);
+        return array_map(function($p){
+            return [
+                'port_id' => $p['port_id'] ?? '',
+                'hostname' => $p['hostname'] ?? '',
+                'ifName' => $p['ifName'] ?? '',
+                'ifAlias' => $p['ifAlias'] ?? '',
+                'admin_status' => $p['admin_status'] ?? '',
+                'oper_status' => $p['oper_status'] ?? '',
+                'last_polled' => $p['last_polled'] ?? '',
+            ];
+        }, $ports['ports']);
     }
 
-    private function getStructuredServices()
+    private function getStructuredServices($token)
     {
-        $services = $this->callLibreNMS('services');
+        $services = $this->callLibreNMS('services', 'GET', [], $token);
         if ($services === false || !isset($services['services'])) return [];
 
-        return array_map(fn($s) => [
-            'service_id' => $s['service_id'] ?? '',
-            'hostname' => $s['hostname'] ?? '',
-            'service_name' => $s['service_name'] ?? '',
-            'status' => $s['status'] ?? '',
-        ], $services['services']);
+        return array_map(function($s){
+            return [
+                'service_id' => $s['service_id'] ?? '',
+                'hostname' => $s['hostname'] ?? '',
+                'service_name' => $s['service_name'] ?? '',
+                'status' => $s['status'] ?? '',
+            ];
+        }, $services['services']);
     }
 
-    private function getStructuredAlerts()
+    private function getStructuredAlerts($token)
     {
-        $alerts = $this->callLibreNMS('alerts');
+        $alerts = $this->callLibreNMS('alerts', 'GET', [], $token);
         if ($alerts === false || !isset($alerts['alerts'])) return [];
 
-        return array_map(fn($a) => [
-            'alert_id' => $a['alert_id'] ?? '',
-            'hostname' => $a['hostname'] ?? '',
-            'severity' => $a['severity'] ?? '',
-            'message' => $a['message'] ?? '',
-            'time' => $a['time'] ?? '',
-        ], $alerts['alerts']);
+        return array_map(function($a){
+            return [
+                'alert_id' => $a['alert_id'] ?? '',
+                'hostname' => $a['hostname'] ?? '',
+                'severity' => $a['severity'] ?? '',
+                'message' => $a['message'] ?? '',
+                'time' => $a['time'] ?? '',
+            ];
+        }, $alerts['alerts']);
     }
 
-    private function getStructuredGraphs()
+    private function getStructuredGraphs($token)
     {
-        $devices = $this->getStructuredDevices();
+        $devices = $this->getStructuredDevices($token);
         $graphs = [];
         foreach ($devices as $d) {
-            $deviceGraphs = $this->callLibreNMS("devices/{$d['hostname']}/graphs");
+            $deviceGraphs = $this->callLibreNMS("devices/{$d['hostname']}/graphs", 'GET', [], $token);
             $graphs[$d['hostname']] = $deviceGraphs['graphs'] ?? [];
         }
         return $graphs;
     }
 
-    private function getStructuredDeviceGroups()
+    private function getStructuredDeviceGroups($token)
     {
-        $groups = $this->callLibreNMS('devicegroups');
+        $groups = $this->callLibreNMS('devicegroups', 'GET', [], $token);
         if ($groups === false || !isset($groups['groups'])) return [];
 
-        return array_map(fn($g) => [
-            'name' => $g['name'] ?? '',
-            'devices' => $g['devices'] ?? []
-        ], $groups['groups']);
+        return array_map(function($g){
+            return [
+                'name' => $g['name'] ?? '',
+                'devices' => $g['devices'] ?? []
+            ];
+        }, $groups['groups']);
     }
 
-    private function getStructuredLocations()
+    private function getStructuredLocations($token)
     {
-        $locations = $this->callLibreNMS('locations');
+        $locations = $this->callLibreNMS('locations', 'GET', [], $token);
         if ($locations === false || !isset($locations['locations'])) return [];
 
-        return array_map(fn($l) => [
-            'id' => $l['id'] ?? '',
-            'name' => $l['name'] ?? '',
-            'address' => $l['address'] ?? '',
-            'lat' => $l['lat'] ?? '',
-            'lng' => $l['lng'] ?? ''
-        ], $locations['locations']);
+        return array_map(function($l){
+            return [
+                'id' => $l['id'] ?? '',
+                'name' => $l['name'] ?? '',
+                'address' => $l['address'] ?? '',
+                'lat' => $l['lat'] ?? '',
+                'lng' => $l['lng'] ?? ''
+            ];
+        }, $locations['locations']);
     }
 
-    // ======== CALL LIBRENMS API ========
-    private function callLibreNMS($endpoint)
+    /** -----------------------
+     * POST METHODS (Dynamic)
+     * --------------------- */
+    private function postLibreNMSData($endpoint, $identifier, $params = [], $token)
     {
-        $url = config('services.librenms.url');
-        $token = config('services.librenms.token');
+        // Merge defaults for device creation
+        if (!isset($params['hostname'])) $params['hostname'] = $identifier;
+        if (!isset($params['ip'])) $params['ip'] = $identifier;
+        if (!isset($params['version'])) $params['version'] = 'v2c';
+        if (!isset($params['community'])) $params['community'] = 'public';
+        if (!isset($params['port'])) $params['port'] = 161;
+        if (!isset($params['force_add'])) $params['force_add'] = true;
+
+        $response = $this->callLibreNMS($endpoint, 'POST', $params, $token);
+
+        if (isset($response['error'])) return "Failed POST on /$endpoint: {$response['error']}";
+        return "Device '{$params['hostname']}' added successfully.";
+    }
+
+    /** -----------------------
+     * CALL LIBRENMS GENERIC
+     * --------------------- */
+    private function callLibreNMS($endpoint, $method = 'GET', $params = [], $token)
+    {
+        $url = rtrim(config('services.librenms.url'), '/');
+        if (!str_starts_with($endpoint, 'api/v0/')) {
+            $endpoint = 'api/v0/' . ltrim($endpoint, '/');
+        }
+        
 
         try {
-            $res = Http::withHeaders(['X-Auth-Token' => $token])
-                        ->get(rtrim($url,'/').'/'.$endpoint);
-            if ($res->successful()) {
-                return $res->json();
-            }
-        } catch (\Exception $e) {
-            Log::error('LibreNMS API error', ['err'=>$e->getMessage()]);
-        }
+            $http = Http::withHeaders(['X-Auth-Token' => $token]);
 
-        return false;
+            switch (strtoupper($method)) {
+                case 'POST':
+                    $res = $http->asForm()->post("$url/$endpoint", $params);
+                    break;
+                case 'PUT':
+                    $res = $http->asForm()->put("$url/$endpoint", $params);
+                    break;
+                case 'DELETE':
+                    $res = $http->delete("$url/$endpoint", $params);
+                    break;
+                default:
+                    $res = $http->get("$url/$endpoint", $params);
+            }
+
+            if ($res->successful()) return $res->json();
+
+            $error = $res->json()['message'] ?? $res->body();
+            Log::error("TeleQuillNMS API {$method} failed", ['endpoint' => $endpoint, 'body' => $res->body()]);
+            return ['error' => $error];
+
+        } catch (\Exception $e) {
+            Log::error('TeleQuillNMS API error', ['err' => $e->getMessage()]);
+            return ['error' => $e->getMessage()];
+        }
+    }
+
+    /** -----------------------
+     * LLM HANDLER
+     * --------------------- */
+    private function handleLLMQuery($prompt)
+    {
+        try {
+            $endpoint = config('services.gemini.endpoint'); 
+            $apiKey = config('services.gemini.key');
+
+            $payload = [
+                'contents' => [
+                    ['parts' => [['text' => $prompt]]]
+                ]
+            ];
+
+            $response = Http::withHeaders([
+                'x-goog-api-key' => $apiKey,
+                'Content-Type' => 'application/json',
+            ])->timeout(30)->post($endpoint, $payload);
+
+            $data = $response->json();
+            Log::info('Gemini raw response', $data);
+
+            $reply = 'No response from LLM.';
+            if (isset($data['candidates'][0]['content']['parts'][0]['text'])) {
+                $reply = $data['candidates'][0]['content']['parts'][0]['text'];
+            }
+
+            return response()->json(['reply' => $reply, 'type' => 'llm']);
+
+        } catch (\Exception $e) {
+            Log::error('LLM request failed', ['err' => $e->getMessage()]);
+            return response()->json(['reply' => 'LLM server failed.', 'type' => 'llm']);
+        }
     }
 }
