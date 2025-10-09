@@ -43,8 +43,8 @@
                 <!-- Box -->
                 <div class="border rounded"
                      style="width:40px;height:40px;font-size:7px;line-height:1;padding:2px;text-transform:lowercase;overflow:hidden; margin:5px 5px 5px 5px;
-                            @if($port->ifOperStatus == 'up') background-color:#0000FF;color:white;
-                            @else background-color:#dc3545;color:white; @endif"
+                            @if($port->ifOperStatus == 'up') background-color:#91D250;color:white;
+                            @else background-color:#A5A5A5;color:white; @endif"
                      title="{{ $port->ifDescr }}">
                 </div>
             </div>

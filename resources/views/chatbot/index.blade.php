@@ -40,7 +40,7 @@
             <button id="send-btn" class="btn btn-primary"><i class="fa fa-paper-plane"></i> Send</button>
         </div>
 
-        <div id="terminal-input-section" class="mt-3 d-flex" style="display:none;">
+        <div id="terminal-input-section" class="mt-3 d-flex" style="display:none;margin-top:5px;">
             <span class="input-group-text bg-dark text-success border-0"></span>
             <input type="text" id="terminal-input" class="form-control bg-dark text-light border-0"
                    placeholder="Type command (help, status, clear)">

@@ -24,8 +24,6 @@ class ChatBotController extends Controller
         ]);
 
         $userMessage = $request->input('message');
-
-        // 1️⃣ Determine dynamic token for this user
         $token = $this->getUserLibreNMSToken();
 
         if (!$token) {
@@ -35,32 +33,21 @@ class ChatBotController extends Controller
             ]);
         }
 
-
-
-
-        // 2️⃣ Detect if the message is a POST action (add/edit/delete)
-        $postAction = $this->parsePostAction($userMessage);
-        if ($postAction) {
-            $response = $this->handlePostAction($postAction, $token);
-            return response()->json(['reply' => $response, 'type' => 'librenms']);
-        }
-
-        // 3️⃣ Gather structured GET NMS data
+        // Gather NMS data
         $nmsData = $this->getAllLibreNMSData($token);
 
-        // 4️⃣ Build JSON prompt for LLM
+        // Build prompt for Gemini
         $prompt = [
             'user_message' => $userMessage,
             'nms_data' => $nmsData,
-            'instructions' => 'Use this structured NMS data to answer user queries accurately. Respond concisely and return data systematically for all endpoints (devices, ports, services, alerts, graphs, groups, locations). If user intends to add/update/delete, provide POST instructions in structured JSON format for the chatbot to process.'
+            'instructions' => 'You are an NMS assistant. When user requests to add, update, or delete data, respond ONLY with JSON like: {"action": "DELETE", "resource": "device", "data": {"ip": "x.x.x.x"}} or {"action": "POST", "resource": "device", "data": {"ip": "x.x.x.x"}}. Otherwise, answer normally.'
         ];
 
-        // 5️⃣ Send prompt to LLM
         return $this->handleLLMQuery(json_encode($prompt, JSON_PRETTY_PRINT));
     }
 
     /** -----------------------
-     * GET USER TOKEN DYNAMICALLY
+     * GET USER TOKEN
      * --------------------- */
     private function getUserLibreNMSToken()
     {
@@ -68,43 +55,10 @@ class ChatBotController extends Controller
             $apiToken = ApiToken::select('token_hash')
                 ->where('user_id', Auth::user()->user_id)
                 ->firstOrFail();
-               
             return $apiToken->token_hash;
         } catch (ModelNotFoundException $e) {
             return null;
         }
-    }
-
-    /** -----------------------
-     * POST ACTION PARSER
-     * --------------------- */
-    private function parsePostAction($message)
-    {
-        if (preg_match('/add device/i', $message)) {
-            preg_match_all('/(\w+)=([^\s]+)/', $message, $matches, PREG_SET_ORDER);
-            $params = [];
-            foreach ($matches as $m) $params[$m[1]] = $m[2];
-
-            return [
-                'endpoint' => 'devices',
-                'identifier' => $params['hostname'] ?? ($params['ip'] ?? null),
-                'params' => $params
-            ];
-        }
-        // Additional POST actions (edit/delete) can be added here
-        return null;
-    }
-
-    private function handlePostAction($action, $token)
-    {
-        if (!$action['identifier']) return "Error: Missing identifier (hostname or IP).";
-
-        return $this->postLibreNMSData(
-            $action['endpoint'],
-            $action['identifier'],
-            $action['params'],
-            $token
-        );
     }
 
     /** -----------------------
@@ -118,8 +72,6 @@ class ChatBotController extends Controller
             'services' => $this->getStructuredServices($token),
             'alerts' => $this->getStructuredAlerts($token),
             'graphs' => $this->getStructuredGraphs($token),
-            'device_groups' => $this->getStructuredDeviceGroups($token),
-            'locations' => $this->getStructuredLocations($token)
         ];
     }
 
@@ -130,6 +82,7 @@ class ChatBotController extends Controller
 
         return array_map(function($d){
             return [
+                'device_id' => $d['device_id'] ?? '',
                 'hostname' => $d['hostname'] ?? '',
                 'ip' => $d['ip'] ?? '',
                 'sysName' => $d['sysName'] ?? '',
@@ -203,56 +156,30 @@ class ChatBotController extends Controller
         return $graphs;
     }
 
-    private function getStructuredDeviceGroups($token)
-    {
-        $groups = $this->callLibreNMS('devicegroups', 'GET', [], $token);
-        if ($groups === false || !isset($groups['groups'])) return [];
-
-        return array_map(function($g){
-            return [
-                'name' => $g['name'] ?? '',
-                'devices' => $g['devices'] ?? []
-            ];
-        }, $groups['groups']);
-    }
-
-    private function getStructuredLocations($token)
-    {
-        $locations = $this->callLibreNMS('locations', 'GET', [], $token);
-        if ($locations === false || !isset($locations['locations'])) return [];
-
-        return array_map(function($l){
-            return [
-                'id' => $l['id'] ?? '',
-                'name' => $l['name'] ?? '',
-                'address' => $l['address'] ?? '',
-                'lat' => $l['lat'] ?? '',
-                'lng' => $l['lng'] ?? ''
-            ];
-        }, $locations['locations']);
-    }
 
     /** -----------------------
-     * POST METHODS (Dynamic)
+     * ADD DEVICE (POST)
      * --------------------- */
-    private function postLibreNMSData($endpoint, $identifier, $params = [], $token)
+    private function addDevice($ip, $token, $community = 'public', $version = 'v2c', $port = 161)
     {
-        // Merge defaults for device creation
-        if (!isset($params['hostname'])) $params['hostname'] = $identifier;
-        if (!isset($params['ip'])) $params['ip'] = $identifier;
-        if (!isset($params['version'])) $params['version'] = 'v2c';
-        if (!isset($params['community'])) $params['community'] = 'public';
-        if (!isset($params['port'])) $params['port'] = 161;
-        if (!isset($params['force_add'])) $params['force_add'] = true;
+        $params = [
+            'hostname' => $ip,
+            'version' => $version,
+            'community' => $community,
+            'port' => $port,
+            'force_add' => true
+        ];
 
-        $response = $this->callLibreNMS($endpoint, 'POST', $params, $token);
+        $response = $this->callLibreNMS('devices', 'POST', $params, $token);
 
-        if (isset($response['error'])) return "Failed POST on /$endpoint: {$response['error']}";
-        return "Device '{$params['hostname']}' added successfully.";
+        if (isset($response['status']) && $response['status'] === 'ok') {
+            return "✅ Device $ip added successfully.";
+        }
+        return "❌ Failed to add device $ip: " . json_encode($response);
     }
 
     /** -----------------------
-     * CALL LIBRENMS GENERIC
+     * GENERIC LIBRENMS CALL
      * --------------------- */
     private function callLibreNMS($endpoint, $method = 'GET', $params = [], $token)
     {
@@ -260,17 +187,15 @@ class ChatBotController extends Controller
         if (!str_starts_with($endpoint, 'api/v0/')) {
             $endpoint = 'api/v0/' . ltrim($endpoint, '/');
         }
-        
 
         try {
             $http = Http::withHeaders(['X-Auth-Token' => $token]);
-
             switch (strtoupper($method)) {
                 case 'POST':
-                    $res = $http->asForm()->post("$url/$endpoint", $params);
+                    $res = $http->post("$url/$endpoint", $params);
                     break;
                 case 'PUT':
-                    $res = $http->asForm()->put("$url/$endpoint", $params);
+                    $res = $http->put("$url/$endpoint", $params);
                     break;
                 case 'DELETE':
                     $res = $http->delete("$url/$endpoint", $params);
@@ -282,11 +207,11 @@ class ChatBotController extends Controller
             if ($res->successful()) return $res->json();
 
             $error = $res->json()['message'] ?? $res->body();
-            Log::error("TeleQuillNMS API {$method} failed", ['endpoint' => $endpoint, 'body' => $res->body()]);
+            Log::error("LibreNMS {$method} failed", ['endpoint' => $endpoint, 'body' => $res->body()]);
             return ['error' => $error];
 
         } catch (\Exception $e) {
-            Log::error('TeleQuillNMS API error', ['err' => $e->getMessage()]);
+            Log::error('LibreNMS API error', ['err' => $e->getMessage()]);
             return ['error' => $e->getMessage()];
         }
     }
@@ -297,7 +222,7 @@ class ChatBotController extends Controller
     private function handleLLMQuery($prompt)
     {
         try {
-            $endpoint = config('services.gemini.endpoint'); 
+            $endpoint = config('services.gemini.endpoint');
             $apiKey = config('services.gemini.key');
 
             $payload = [
@@ -312,11 +237,24 @@ class ChatBotController extends Controller
             ])->timeout(30)->post($endpoint, $payload);
 
             $data = $response->json();
-            Log::info('Gemini raw response', $data);
-
             $reply = 'No response from LLM.';
+
             if (isset($data['candidates'][0]['content']['parts'][0]['text'])) {
-                $reply = $data['candidates'][0]['content']['parts'][0]['text'];
+                $reply = trim($data['candidates'][0]['content']['parts'][0]['text']);
+            }
+
+            // detect JSON command
+            if (preg_match('/\{[\s\S]*\}/', $reply, $match)) {
+                $jsonStr = $match[0];
+                $actionData = json_decode($jsonStr, true);
+
+                if (json_last_error() === JSON_ERROR_NONE && isset($actionData['action'])) {
+                    $result = $this->executeLLMAction($actionData);
+                    return response()->json([
+                        'reply' => "🧠 Executed Action:\n" . json_encode($actionData, JSON_PRETTY_PRINT) . "\n\nResult: $result",
+                        'type' => 'action'
+                    ]);
+                }
             }
 
             return response()->json(['reply' => $reply, 'type' => 'llm']);
@@ -325,5 +263,61 @@ class ChatBotController extends Controller
             Log::error('LLM request failed', ['err' => $e->getMessage()]);
             return response()->json(['reply' => 'LLM server failed.', 'type' => 'llm']);
         }
+    }
+
+    /** -----------------------
+     * EXECUTE LLM ACTION
+     * --------------------- */
+    private function executeLLMAction(array $actionData)
+    {
+        $token = $this->getUserLibreNMSToken();
+        if (!$token) return 'No LibreNMS token found.';
+
+        $action = strtoupper($actionData['action'] ?? '');
+        $resource = strtolower($actionData['resource'] ?? '');
+        $data = $actionData['data'] ?? [];
+
+        switch ($action) {
+            case 'DELETE':
+                if ($resource === 'device' && isset($data['ip'])) {
+                    $ip = $data['ip'];
+                    $deviceId = $this->getDeviceIdByIp($ip, $token);
+                    if (!$deviceId) return "Device with IP $ip not found.";
+                    $response = $this->callLibreNMS("devices/$deviceId", 'DELETE', [], $token);
+                    return isset($response['status']) && $response['status'] === 'ok'
+                        ? "✅ Device $ip deleted successfully."
+                        : "❌ Failed to delete: " . json_encode($response);
+                }
+                return "DELETE action not supported for resource: $resource";
+
+            case 'POST':
+                if ($resource === 'device' && isset($data['ip'])) {
+                    $ip = $data['ip'];
+                    return $this->addDevice(
+                        $ip,
+                        $token,
+                        $data['community'] ?? 'public',
+                        $data['version'] ?? 'v2c',
+                        $data['port'] ?? 161
+                    );
+                }
+                return "POST action not supported for resource: $resource";
+
+            default:
+                return "Unsupported action: $action";
+        }
+    }
+
+    private function getDeviceIdByIp($ip, $token)
+    {
+        $devices = $this->callLibreNMS('devices', 'GET', [], $token);
+        if (!isset($devices['devices'])) return null;
+
+        foreach ($devices['devices'] as $d) {
+            if (($d['ip'] ?? '') === $ip || ($d['hostname'] ?? '') === $ip) {
+                return $d['device_id'] ?? null;
+            }
+        }
+        return null;
     }
 }
