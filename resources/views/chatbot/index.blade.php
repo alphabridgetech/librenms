@@ -1,12 +1,12 @@
 @extends('layouts.librenmsv1')
 
-@section('title', __('MCP Server Chat'))
+@section('title', __('TeleQuill Server Chat'))
 
 @section('content')
 <div class="container-fluid">
     <x-panel>
         <x-slot name="title">
-            <i class="fa fa-server fa-fw fa-lg"></i> {{ __('MCP Server Chat Interface') }}
+            <i class="fa fa-server fa-fw fa-lg"></i> {{ __('TeleQuill Server Chat Interface') }}
         </x-slot>
 
         <div class="d-flex justify-content-between align-items-center mb-3">
@@ -135,7 +135,7 @@ document.addEventListener('DOMContentLoaded', function() {
         saveChat('You', text, false);
         chatInput.value = '';
 
-        const typingId = showTypingIndicator('MCP Server');
+        const typingId = showTypingIndicator('TeleQuill Server');
 
         try {
             const resp = await fetch('{{ route("chatbot.message") }}', {
@@ -152,14 +152,14 @@ document.addEventListener('DOMContentLoaded', function() {
 
             if (resp.ok && data.reply) {
                 const isLibre = data.type === 'llm';
-                addChatMessage('MCP Server', data.reply, isLibre);
-                saveChat('MCP Server', data.reply, isLibre);
+                addChatMessage('TeleQuill Server', data.reply, isLibre);
+                saveChat('TeleQuill Server', data.reply, isLibre);
             } else {
-                addChatMessage('MCP Server', '[Error] ' + (data.error || 'Unknown'));
+                addChatMessage('TeleQuill Server', '[Error] ' + (data.error || 'Unknown'));
             }
         } catch (err) {
             removeTypingIndicator(typingId);
-            addChatMessage('MCP Server', '[Error] Unable to reach server.');
+            addChatMessage('TeleQuill Server', '[Error] Unable to reach server.');
         }
     }
 
@@ -199,7 +199,7 @@ document.addEventListener('DOMContentLoaded', function() {
             return;
         }
 
-        const typingId = showTypingIndicator('MCP Server', true);
+        const typingId = showTypingIndicator('TeleQuill Server', true);
 
         try {
             const resp = await fetch('{{ route("chatbot.message") }}', {
