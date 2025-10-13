@@ -104,6 +104,11 @@ Route::prefix('v0')->group(function () {
         Route::post('syslogsink', [App\Api\Controllers\LegacyApiController::class, 'post_syslogsink'])->name('post_syslogsink');
 
         Route::get('poller_group/{poller_group_id_or_name?}', [App\Api\Controllers\LegacyApiController::class, 'get_poller_group'])->name('get_poller_group');
+
+        Route::post('chatbot/message', [App\Http\Controllers\ChatBotController::class, 'message'])
+        ->name('chatbot.message');
+
+        
     });
 
     // restricted by access

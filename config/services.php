@@ -10,7 +10,6 @@ return [
     ],
     'librenms' => [
     'url' => 'http://localhost:8000/',
-    'token' => env('LIBRENMS_TOKEN'),
     ],
     'gemini' => [
     'key' => 'AIzaSyBI8LgWDpvKsogtG0A1o-J-wcQl4oUQdKI',
