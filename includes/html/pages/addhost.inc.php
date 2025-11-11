@@ -67,6 +67,15 @@ if (! empty($_POST['hostname'])) {
                 print_error('Unsupported SNMP Version. There was a dropdown menu, how did you reach this error ?');
             }//end if
 
+            // SNMP & SSH settings ADDED BY KUNAL VERMA 11-11-2025
+            if (!empty($_POST['ssh_user'])) {
+                $new_device->ssh_user = strip_tags($_POST['ssh_user']);
+            }
+
+            if (!empty($_POST['ssh_pass'])) {
+                $new_device->ssh_pass = strip_tags($_POST['ssh_pass']);
+            }
+
             try {
                 $new_device->poller_group = strip_tags($_POST['poller_group'] ?? '');
                 $new_device->port_association_mode = PortAssociationMode::getId($_POST['port_assoc_mode']);
@@ -269,6 +278,7 @@ foreach (PortAssociationMode::getModes() as $mode) {
             </div>
           </div>
         </div>
+        
       </div>
 <?php
 if (LibrenmsConfig::get('distributed_poller') === true) {
@@ -297,7 +307,27 @@ if (LibrenmsConfig::get('distributed_poller') === true) {
                   <input type="checkbox" name="force_add" id="force_add" data-size="small">
           </div>
       </div>
+
     <hr>
+    <div class="form-group">
+            <div class="col-sm-12 alert alert-info">
+              <label class="control-label text-left input-sm">SSH Configuration</label>
+            </div>
+          </div>
+    <div class='form-group'>
+    <label for='ssh_user' class='col-sm-3 control-label'>SSH Username</label>
+    <div class='col-sm-9'>
+        <input type='text' name='ssh_user' id='ssh_user' class='form-control input-sm' placeholder="SSH Username">
+    </div>
+</div>
+<div class='form-group'>
+    <label for='ssh_pass' class='col-sm-3 control-label'>SSH Password</label>
+    <div class='col-sm-9'>
+        <input type='password' name='ssh_pass' id='ssh_pass' class='form-control input-sm' placeholder="SSH Password">
+    </div>
+</div>
+
+<hr>
     <center><button type="submit" class="btn btn-default" name="Submit">Add Device</button></center>
   </div>
 </form>

@@ -1,0 +1,37 @@
+import paramiko
+import time
+
+HOST = "192.168.200.243"
+USER = "admin"
+PASSWORD = "admin"
+
+try:
+    ssh = paramiko.SSHClient()
+    ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+    ssh.connect(HOST, username=USER, password=PASSWORD, look_for_keys=False, allow_agent=False)
+
+    # Start interactive shell
+    shell = ssh.invoke_shell()
+    time.sleep(1)
+
+    # Enter privileged mode
+    shell.send("enable\n")
+    time.sleep(1)
+    shell.send(PASSWORD + "\n")  # If enable requires password
+    time.sleep(1)
+
+    # Run show version
+    shell.send("show version\n")
+    time.sleep(3)
+
+    # Capture output
+    output = ""
+    while shell.recv_ready():
+        output += shell.recv(65535).decode()
+
+    print(output)
+
+    ssh.close()
+
+except Exception as e:
+    print("Exception:", e)
