@@ -1,0 +1,19 @@
+---
+- name: Run "show version" on device via SSH
+  hosts: all
+  gather_facts: no
+
+  tasks:
+    - name: Show version via SSH
+      ansible.builtin.raw: show version
+      register: result
+      ignore_errors: yes
+
+    - name: Save output locally
+      ansible.builtin.copy:
+        dest: "/opt/librenms/librenms-ansible-inventory-plugin/tmp/show_version_{{ inventory_hostname }}.txt"
+        content: "{{ result.stdout | default('No output') }}"
+
+    - name: Display result
+      debug:
+        var: result.stdout_lines
