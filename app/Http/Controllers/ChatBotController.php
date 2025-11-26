@@ -66,14 +66,86 @@ class ChatBotController extends Controller
      * --------------------- */
     private function getAllLibreNMSData($token)
     {
+    $devices = $this->getStructuredDevices($token);
+
+    $devicePorts = [];
+    foreach ($devices as $d) {
+        if (!empty($d['hostname'])) {
+            $devicePorts[$d['hostname']] = $this->getDevicePorts($d['hostname'], $token);
+        }
+    }
         return [
             'devices' => $this->getStructuredDevices($token),
             'ports' => $this->getStructuredPorts($token),
             'services' => $this->getStructuredServices($token),
             'alerts' => $this->getStructuredAlerts($token),
             'graphs' => $this->getStructuredGraphs($token),
+            'device_ports' => $devicePorts,
+            'sensors' => $this->getStructuredSensors($token),
         ];
     }
+
+     private function getStructuredSensors($token)
+    {
+        // Get all devices first
+        $devices = $this->getStructuredDevices($token);
+
+        // Create mapping: device_id → hostname
+        $deviceMap = [];
+        foreach ($devices as $d) {
+            if (!empty($d['device_id']) && !empty($d['hostname'])) {
+                $deviceMap[$d['device_id']] = $d['hostname'];
+            }
+        }
+
+        // Fetch sensors
+        $sensors = $this->callLibreNMS('resources/sensors', 'GET', [], $token);
+
+        if ($sensors === false || !isset($sensors['sensors'])) return [];
+
+        return array_map(function($s) use ($deviceMap) {
+
+            $hostname = $deviceMap[$s['device_id']] ?? 'Unknown';
+
+            return [
+                'sensor_id' => $s['sensor_id'] ?? '',
+                'hostname'  => $hostname,                         // ✅ replaced value
+                'class'     => $s['sensor_class'] ?? '',
+                'type'      => $s['sensor_type'] ?? '',
+                'descr'     => $s['sensor_descr'] ?? '',
+                'current'   => $s['sensor_current'] ?? '',
+                'limit_high' => $s['sensor_limit'] ?? '',
+                'limit_low'  => $s['sensor_limit_low'] ?? '',
+                'alert'     => $s['sensor_alert'] ?? '',
+                'poller_type'=> $s['poller_type'] ?? '',
+                'oid'       => $s['sensor_oid'] ?? '',
+                'last_update'=> $s['lastupdate'] ?? '',
+            ];
+        }, $sensors['sensors']);
+    }
+
+
+
+        private function getDevicePorts($ip, $token)
+    {
+        // GET /api/v0/devices/{hostname}/ports
+        $response = $this->callLibreNMS("devices/$ip/ports", 'GET', [], $token);
+
+        if ($response === false || !isset($response['ports'])) return [];
+
+        return array_map(function($p){
+            return [
+                'port_id'     => $p['port_id'] ?? '',
+                'ifName'      => $p['ifName'] ?? '',
+                'ifAlias'     => $p['ifAlias'] ?? '',
+                'admin_status'=> $p['admin_status'] ?? '',
+                'oper_status' => $p['oper_status'] ?? '',
+                'speed'       => $p['ifSpeed'] ?? '',
+                'last_change' => $p['ifLastChange'] ?? '',
+            ];
+        }, $response['ports']);
+    }
+
 
     private function getStructuredDevices($token)
     {
