@@ -1,11 +1,22 @@
-import telnetlib
 import re
 import yaml
 import time
+from netmiko import ConnectHandler
 
-HOST = "192.168.200.243"
+HOST = "192.168.200.244"
 USER = "admin"
 PASSWORD = "admin"
+
+device = {
+    "device_type": "cisco_ios",   # closest CLI match
+    "ip": HOST,
+    "username": USER,
+    "password": PASSWORD,
+    "fast_cli": False,
+    "global_delay_factor": 2,
+    "allow_agent": False,
+    "use_keys": False
+}
 
 result = {
     "manufacturer": "",
@@ -32,99 +43,59 @@ result = {
 }
 
 try:
-    tn = telnetlib.Telnet(HOST, timeout=10)
+    conn = ConnectHandler(**device)
 
-    tn.read_until(b"Username:", timeout=5)
-    tn.write(USER.encode('ascii') + b"\n")
+    # Enter enable if needed
+    try:
+        conn.enable()
+    except:
+        pass
 
-    tn.read_until(b"Password:", timeout=5)
-    tn.write(PASSWORD.encode('ascii') + b"\n")
+    # ===== SHOW VERSION =====
+    version_output = conn.send_command("show version", delay_factor=2)
 
-    # Wait a bit for any post-login message/banner
-    time.sleep(2)
-    banner_output = tn.read_very_eager().decode('ascii', errors='ignore')
-
-    # Extract banner up to the first prompt
-    prompt_match = re.search(r"(.*?)\r?\n(?:[A-Za-z0-9_\-]+[>#])", banner_output, re.DOTALL)
-    if prompt_match:
-        banner_text = prompt_match.group(1)
-        banner_text = banner_text.replace('\r', '').strip()
-    else:
-        banner_text = banner_output.replace('\r', '').strip()
-
-    if banner_text:
-        result["comment"] = banner_text
-
-    tn.write(b"\n")
-    index, _, _ = tn.expect([b">", b"#"], timeout=5)
-    if index == 0:
-        tn.write(b"enable\n")
-        tn.read_until(b"#", timeout=5)
-
-
-
-
-    tn.write(b"terminal length 0\n")
-    time.sleep(1)
-
-    # === SHOW VERSION ===
-    tn.write(b"show version\n")
-    time.sleep(3)
-    version_output = tn.read_very_eager().decode('ascii', errors='ignore')
-
-    # Manufacturer
     m = re.search(r'^(Alpha\s+Bridge[^\n]+)', version_output, re.MULTILINE)
     if m:
         result["manufacturer"] = m.group(1).strip()
 
-    # Model
     m = re.search(r'(AS\d+\w*(?:-\w+)*)', version_output)
     if m:
         result["model"] = m.group(1)
         result["slug"] = m.group(1).lower()
 
-    # Firmware version
     m = re.search(r'Version\s+([\d\.A-Za-z]+)', version_output)
     if m:
         result["firmware_version"] = m.group(1).strip()
 
-    # Serial number
     m = re.search(r'Serial\s*num:\s*([A-Za-z0-9\-]+)', version_output)
     if m:
         result["serial_number"] = m.group(1).strip()
 
-    # Hardware version
     m = re.search(r'hardware version:([A-Za-z0-9]+)', version_output)
     if m:
         result["hardware_version"] = m.group(1).strip()
 
-    # ROM version
     m = re.search(r'ROM:\s*System Bootstrap,\s*Version\s*([\d\.]+)', version_output)
     if m:
         result["rom_version"] = m.group(1).strip()
 
-    # PCB version
     m = re.search(r'PCB version:\s*([A-Za-z0-9_.-]+)', version_output)
     if m:
         result["pcb_version"] = m.group(1).strip()
 
-    # Memory / Flash
     m = re.search(r'(\d+K)\s*bytes of memory,(\d+K)\s*bytes of flash', version_output)
     if m:
         result["memory"] = m.group(1)
         result["flash"] = m.group(2)
 
-    # Base MAC address
     m = re.search(r'Base ethernet MAC Address:\s*([0-9a-f:]+)', version_output, re.IGNORECASE)
     if m:
         result["base_mac"] = m.group(1)
 
-    # System image
     m = re.search(r'System image file is\s+"([^"]+)"', version_output)
     if m:
         result["system_image"] = m.group(1)
 
-    # SNMP info
     snmp = re.search(r'snmp info:\s*vend_ID:(\d+)\s+product_ID:(\d+)\s+system_ID:([^\n]+)', version_output)
     if snmp:
         result["snmp_info"] = {
@@ -133,28 +104,23 @@ try:
             "system_id": snmp.group(3).strip()
         }
 
-    # Uptime
     m = re.search(r'uptime is\s+([0-9:]+)', version_output)
     if m:
         result["uptime"] = m.group(1)
 
-    # System time
     m = re.search(r'The current time:\s*([0-9\-: ]+)', version_output)
     if m:
         result["system_time"] = m.group(1).strip()
 
-    # Reboot count
     m = re.search(r'(\d+)\s+times of reboot', version_output)
     if m:
         result["reboot_count"] = m.group(1)
 
-    # === SHOW INTERFACE BRIEF ===
-    tn.write(b"show interface brief\n")
-    time.sleep(3)
-    iface_output = tn.read_very_eager().decode('ascii', errors='ignore')
-    iface_output = re.sub(r'--More--', '', iface_output)
+    # ===== SHOW INTERFACE BRIEF =====
+    iface_output = conn.send_command("show interface brief", delay_factor=2)
 
     for line in iface_output.splitlines():
+        line = line.strip()
         match = re.match(r'^(g\d+/\d+|v\d+|n\d+)\s+.*?(Giga-[A-Z]+|Fast-[A-Z]+|TenGiga-[A-Z]+|up|down)', line)
         if match:
             name, iface_type = match.groups()
@@ -163,11 +129,8 @@ try:
                 "type": iface_type
             })
 
-    # === SHOW LINE ===
-    tn.write(b"show line\n")
-    time.sleep(2)
-    line_output = tn.read_very_eager().decode('ascii', errors='ignore')
-    line_output = re.sub(r'--More--', '', line_output)
+    # ===== SHOW LINE =====
+    line_output = conn.send_command("show line", delay_factor=2)
 
     for line in line_output.splitlines():
         line = line.strip()
@@ -180,31 +143,27 @@ try:
             elif line_type == "VTY":
                 result["virtual_ports"].append(entry)
 
-    # === SHOW POWER-STATUS ===
-    tn.write(b"show power-status\n")
-    time.sleep(2)
-    power_output = tn.read_very_eager().decode('ascii', errors='ignore')
-    power_output = re.sub(r'--More--', '', power_output)
+    # ===== SHOW POWER-STATUS =====
+    try:
+        power_output = conn.send_command("show power-status", delay_factor=2)
+        for line in power_output.splitlines():
+            line = line.strip()
+            if re.match(r'CHASSIS_NUMBER|^-+$|^\s*$', line):
+                continue
+            m = re.match(r'(\d+)\s+(\d+)\s+(\w+)\s+(\w+)', line)
+            if m:
+                chassis, power_no, status, presence = m.groups()
+                result["power_status"].append({
+                    "chassis_number": chassis,
+                    "power_number": power_no,
+                    "status": status,
+                    "presence": presence
+                })
+    except:
+        pass
 
-    for line in power_output.splitlines():
-        line = line.strip()
-        # Skip header or empty lines
-        if re.match(r'CHASSIS_NUMBER|^-+$|^\s*$', line):
-            continue
-        m = re.match(r'(\d+)\s+(\d+)\s+(\w+)\s+(\w+)', line)
-        if m:
-            chassis, power_no, status, presence = m.groups()
-            result["power_status"].append({
-                "chassis_number": chassis,
-                "power_number": power_no,
-                "status": status,
-                "presence": presence
-            })
+    conn.disconnect()
 
-    tn.write(b"exit\n")
-    tn.close()
-
-    # === SAVE YAML RESULT ===
     with open("/opt/librenms/librenms-ansible-inventory-plugin/tmp/device_info.yml", "w") as f:
         yaml.dump(result, f, sort_keys=False)
 
