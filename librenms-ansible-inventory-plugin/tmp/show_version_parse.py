@@ -1,0 +1,114 @@
+import re
+import yaml
+from netmiko import ConnectHandler
+
+HOST = "192.168.200.244"
+USER = "admin"
+PASSWORD = "admin"
+
+device = {
+    "device_type": "brocade_fastiron",   # BEST MATCH FOR ALPHABRIDGE CLI
+    "ip": HOST,
+    "username": USER,
+    "password": PASSWORD,
+    "fast_cli": False,
+    "global_delay_factor": 2,
+    "read_timeout_override": 20,
+}
+
+result = {
+    "manufacturer": "Alpha Bridge Technologies",
+    "model": "",
+    "firmware_version": "",
+    "rom_version": "",
+    "hardware_version": "",
+    "serial_number": "",
+    "memory": "",
+    "flash": "",
+    "system_image": "",
+    "base_mac": "",
+    "vendor_id": "",
+    "product_id": "",
+    "system_id": "",
+    "uptime": "",
+    "system_time": "",
+}
+
+try:
+    conn = ConnectHandler(**device)
+
+    # ---- FIX PROMPT ----
+    prompt = conn.find_prompt()
+
+    # If prompt ends with > enter enable mode
+    if prompt.strip().endswith(">"):
+        conn.enable()
+
+    # FORCE MATCH ANY SWITCH PROMPT (# or >)
+    output = conn.send_command(
+        "show version",
+        expect_string=r"Switch[#>]",
+        delay_factor=2,
+        max_loops=2000
+    )
+
+    # ---- PARSING ----
+
+    model = re.search(r'(AS\d+\w*) Software', output)
+    if model:
+        result["model"] = model.group(1)
+
+    fw = re.search(r'Version\s+([A-Za-z0-9\.\-]+)', output)
+    if fw:
+        result["firmware_version"] = fw.group(1)
+
+    rom = re.search(r'ROM:\s*System Bootstrap,\s*Version\s*([0-9\.]+)', output)
+    if rom:
+        result["rom_version"] = rom.group(1)
+
+    hw = re.search(r'hardware version:([A-Za-z0-9]+)', output)
+    if hw:
+        result["hardware_version"] = hw.group(1)
+
+    serial = re.search(r'Serial num:([A-Za-z0-9]+)', output)
+    if serial:
+        result["serial_number"] = serial.group(1)
+
+    mem = re.search(r'(\d+K)\s*bytes of memory', output)
+    if mem:
+        result["memory"] = mem.group(1)
+
+    flash = re.search(r'(\d+K)\s*bytes of flash', output)
+    if flash:
+        result["flash"] = flash.group(1)
+
+    img = re.search(r'System image file is\s+"([^"]+)"', output)
+    if img:
+        result["system_image"] = img.group(1)
+
+    mac = re.search(r'Base ethernet MAC Address:\s*([0-9a-f:]+)', output, re.I)
+    if mac:
+        result["base_mac"] = mac.group(1)
+
+    snmp = re.search(r'vend_ID:(\d+)\s+product_ID:(\d+)\s+system_ID:([^\n]+)', output)
+    if snmp:
+        result["vendor_id"] = snmp.group(1)
+        result["product_id"] = snmp.group(2)
+        result["system_id"] = snmp.group(3).strip()
+
+    uptime = re.search(r'uptime is\s*([0-9:]+:[0-9]+)', output)
+    if uptime:
+        result["uptime"] = uptime.group(1)
+
+    systime = re.search(r'The current time:\s*([0-9\-\: ]+)', output)
+    if systime:
+        result["system_time"] = systime.group(1).strip()
+
+    conn.disconnect()
+
+    with open("/opt/librenms/librenms-ansible-inventory-plugin/tmp/parsed_show_version.yml", "w") as f:
+        yaml.dump(result, f, sort_keys=False)
+
+except Exception as e:
+    with open("/opt/librenms/librenms-ansible-inventory-plugin/tmp/parsed_show_version.yml", "w") as f:
+        f.write("Error: " + str(e))
