@@ -5,8 +5,71 @@ use App\Facades\LibrenmsConfig;
 use LibreNMS\Enum\PortAssociationMode;
 use LibreNMS\Exceptions\HostUnreachableException;
 use LibreNMS\Util\IP;
+use Symfony\Component\Yaml\Yaml;
 
 $no_refresh = true;
+
+function updateHostsYml($device)
+{
+    $basePath = "/opt/librenms"; 
+
+    $debugFile = $basePath . "/librenms-ansible-inventory-plugin/debug.log";
+    file_put_contents($debugFile, "Function called\n", FILE_APPEND);
+
+    $dir = $basePath . "/librenms-ansible-inventory-plugin/hosts/";
+
+    // Ensure directory exists
+    if (!is_dir($dir)) {
+        file_put_contents($debugFile, "Directory missing, creating...\n", FILE_APPEND);
+        mkdir($dir, 0777, true);
+    }
+
+    // Validate hostname
+    if (empty($device->hostname)) {
+        file_put_contents($debugFile, "ERROR: Hostname empty!\n", FILE_APPEND);
+        return;
+    }
+
+    $file = $dir . $device->hostname . ".yml";
+    file_put_contents($debugFile, "Writing file: $file\n", FILE_APPEND);
+
+    // Correct YAML structure for Ansible inventory
+    $data = [
+        'all' => [
+            'children' => [
+                'alphabridge_devices' => [
+                    'hosts' => [
+                        $device->hostname => [
+                            'ansible_host'       => $device->hostname,
+                            'ansible_user'       => $device->ssh_user ?? '',
+                            'ansible_password'   => $device->ssh_pass ?? '',
+                            'ansible_connection' => 'local',
+                            'ansible_python_interpreter'=> '/usr/bin/python3',
+                            'os'                 => $device->os,
+                            'snmpver'            => $device->snmpver,
+                            'community'          => $device->community ?? '',
+                        ]
+                    ]
+                ]
+            ]
+        ]
+    ];
+
+    try {
+        $yaml = Yaml::dump($data, 10, 2);
+        file_put_contents($file, $yaml);
+
+        file_put_contents($debugFile, "YAML written successfully\n", FILE_APPEND);
+
+    } catch (Exception $e) {
+        file_put_contents($debugFile, "Error: " . $e->getMessage() . "\n", FILE_APPEND);
+    }
+}
+
+
+
+
+
 
 if (! Auth::user()->hasGlobalAdmin()) {
     include 'includes/html/error-no-perm.inc.php';
@@ -76,6 +139,7 @@ if (! empty($_POST['hostname'])) {
                 $new_device->ssh_pass = strip_tags($_POST['ssh_pass']);
             }
 
+
             try {
                 $new_device->poller_group = strip_tags($_POST['poller_group'] ?? '');
                 $new_device->port_association_mode = PortAssociationMode::getId($_POST['port_assoc_mode']);
@@ -84,6 +148,7 @@ if (! empty($_POST['hostname'])) {
                 $result = (new ValidateDeviceAndCreate($new_device, $force_add))->execute();
 
                 if ($result) {
+                    updateHostsYml($new_device);
                     $link = \LibreNMS\Util\Url::deviceUrl($new_device->device_id);
                     print_message("Device added <a href='$link'>$hostname ($new_device->device_id)</a>");
                 }
