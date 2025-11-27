@@ -2,25 +2,43 @@
 - name: Alphabridge - Show Version Parser
   hosts: alphabridge_devices
   gather_facts: no
-  become: false
 
   vars:
+    tmp_dir: "/opt/librenms/librenms-ansible-inventory-plugin/tmp"
     output_path: "/opt/librenms/librenms-ansible-inventory-plugin/tmp/parsed_show_version.yml"
+    parser_script: "/opt/librenms/librenms-ansible-inventory-plugin/tmp/show_version_parse.py"
 
   tasks:
 
-    - name: Install Python dependencies
+    # -------------------------------------------------------
+    # Ensure /tmp directory exists with correct permissions
+    # -------------------------------------------------------
+    - name: Ensure tmp directory exists
+      ansible.builtin.file:
+        path: "{{ tmp_dir }}"
+        state: directory
+        mode: "0777"
+      delegate_to: localhost
+
+    # -------------------------------------------------------
+    # Install required Python libraries on LOCALHOST
+    # -------------------------------------------------------
+    - name: Install Python dependencies (LOCAL)
       ansible.builtin.pip:
         name:
           - netmiko
           - packaging
         executable: pip3
-      become: true
+      delegate_to: localhost
+      become: false
 
+    # -------------------------------------------------------
+    # Create parser script on LOCALHOST
+    # -------------------------------------------------------
     - name: Create show version parser script
       ansible.builtin.copy:
-        dest: "/opt/librenms/librenms-ansible-inventory-plugin/tmp/show_version_parse.py"
-        mode: '0755'
+        dest: "{{ parser_script }}"
+        mode: "0777"
         content: |
           import re
           import yaml
@@ -31,7 +49,7 @@
           PASSWORD = "{{ ansible_password }}"
 
           device = {
-              "device_type": "brocade_fastiron",   # BEST MATCH FOR ALPHABRIDGE CLI
+              "device_type": "brocade_fastiron",
               "ip": HOST,
               "username": USER,
               "password": PASSWORD,
@@ -61,22 +79,16 @@
           try:
               conn = ConnectHandler(**device)
 
-              # ---- FIX PROMPT ----
               prompt = conn.find_prompt()
-
-              # If prompt ends with > enter enable mode
               if prompt.strip().endswith(">"):
                   conn.enable()
 
-              # FORCE MATCH ANY SWITCH PROMPT (# or >)
               output = conn.send_command(
                   "show version",
                   expect_string=r"Switch[#>]",
                   delay_factor=2,
                   max_loops=2000
               )
-
-              # ---- PARSING ----
 
               model = re.search(r'(AS\d+\w*) Software', output)
               if model:
@@ -136,18 +148,30 @@
           except Exception as e:
               with open("{{ output_path }}", "w") as f:
                   f.write("Error: " + str(e))
+      delegate_to: localhost
 
-    - name: Run parser script
+    # -------------------------------------------------------
+    # Run parser script locally
+    # -------------------------------------------------------
+    - name: Run parser script (LOCAL)
       ansible.builtin.command:
-        cmd: python3 /opt/librenms/librenms-ansible-inventory-plugin/tmp/show_version_parse.py
+        cmd: python3 "{{ parser_script }}"
+      delegate_to: localhost
       changed_when: false
 
-    - name: Print parsed YAML
+    # -------------------------------------------------------
+    # Read parsed YAML output
+    # -------------------------------------------------------
+    - name: Read parsed YAML
       ansible.builtin.command:
-        cmd: cat {{ output_path }}
-      register: parsed
+        cmd: cat "{{ output_path }}"
+      delegate_to: localhost
+      register: parsed_output
       changed_when: false
 
+    # -------------------------------------------------------
+    # Final output
+    # -------------------------------------------------------
     - name: Output final result
       ansible.builtin.debug:
-        msg: "{{ parsed.stdout }}"
+        msg: "{{ parsed_output.stdout }}"

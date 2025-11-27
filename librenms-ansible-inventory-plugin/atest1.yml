@@ -1,0 +1,55 @@
+- name: Run "show version" on network device via SSH
+  hosts: alphabridge_devices
+  gather_facts: no
+  tasks:
+    - name: Create Python SSH script
+      ansible.builtin.copy:
+        dest: "/opt/librenms/librenms-ansible-inventory-plugin/tmp/show_version_exec.py"
+        mode: '0755'
+        content: |
+          import paramiko
+          import time
+
+          HOST = "{{ ansible_host }}"
+          USER = "{{ ansible_user }}"
+          PASSWORD = "{{ ansible_password }}"
+
+          try:
+              ssh = paramiko.SSHClient()
+              ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+              ssh.connect(HOST, username=USER, password=PASSWORD, look_for_keys=False, allow_agent=False)
+
+              # Start interactive shell
+              shell = ssh.invoke_shell()
+              time.sleep(1)
+
+              # Enter privileged mode
+              shell.send("enable\n")
+              time.sleep(1)
+              shell.send(PASSWORD + "\n")  # If enable requires password
+              time.sleep(1)
+
+              # Run show version
+              shell.send("show version\n")
+              time.sleep(3)
+
+              # Capture output
+              output = ""
+              while shell.recv_ready():
+                  output += shell.recv(65535).decode()
+
+              print(output)
+
+              ssh.close()
+
+          except Exception as e:
+              print("Exception:", e)
+
+    - name: Run SSH script using virtualenv Python
+      ansible.builtin.command: /opt/librenms/librenms-ansible-inventory-plugin/bin/python3 /opt/librenms/librenms-ansible-inventory-plugin/tmp/show_version_exec.py
+      register: output
+      changed_when: false
+
+    - name: Display output
+      ansible.builtin.debug:
+        var: output.stdout
