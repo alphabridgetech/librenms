@@ -1,0 +1,27 @@
+---
+- name: Get system information
+  hosts: "{{ target }}"
+  gather_facts: no
+
+  tasks:
+    - name: Run show version
+      ansible.builtin.raw: "show version"
+      register: version_output
+
+    - name: Parse output into JSON
+      set_fact:
+        device_json:
+          device_type: "{{ version_output.stdout | regex_search('Device Type\\s*:\\s*(.*)', '\\1') }}"
+          bios_version: "{{ version_output.stdout | regex_search('BIOS Version\\s*:\\s*(.*)', '\\1') }}"
+          firmware_version: "{{ version_output.stdout | regex_search('Firmware Version\\s*:\\s*(.*)', '\\1') }}"
+          serial: "{{ version_output.stdout | regex_search('Serial Num\\s*:\\s*(.*)', '\\1') }}"
+          mac: "{{ version_output.stdout | regex_search('MAC Address\\s*:\\s*(.*)', '\\1') }}"
+          ip: "{{ version_output.stdout | regex_search('IP Address\\s*:\\s*(.*)', '\\1') }}"
+          current_time: "{{ version_output.stdout | regex_search('Current Time\\s*:\\s*(.*)', '\\1') }}"
+          uptime: "{{ version_output.stdout | regex_search('Uptime\\s*:\\s*(.*)', '\\1') }}"
+          cpu_usage: "{{ version_output.stdout | regex_search('CPU Usage\\s*:\\s*(.*)', '\\1') }}"
+          memory_usage: "{{ version_output.stdout | regex_search('Memory Usage\\s*:\\s*(.*)', '\\1') }}"
+
+    - name: Return structured JSON
+      debug:
+        msg: "{{ device_json }}"

@@ -96,7 +96,7 @@ class ConfigurationController implements DeviceTab
         $data = match ($tab) {
             default => $this->portData($device, $request),
         };
-
+        
         return array_merge([
             'tab' => $tab,
             'details' => $this->detail,

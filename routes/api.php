@@ -58,6 +58,16 @@ Route::prefix('v0')->group(function () {
 
     // admin required
     Route::middleware(['can:admin'])->group(function () {
+
+        //kunal api add for configuration changes
+        Route::post('testapi', [App\Api\Controllers\KunalApiController::class, 'testFunction'])->name('testFunction');
+        Route::get('system_info/{hostname}', [App\Api\Controllers\KunalApiController::class, 'systeminfo'])->name('systeminfo');
+
+
+
+
+
+
         Route::prefix('devices')->group(function () {
             Route::post('', [App\Api\Controllers\LegacyApiController::class, 'add_device'])->name('add_device');
             Route::delete('{hostname}', [App\Api\Controllers\LegacyApiController::class, 'del_device'])->name('del_device');
