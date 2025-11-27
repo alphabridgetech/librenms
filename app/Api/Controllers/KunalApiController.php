@@ -26,37 +26,36 @@ class KunalApiController
         return "Test function called with param d";
     }
 
-    public function systeminfo($hostname)
+public function systeminfo($hostname)
 {
-   
-    // Correct variable name
-    $venvPath =base_path('bin/activate');
+    $venvPath = base_path('bin/activate');
+    $playbook = base_path('librenms-ansible-inventory-plugin/atest1.yml');
+    $hosts = base_path('librenms-ansible-inventory-plugin/ahosts.yml');
 
-    // Correct paths
-    $inventoryPlaybook = base_path('librenms-ansible-inventory-plugin/atest.yml');
-    $hostsFile = base_path('librenms-ansible-inventory-plugin/ahosts.yml');
-
-    // Build command
-    $cmd = "source $venvPath && ansible-playbook -i $hostsFile $inventoryPlaybook";
-
-    // Execute
+    $cmd = "source {$venvPath} && ansible-playbook -i {$hosts} {$playbook} 2>&1";
     $output = shell_exec($cmd);
 
-    // For debugging only:
-    print_r($output);
-    die;
-    // Extract JSON from the Ansible output
-    preg_match('/\"msg\":\s*\"({.*})\"/s', $output, $match);
+    // print_r($output);
+    // die();
+
+    // Extract "output.stdout": "....."
+    preg_match('/"output.stdout"\s*:\s*"([^"]*)"/s', $output, $match);
 
     if (!empty($match[1])) {
-        // Decode JSON
-        $json = str_replace('\"', '"', $match[1]);
-        $result = json_decode($json, true);
-    } else {
-        $result = ["error" => "Unable to parse device data", "raw" => $output];
+        $stdout = trim(str_replace("\r", "", $match[1]));
+        return response()->json([
+            "status" => "success",
+            "stdout" => $stdout
+        ]);
     }
 
-    return view("devices.info", ["data" => $result]);
+    return response()->json([
+        "status" => "error",
+        "message" => "output.stdout not found",
+        "raw" => $output
+    ]);
 }
+
+
 
 }

@@ -7,7 +7,7 @@ USER = "admin"
 PASSWORD = "admin"
 
 device = {
-    "device_type": "brocade_fastiron",   # BEST MATCH FOR ALPHABRIDGE CLI
+    "device_type": "brocade_fastiron",
     "ip": HOST,
     "username": USER,
     "password": PASSWORD,
@@ -37,22 +37,16 @@ result = {
 try:
     conn = ConnectHandler(**device)
 
-    # ---- FIX PROMPT ----
     prompt = conn.find_prompt()
-
-    # If prompt ends with > enter enable mode
     if prompt.strip().endswith(">"):
         conn.enable()
 
-    # FORCE MATCH ANY SWITCH PROMPT (# or >)
     output = conn.send_command(
         "show version",
         expect_string=r"Switch[#>]",
         delay_factor=2,
         max_loops=2000
     )
-
-    # ---- PARSING ----
 
     model = re.search(r'(AS\d+\w*) Software', output)
     if model:
