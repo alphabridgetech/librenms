@@ -1,3 +1,8 @@
+{{-- remove dd() otherwise JS will not run --}}
+@php
+    
+@endphp
+{{-- @php dd($data['api_token']); @endphp --}}
 
 <div class="container-fluid" style="margin-top: 20px;">
     <div class="panel panel-primary">
@@ -7,53 +12,96 @@
 
         <div class="panel-body">
             <table class="table table-striped table-bordered" style="margin:0;">
-                <tbody>
+                <tbody id="system-info-body">
+
                     <tr>
                         <th width="200">Device Type</th>
-                        <td>AS228T</td>
+                        <td id="device_type">Loading...</td>
                     </tr>
+
                     <tr>
                         <th>BIOS Version</th>
-                        <td>0.5.3</td>
+                        <td id="bios_version">Loading...</td>
                     </tr>
+
                     <tr>
                         <th>Firmware Version</th>
-                        <td>2.2.0D Build 127313</td>
+                        <td id="firmware">Loading...</td>
                     </tr>
+
                     <tr>
                         <th>Serial Num</th>
-                        <td>G20008059033</td>
+                        <td id="serial">Loading...</td>
                     </tr>
+
                     <tr>
                         <th>MAC Address</th>
-                        <td>8C:1F:64:20:EA:4E</td>
+                        <td id="mac">Loading...</td>
                     </tr>
+
                     <tr>
-                        <th>IP Address</th>
-                        <td>192.168.200.244</td>
+                        <th>IP / Hostname</th>
+                        <td id="ip_address">{{ $device->hostname }}</td>
                     </tr>
+
                     <tr>
                         <th>Current Time</th>
-                        <td>2000-1-14 1:38:18</td>
+                        <td id="current_time">Loading...</td>
                     </tr>
+
                     <tr>
                         <th>Uptime</th>
-                        <td>13 day -1 hour -38 minute -18 second</td>
+                        <td id="uptime">Loading...</td>
                     </tr>
-                    <tr>
-                        <th>CPU Usage</th>
-                        <td>9%</td>
-                    </tr>
-                    <tr>
-                        <th>Memory Usage</th>
-                        <td>44%</td>
-                    </tr>
+
                 </tbody>
             </table>
         </div>
 
         <div class="panel-footer text-right">
-            <button class="btn btn-default">Refresh</button>
+            <button class="btn btn-default" onclick="loadSystemInfo()">Refresh</button>
         </div>
     </div>
 </div>
+
+<script>
+    function loadSystemInfo() {
+
+        let ip = "{{ $device->hostname }}";
+        let apiToken = "{{ $data['api_token'] }}";
+
+        let apiUrl = `/api/v0/system_info/${ip}`;
+
+        fetch(apiUrl, {
+            method: "GET",
+            headers: {
+                "Authorization": "Bearer " + apiToken,   // ✔ Send token
+                "Accept": "application/json"
+            }
+        })
+        .then(res => res.json())
+        .then(res => {
+            if (res.status !== "success") {
+                alert("Error loading system info");
+                return;
+            }
+
+            const d = res.data;
+
+            document.getElementById("device_type").innerText = d.device_type ?? "N/A";
+            document.getElementById("bios_version").innerText = d.bios_version ?? "N/A";
+            document.getElementById("firmware").innerText = d.firmware ?? "N/A";
+            document.getElementById("serial").innerText = d.serial ?? "N/A";
+            document.getElementById("mac").innerText = d.mac ?? "N/A";
+            document.getElementById("current_time").innerText = d.current_time ?? "N/A";
+            document.getElementById("uptime").innerText = d.uptime ?? "N/A";
+        })
+        .catch(err => {
+            alert("API Error: " + err);
+        });
+    }
+
+    // Auto-load API on page open
+    loadSystemInfo();
+</script>
+

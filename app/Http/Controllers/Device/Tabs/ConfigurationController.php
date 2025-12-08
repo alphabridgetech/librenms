@@ -39,6 +39,8 @@ use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\Validator;
 use LibreNMS\Interfaces\UI\DeviceTab;
+use App\Models\ApiToken;
+use Illuminate\Database\Eloquent\ModelNotFoundException;
 
 class ConfigurationController implements DeviceTab
 {
@@ -102,12 +104,26 @@ class ConfigurationController implements DeviceTab
             'details' => $this->detail,
             'submenu' => [
                 $this->getTabs($device),
+                'Basic Configuration'  => $this->getbasicconfigTabs($device),
             ],
+            'api_token' => $this->getUserLibreNMSToken(),
             'dropdownLinks' => $this->pageLinks($request),
             'perPage' => $this->settings['perPage'],
             'sort' => $this->settings['sort'],
             'next_order' => $this->settings['order'] == 'asc' ? 'desc' : 'asc',
         ], $data);
+    }
+
+    private function getUserLibreNMSToken()
+    {
+        try {
+            $apiToken = ApiToken::select('token_hash')
+                ->where('user_id', Auth::user()->user_id)
+                ->firstOrFail();
+            return $apiToken->token_hash;
+        } catch (ModelNotFoundException $e) {
+            return null;
+        }
     }
 
     private function portData(Device $device, Request $request): array
@@ -253,6 +269,19 @@ class ConfigurationController implements DeviceTab
 
         return $tabs;
     }
+
+    private function getbasicconfigTabs(Device $device): array
+    {
+        $tabs = [
+            ['name' => __('Hostname'), 'url' => 'hostname'],
+        ];
+
+        if ($device->macs()->exists()) {
+            $tabs[] = ['name' => __('Clock Management'), 'url' => 'kiwi'];
+        }
+
+        return $tabs;
+    }   
 
     /**
      * @return array[]
