@@ -39,7 +39,7 @@ function updateHostsYml($device)
             'children' => [
                 'alphabridge_devices' => [
                     'hosts' => [
-                        $device->hostname => [
+                        'bridge1' => [
                             'ansible_host'       => $device->hostname,
                             'ansible_user'       => $device->ssh_user ?? '',
                             'ansible_password'   => $device->ssh_pass ?? '',

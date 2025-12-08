@@ -67,38 +67,61 @@ public function systeminfo($hostname)
     ]);
 }
 
-public function gethostname()
+public function gethostname($hostname)
 {
     $venvPath = base_path('bin/activate');
-    $playbook = base_path('librenms-ansible-inventory-plugin/atest1.yml');
-    $hosts = base_path('librenms-ansible-inventory-plugin/ahosts.yml');
+    $playbook = base_path('librenms-ansible-inventory-plugin/gethostname.yml');
+    $hosts = base_path("librenms-ansible-inventory-plugin/hosts/{$hostname}.yml");
 
     $cmd = "source {$venvPath} && ansible-playbook -i {$hosts} {$playbook} 2>&1";
     $output = shell_exec($cmd);
 
-    // Extract only the output.stdout field inside quotes (multiline safe)
-    preg_match('/"output.stdout":\s*"([\s\S]*?)"\s*}/', $output, $match);
+    // Extract: Hostname: test_switch
+    preg_match('/Hostname:\s*([A-Za-z0-9\-_]+)/', $output, $match);
 
-    if (empty($match[1])) {
+    if (empty($match)) {
         return response()->json([
             "status" => "error",
-            "message" => "output.stdout not found",
+            "message" => "Hostname not found",
             "raw_output" => $output
         ], 500);
     }
 
-    // Clean raw output
-    $raw = str_replace(["\r", '\r', '\n'], "", $match[1]);
-
-    // Parse hostname
-    $hostname = $this->extract($raw, 'Hostname is (.*?),');
+    // Clean & sanitize hostname
+    $hostnameFinal = trim($match[1]);
+    $hostnameFinal = str_replace(['"', "'"], '', $hostnameFinal); // remove quotes if any
 
     return response()->json([
         "status" => "success",
-        "hostname"   => $hostname,
-        "raw"    => $raw
+        "hostname" => $hostnameFinal,
+        "raw_output" => $output
     ]);
 }
+
+public function changehostname(Request $request, $hostname)
+{
+    $request->validate([
+        'hostname' => 'required|string'
+    ]);
+
+    $newHostname = $request->hostname;
+
+    $venvPath = base_path('bin/activate');
+    $playbook = base_path('librenms-ansible-inventory-plugin/sethostname.yml');
+    $hosts = base_path("librenms-ansible-inventory-plugin/hosts/{$hostname}.yml");
+
+    // Pass new hostname to Ansible
+    $cmd = "source {$venvPath} && ansible-playbook -i {$hosts} {$playbook} --extra-vars \"new_hostname={$newHostname}\" 2>&1";
+
+    $output = shell_exec($cmd);
+
+    return response()->json([
+        "status" => "success",
+        "message" => "Hostname changed successfully",
+        "raw_output" => $output
+    ]);
+}
+
 
 
 private function extract($text, $pattern)
