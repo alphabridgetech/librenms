@@ -3,7 +3,7 @@ import time
 
 HOST = "192.168.200.244"
 USER = "admin"
-PASSWORD = "admin@123#"
+PASSWORD = "admin"
 
 try:
     tn = telnetlib.Telnet(HOST, timeout=10)
@@ -18,8 +18,8 @@ try:
     tn.write(b"enable\n")
     tn.read_until(b"#")
 
-    tn.write(b"show run | include vlan\n")
-    output = tn.read_until(b"config#", timeout=5)
+    tn.write(b"show vlan\n")
+    output = tn.read_until(b"#", timeout=5)
     print(output.decode('ascii'))
 
     tn.write(b"exit\n")
