@@ -3,6 +3,7 @@
 namespace App\Api\Controllers;
 
 use Illuminate\Http\Request;
+use App\Models\Device;
 
 class KunalApiController
 {
@@ -49,6 +50,7 @@ class KunalApiController
     #------------------------------------------------------------
     public function systeminfo($hostname)
     {
+
         $playbook = "{$this->pluginPath}/atest1.yml";
         $hosts = "{$this->pluginPath}/ahosts.yml";
 
@@ -82,22 +84,36 @@ class KunalApiController
     #------------------------------------------------------------
     public function gethostname($hostname)
     {
-        $playbook = "{$this->pluginPath}/gethostname.yml";
-        $hosts = "{$this->pluginPath}/hosts/{$hostname}.yml";
+        $device = Device::where('hostname', $hostname)->first();
+        
+        if (!$device) {
+            return response()->json([
+                "status" => "error",
+                "message" => "Device not found in LibreNMS"
+            ], 404);
+        }
 
-        $output = $this->runAnsible($playbook, $hosts);
+        return response()->json([
+            "status"   => "success",
+            "hostname" => $device->sysName,
+        ]);
+        
+        // $playbook = "{$this->pluginPath}/gethostname.yml";
+        // $hosts = "{$this->pluginPath}/hosts/{$hostname}.yml";
+
+        // $output = $this->runAnsible($playbook, $hosts);
 
       
 
-        preg_match('/Hostname:\s*([A-Za-z0-9\-_]+)/', $output, $match);
-        if (empty($match)) {
-            return $this->error("Hostname not found", $output);
-        }
+        // preg_match('/Hostname:\s*([A-Za-z0-9\-_]+)/', $output, $match);
+        // if (empty($match)) {
+        //     return $this->error("Hostname not found", $output);
+        // }
 
-        return $this->success([
-            "hostname" => trim($match[1]),
-            "raw"      => $output
-        ]);
+        // return $this->success([
+        //     "hostname" => $device->sysName,
+        //     "raw"      => $output
+        // ]);
     }
 
     #------------------------------------------------------------
