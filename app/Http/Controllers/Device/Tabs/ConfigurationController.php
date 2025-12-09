@@ -105,6 +105,7 @@ class ConfigurationController implements DeviceTab
             'submenu' => [
                 $this->getTabs($device),
                 'Basic Configuration'  => $this->getbasicconfigTabs($device),
+                'L2 Configuration'  => $this->getl2configTabs($device),
             ],
             'api_token' => $this->getUserLibreNMSToken(),
             'dropdownLinks' => $this->pageLinks($request),
@@ -113,6 +114,10 @@ class ConfigurationController implements DeviceTab
             'next_order' => $this->settings['order'] == 'asc' ? 'desc' : 'asc',
         ], $data);
     }
+
+      
+
+     #------------------------------------------------------------
 
     private function getUserLibreNMSToken()
     {
@@ -264,7 +269,7 @@ class ConfigurationController implements DeviceTab
         ];
 
         if ($device->macs()->exists()) {
-            $tabs[] = ['name' => __('Test Page'), 'url' => 'kiwi'];
+            // $tabs[] = ['name' => __('Test Page'), 'url' => 'kiwi'];
         }
 
         return $tabs;
@@ -277,11 +282,25 @@ class ConfigurationController implements DeviceTab
         ];
 
         if ($device->macs()->exists()) {
-            $tabs[] = ['name' => __('Clock Management'), 'url' => 'kiwi'];
+            // $tabs[] = ['name' => __('Clock Management'), 'url' => 'kiwi'];
         }
 
         return $tabs;
     }   
+
+    public function getl2configTabs(Device $device): array
+    {
+        $tabs = [
+            ['name' => __('VLAN Configuration'), 'url' => 'vlansconfig'],
+           
+        ];
+
+        if ($device->macs()->exists()) {
+            // $tabs[] = ['name' => __('MAC Address Table'), 'url' => 'mactable'];
+        }
+
+        return $tabs;
+    }
 
     /**
      * @return array[]
