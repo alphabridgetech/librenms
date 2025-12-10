@@ -139,6 +139,59 @@ class KunalApiController
     }
 
     #------------------------------------------------------------
+    #                            get vlan
+    #------------------------------------------------------------
+
+    public function getvlan($hostname)
+{
+    $playbook = "{$this->pluginPath}/getvlan.yml";
+    $hosts = "{$this->pluginPath}/hosts/{$hostname}.yml";
+
+    $output = $this->runAnsible($playbook, $hosts);
+
+    /**
+     * STEP 1 — Extract "msg" content
+     *
+     * This captures everything between "msg": " ... "
+     */
+    preg_match('/"msg":\s*"((?:\\\\.|[^"\\\\])*)"/s', $output, $match);
+
+    if (empty($match[1])) {
+        return $this->error("VLAN JSON not found", $output);
+    }
+
+    $escapedJson = $match[1]; // Contains: [{\"id\":\"1\" ... }]
+
+    /**
+     * STEP 2 — Remove escape slashes
+     */
+    $cleanJson = stripcslashes($escapedJson);
+
+    /**
+     * STEP 3 — Decode JSON
+     */
+    $vlanList = json_decode($cleanJson, true);
+
+    if (json_last_error() !== JSON_ERROR_NONE) {
+        return $this->error("JSON decode failed", [
+            "error" => json_last_error_msg(),
+            "raw" => $cleanJson
+        ]);
+    }
+
+    return $this->success([
+        "vlans" => $vlanList,
+        "count" => count($vlanList),
+        "raw"   => $cleanJson
+    ]);
+}
+
+
+
+
+
+
+    #------------------------------------------------------------
     #                            UTIL
     #------------------------------------------------------------
     private function extract($text, $pattern)

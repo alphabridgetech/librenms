@@ -63,45 +63,82 @@
         </div>
     </div>
 </div>
-
 <script>
-    function loadSystemInfo() {
 
-        let ip = "{{ $device->hostname }}";
-        let apiToken = "{{ $data['api_token'] }}";
-
-        let apiUrl = `/api/v0/system_info/${ip}`;
-
-        fetch(apiUrl, {
-            method: "GET",
-            headers: {
-                "Authorization": "Bearer " + apiToken,   // ✔ Send token
-                "Accept": "application/json"
-            }
-        })
-        .then(res => res.json())
-        .then(res => {
-            if (res.status !== "success") {
-                alert("Error loading system info");
-                return;
-            }
-
-            const d = res.data;
-
-            document.getElementById("device_type").innerText = d.device_type ?? "N/A";
-            document.getElementById("bios_version").innerText = d.bios_version ?? "N/A";
-            document.getElementById("firmware").innerText = d.firmware ?? "N/A";
-            document.getElementById("serial").innerText = d.serial ?? "N/A";
-            document.getElementById("mac").innerText = d.mac ?? "N/A";
-            document.getElementById("current_time").innerText = d.current_time ?? "N/A";
-            document.getElementById("uptime").innerText = d.uptime ?? "N/A";
-        })
-        .catch(err => {
-            alert("API Error: " + err);
-        });
+function setCookie(name, value, days = 7) {
+    let expires = "";
+    if (days) {
+        const date = new Date();
+        date.setTime(date.getTime() + (days * 24*60*60*1000));
+        expires = "; expires=" + date.toUTCString();
     }
+    document.cookie = name + "=" + (value || "") + expires + "; path=/";
+}
 
-    // Auto-load API on page open
-    loadSystemInfo();
+function getCookie(name) {
+    const nameEQ = name + "=";
+    const ca = document.cookie.split(';');
+    for (let c of ca) {
+        c = c.trim();
+        if (c.indexOf(nameEQ) === 0)
+            return c.substring(nameEQ.length);
+    }
+    return null;
+}
+
+// Show saved data IMMEDIATELY
+function loadFromCookies() {
+    document.getElementById("device_type").innerText = getCookie("device_type") || "Loading...";
+    document.getElementById("bios_version").innerText = getCookie("bios_version") || "Loading...";
+    document.getElementById("firmware").innerText = getCookie("firmware") || "Loading...";
+    document.getElementById("serial").innerText = getCookie("serial") || "Loading...";
+    document.getElementById("mac").innerText = getCookie("mac") || "Loading...";
+    document.getElementById("current_time").innerText = getCookie("current_time") || "Loading...";
+    document.getElementById("uptime").innerText = getCookie("uptime") || "Loading...";
+}
+
+// Background API update
+function loadSystemInfo() {
+
+    let ip = getCookie("device_ip") || "{{ $device->hostname }}";
+    let apiToken = getCookie("api_token") || "{{ $data['api_token'] }}";
+
+    setCookie("device_ip", ip);
+    setCookie("api_token", apiToken);
+
+    fetch(`/api/v0/system_info/${ip}`, {
+        method: "GET",
+        headers: {
+            "Authorization": "Bearer " + apiToken,
+            "Accept": "application/json"
+        }
+    })
+    .then(res => res.json())
+    .then(res => {
+        if (res.status !== "success") return;
+
+        const d = res.data;
+
+        // Save to cookies for next fast load
+        setCookie("device_type", d.device_type);
+        setCookie("bios_version", d.bios_version);
+        setCookie("firmware", d.firmware);
+        setCookie("serial", d.serial);
+        setCookie("mac", d.mac);
+        setCookie("current_time", d.current_time);
+        setCookie("uptime", d.uptime);
+
+        // Update UI instantly
+        loadFromCookies();
+    });
+}
+
+// 1️⃣ show instantly
+loadFromCookies();
+
+// 2️⃣ update from API (slow but background)
+loadSystemInfo();
+
 </script>
+
 
