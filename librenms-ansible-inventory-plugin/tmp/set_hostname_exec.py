@@ -5,7 +5,7 @@ import sys
 HOST = "192.168.200.244"
 USER = "admin"
 PASSWORD = "admin"
-NEW_HOSTNAME = "testqi"
+NEW_HOSTNAME = "kv"
 
 try:
     ssh = paramiko.SSHClient()

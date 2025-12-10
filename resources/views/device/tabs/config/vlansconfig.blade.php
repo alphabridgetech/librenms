@@ -76,6 +76,47 @@
     </div>
 </div>
 
+<!-- Add VLAN Modal -->
+<div id="addVlanModal" class="modal fade" tabindex="-1" role="dialog">
+    <div class="modal-dialog">
+        <div class="modal-content">
+
+            <div class="modal-header">
+                <button type="button" class="close" data-dismiss="modal">&times;</button>
+                <h4 class="modal-title">Add VLAN</h4>
+            </div>
+
+            <div class="modal-body">
+                <form id="addVlanForm">
+
+                    <div class="form-group">
+                        <label for="vlan_id">VLAN ID</label>
+                        <input type="number" class="form-control" id="vlan_id" name="vlan_id"
+                               placeholder="Enter VLAN ID" required>
+                    </div>
+
+                    <div class="form-group">
+                        <label for="vlan_name">VLAN Name</label>
+                        <input type="text" class="form-control" id="vlan_name" name="vlan_name"
+                               placeholder="Enter VLAN Name" required>
+                    </div>
+
+                </form>
+            </div>
+
+            <div class="modal-footer">
+                <button class="btn btn-default" data-dismiss="modal">Close</button>
+                <button id="saveVlanBtn" class="btn btn-success">
+                    <span class="spinner-border" style="display:none;"></span>
+                    Save VLAN
+                </button>
+            </div>
+
+        </div>
+    </div>
+</div>
+
+
 <script>
 /* ------------------------------------------------------
    COOKIE FUNCTIONS
@@ -173,5 +214,60 @@ var vlanGrid = $("#vlan-table").bootgrid({
     $("#selectAllLabel").on("change", function(){
         $(".row-checkbox").prop("checked", this.checked);
     });
+});
+
+
+
+
+//for vlan add
+$("#btnAddVlan").on("click", function () {
+    $("#addVlanForm")[0].reset();
+    $("#addVlanModal").modal("show");
+});
+
+$("#saveVlanBtn").on("click", function () {
+
+    let vlan_id = $("#vlan_id").val();
+    let vlan_name = $("#vlan_name").val();
+    let token = API_TOKEN;
+
+    if (!vlan_id || !vlan_name) {
+        alert("Please enter both VLAN ID and VLAN Name.");
+        return;
+    }
+
+    $(".spinner-border").show();
+    $("#saveVlanBtn").prop("disabled", true);
+
+    $.ajax({
+        url: "/api/v0/addvlan/{{ $device->hostname }}",
+        method: "POST",
+        headers: {
+            "Authorization": "Bearer " + API_TOKEN
+        },
+        data: {
+            vlan_id: vlan_id,
+            vlan_name: vlan_name
+        },
+        success: function (response) {
+
+            $(".spinner-border").hide();
+            $("#saveVlanBtn").prop("disabled", false);
+
+            if (response.status === "success") {
+                $("#addVlanModal").modal("hide");
+                $("#vlan-table").bootgrid("reload");
+                alert("VLAN added successfully!");
+            } else {
+                alert("Error: " + JSON.stringify(response));
+            }
+        },
+        error: function (xhr) {
+            $(".spinner-border").hide();
+            $("#saveVlanBtn").prop("disabled", false);
+            alert("Request Failed: " + xhr.responseText);
+        }
+    });
+
 });
 </script>

@@ -68,7 +68,7 @@ class ConfigurationController implements DeviceTab
 
     public function icon(): string
     {
-        return 'fa-link';
+        return 'fa-solid fa-screwdriver-wrench';
     }
 
     public function name(): string

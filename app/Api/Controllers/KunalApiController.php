@@ -5,6 +5,7 @@ namespace App\Api\Controllers;
 use Illuminate\Http\Request;
 use App\Models\Device;
 
+
 class KunalApiController
 {
     private string $venv;
@@ -186,6 +187,30 @@ class KunalApiController
     ]);
 }
 
+    #------------------------------------------------------------
+    #                            Add Vlan
+    #------------------------------------------------------------
+
+    public function addvlan(Request $request, $hostname)
+    {
+        $data = $request->validate([
+            'vlan_id' => 'required|integer',
+            'vlan_name' => 'required|string',
+        ]);
+
+        $playbook = "{$this->pluginPath}/addvlan.yml";
+        $hosts = "{$this->pluginPath}/hosts/{$hostname}.yml";
+
+        $output = $this->runAnsible($playbook, $hosts, [
+            "vlan_id"   => $data['vlan_id'],
+            "vlan_name" => $data['vlan_name'],
+        ]);
+
+        return $this->success([
+            "message" => "VLAN added successfully",
+            "raw"     => $output
+        ]);
+    }
 
 
 
