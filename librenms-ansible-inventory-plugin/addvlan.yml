@@ -1,0 +1,78 @@
+---
+- name: Add VLAN on Network Device via Telnet
+  hosts: alphabridge_devices
+  gather_facts: no
+
+  tasks:
+
+    - name: Create Telnet Python script for VLAN Add
+      ansible.builtin.copy:
+        dest: "/opt/librenms/librenms-ansible-inventory-plugin/tmp/add_vlan_exec.py"
+        mode: '0755'
+        content: |
+          import telnetlib
+          import time
+          import sys
+
+          HOST = "{{ ansible_host }}"
+          USER = "{{ ansible_user }}"
+          PASSWORD = "{{ ansible_password }}"
+          VLAN_ID = "{{ vlan_id }}"
+          VLAN_NAME = "{{ vlan_name }}"
+
+          try:
+              tn = telnetlib.Telnet(HOST, timeout=10)
+
+              # Login
+              tn.read_until(b"Username:")
+              tn.write(USER.encode() + b"\n")
+
+              tn.read_until(b"Password:")
+              tn.write(PASSWORD.encode() + b"\n")
+
+              # Privileged exec mode
+              tn.read_until(b">")
+              tn.write(b"enable\n")
+              tn.read_until(b"Password:")
+              tn.write(PASSWORD.encode() + b"\n")
+
+              # Configuration mode
+              tn.read_until(b"#")
+              tn.write(b"config\n")
+
+              # VLAN creation
+              tn.read_until(b"_config#")
+              tn.write(f"vlan {VLAN_ID}\n".encode())
+              time.sleep(1)
+
+              tn.read_until(b"#")
+              tn.write(f"name {VLAN_NAME}\n".encode())
+
+              # Save config
+              tn.read_until(b"#")
+              tn.write(b"exit\n")
+              tn.read_until(b"#")
+              tn.write(b"write memory\n")
+              time.sleep(2)
+
+              tn.write(b"exit\n")
+              tn.close()
+
+              # Only print AFTER closing session
+              print("SUCCESS: VLAN Added")
+              sys.exit(0)
+
+          except Exception as e:
+              print("ERROR: " + str(e))
+              sys.exit(1)
+
+    - name: Run VLAN Add Script
+      ansible.builtin.command: >
+        /opt/librenms/librenms-ansible-inventory-plugin/bin/python3
+        /opt/librenms/librenms-ansible-inventory-plugin/tmp/add_vlan_exec.py
+      register: output
+      changed_when: true
+
+    - name: Show Output
+      ansible.builtin.debug:
+        var: output.stdout
