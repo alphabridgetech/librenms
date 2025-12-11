@@ -88,7 +88,6 @@
 
             <div class="modal-body">
                 <form id="addVlanForm">
-
                     <div class="form-group">
                         <label for="vlan_id">VLAN ID</label>
                         <input type="number" class="form-control" id="vlan_id" name="vlan_id"
@@ -100,7 +99,6 @@
                         <input type="text" class="form-control" id="vlan_name" name="vlan_name"
                                placeholder="Enter VLAN Name" required>
                     </div>
-
                 </form>
             </div>
 
@@ -118,9 +116,9 @@
 
 
 <script>
-/* ------------------------------------------------------
-   COOKIE FUNCTIONS
------------------------------------------------------- */
+/* -----------------------
+   COOKIE FUNCTIONS (per hostname)
+----------------------- */
 function setCookie(name, value, days = 7) {
     const expires = new Date(Date.now() + days*864e5).toUTCString();
     document.cookie = name + "=" + encodeURIComponent(value) + "; expires=" + expires + "; path=/";
@@ -135,19 +133,22 @@ function getCookie(name) {
     return cookies[name] || null;
 }
 
-/* ------------------------------------------------------
-   LOAD VALUES (from cookie OR fallback Blade variables)
------------------------------------------------------- */
-let DEVICE_IP = getCookie("device_ip") || "{{ $device->hostname }}";
-let API_TOKEN  = getCookie("api_token") || "{{ $data['api_token'] }}";
+/* -----------------------
+   DEVICE VARIABLES
+----------------------- */
+const HOSTNAME = "{{ $device->hostname }}";
+const COOKIE_PREFIX = HOSTNAME + "_"; // cookie key prefix per device
 
-/* Save cookies immediately when page loads */
-setCookie("device_ip", DEVICE_IP);
-setCookie("api_token", API_TOKEN);
+let DEVICE_IP = getCookie(COOKIE_PREFIX + "device_ip") || HOSTNAME;
+let API_TOKEN  = getCookie(COOKIE_PREFIX + "api_token") || "{{ $data['api_token'] }}";
 
-/* ------------------------------------------------------
+// Save cookies immediately
+setCookie(COOKIE_PREFIX + "device_ip", DEVICE_IP);
+setCookie(COOKIE_PREFIX + "api_token", API_TOKEN);
+
+/* -----------------------
    BOOTGRID INITIALIZATION
------------------------------------------------------- */
+----------------------- */
 var vlanGrid = $("#vlan-table").bootgrid({
     ajax: true,
     search: true,
@@ -206,30 +207,22 @@ var vlanGrid = $("#vlan-table").bootgrid({
     }
 })
 .on("loaded.rs.jquery.bootgrid", function () {
-
-    $("#vlanSearch").on("input", function () {
-        vlanGrid.bootgrid("search", $(this).val());
-    });
-
     $("#selectAllLabel").on("change", function(){
         $(".row-checkbox").prop("checked", this.checked);
     });
 });
 
-
-
-
-//for vlan add
+/* -----------------------
+   ADD VLAN MODAL
+----------------------- */
 $("#btnAddVlan").on("click", function () {
     $("#addVlanForm")[0].reset();
     $("#addVlanModal").modal("show");
 });
 
 $("#saveVlanBtn").on("click", function () {
-
     let vlan_id = $("#vlan_id").val();
     let vlan_name = $("#vlan_name").val();
-    let token = API_TOKEN;
 
     if (!vlan_id || !vlan_name) {
         alert("Please enter both VLAN ID and VLAN Name.");
@@ -240,17 +233,13 @@ $("#saveVlanBtn").on("click", function () {
     $("#saveVlanBtn").prop("disabled", true);
 
     $.ajax({
-        url: "/api/v0/addvlan/{{ $device->hostname }}",
+        url: "/api/v0/addvlan/" + DEVICE_IP,
         method: "POST",
         headers: {
             "Authorization": "Bearer " + API_TOKEN
         },
-        data: {
-            vlan_id: vlan_id,
-            vlan_name: vlan_name
-        },
+        data: { vlan_id: vlan_id, vlan_name: vlan_name },
         success: function (response) {
-
             $(".spinner-border").hide();
             $("#saveVlanBtn").prop("disabled", false);
 
@@ -268,6 +257,5 @@ $("#saveVlanBtn").on("click", function () {
             alert("Request Failed: " + xhr.responseText);
         }
     });
-
 });
 </script>
