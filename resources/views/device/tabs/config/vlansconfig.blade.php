@@ -1,18 +1,17 @@
 <style>
-    .spinner-border {
-        width: 16px;
-        height: 16px;
-        border: 2px solid #fff;
-        border-right-color: transparent;
-        border-radius: 50%;
-        display: inline-block;
-        animation: spin 0.75s linear infinite;
-    }
-    @keyframes spin { 100% { transform: rotate(360deg); } }
+.spinner-border {
+    width: 16px;
+    height: 16px;
+    border: 2px solid #fff;
+    border-right-color: transparent;
+    border-radius: 50%;
+    display: inline-block;
+    animation: spin 0.75s linear infinite;
+}
+@keyframes spin { 100% { transform: rotate(360deg); } }
 </style>
 
 <div class="container" style="margin-top:30px;">
-
     <!-- Tabs -->
     <ul class="nav nav-tabs">
         <li class="active"><a href="#vlan_config" data-toggle="tab">VLAN Configuration</a></li>
@@ -23,14 +22,10 @@
     </ul>
 
     <div class="tab-content" style="margin-top:15px;">
-
-        <!-- VLAN Configuration Tab -->
         <div class="tab-pane active" id="vlan_config">
-
             <button class="btn btn-primary" id="btnAddVlan">
                 <i class="glyphicon glyphicon-plus"></i> Add
             </button>
-
             <div class="row" style="margin-top:15px;">
                 <div class="col-sm-6">
                     <p id="pagingInfo" class="small-muted">Loading...</p>
@@ -39,12 +34,12 @@
 
             <table id="vlan-table" class="table table-hover table-condensed table-striped" style="margin-top:12px;">
                 <thead>
-                <tr>
-                    <th data-column-id="select" data-formatter="select" data-sortable="false" style="width:40px;"></th>
-                    <th data-column-id="id" data-type="numeric">VLAN ID</th>
-                    <th data-column-id="name">VLAN Name</th>
-                    <th data-column-id="operate" data-formatter="operate" data-sortable="false" style="width:80px;">Operate</th>
-                </tr>
+                    <tr>
+                        <th data-column-id="select" data-formatter="select" data-sortable="false" style="width:40px;"></th>
+                        <th data-column-id="id" data-type="numeric">VLAN ID</th>
+                        <th data-column-id="name">VLAN Name</th>
+                        <th data-column-id="operate" data-formatter="operate" data-sortable="false" style="width:80px;">Operate</th>
+                    </tr>
                 </thead>
             </table>
 
@@ -64,7 +59,6 @@
                     <li>For 100+ VLANs use <code>show vlan</code> in CLI.</li>
                 </ul>
             </div>
-
         </div>
 
         <!-- Other Tabs -->
@@ -72,7 +66,6 @@
         <div class="tab-pane" id="interface_vlan"><h4>Interface VLAN Attribute</h4></div>
         <div class="tab-pane" id="voice_vlan"><h4>Voice VLAN</h4></div>
         <div class="tab-pane" id="interface_voice_vlan"><h4>Interface Voice VLAN</h4></div>
-
     </div>
 </div>
 
@@ -80,12 +73,10 @@
 <div id="addVlanModal" class="modal fade" tabindex="-1" role="dialog">
     <div class="modal-dialog">
         <div class="modal-content">
-
             <div class="modal-header">
                 <button type="button" class="close" data-dismiss="modal">&times;</button>
                 <h4 class="modal-title">Add VLAN</h4>
             </div>
-
             <div class="modal-body">
                 <form id="addVlanForm">
                     <div class="form-group">
@@ -93,7 +84,6 @@
                         <input type="number" class="form-control" id="vlan_id" name="vlan_id"
                                placeholder="Enter VLAN ID" required>
                     </div>
-
                     <div class="form-group">
                         <label for="vlan_name">VLAN Name</label>
                         <input type="text" class="form-control" id="vlan_name" name="vlan_name"
@@ -101,7 +91,6 @@
                     </div>
                 </form>
             </div>
-
             <div class="modal-footer">
                 <button class="btn btn-default" data-dismiss="modal">Close</button>
                 <button id="saveVlanBtn" class="btn btn-success">
@@ -109,11 +98,9 @@
                     Save VLAN
                 </button>
             </div>
-
         </div>
     </div>
 </div>
-
 
 <script>
 /* -----------------------
@@ -123,7 +110,6 @@ function setCookie(name, value, days = 7) {
     const expires = new Date(Date.now() + days*864e5).toUTCString();
     document.cookie = name + "=" + encodeURIComponent(value) + "; expires=" + expires + "; path=/";
 }
-
 function getCookie(name) {
     const cookies = document.cookie.split("; ").reduce((acc, cookie) => {
         const [key, val] = cookie.split("=");
@@ -138,11 +124,8 @@ function getCookie(name) {
 ----------------------- */
 const HOSTNAME = "{{ $device->hostname }}";
 const COOKIE_PREFIX = HOSTNAME + "_"; // cookie key prefix per device
-
 let DEVICE_IP = getCookie(COOKIE_PREFIX + "device_ip") || HOSTNAME;
-let API_TOKEN  = getCookie(COOKIE_PREFIX + "api_token") || "{{ $data['api_token'] }}";
-
-// Save cookies immediately
+let API_TOKEN = getCookie(COOKIE_PREFIX + "api_token") || "{{ $data['api_token'] }}";
 setCookie(COOKIE_PREFIX + "device_ip", DEVICE_IP);
 setCookie(COOKIE_PREFIX + "api_token", API_TOKEN);
 
@@ -152,6 +135,7 @@ setCookie(COOKIE_PREFIX + "api_token", API_TOKEN);
 var vlanGrid = $("#vlan-table").bootgrid({
     ajax: true,
     search: true,
+    rowCount: [10, 25, 50, -1],
 
     ajaxSettings: {
         method: "GET",
@@ -161,38 +145,28 @@ var vlanGrid = $("#vlan-table").bootgrid({
         }
     },
 
-    responseHandler: function (response) {
-        if (response.vlans && response.vlans.error) {
-            alert("❌ VLAN Fetch Error: " + response.vlans.error);
-            return { current: 1, rowCount: -1, rows: [], total: 0 };
-        }
-
-        if (response.vlans && Array.isArray(response.vlans)) {
-            return {
-                current: 1,
-                rowCount: -1,
-                rows: response.vlans,
-                total: response.count ?? response.vlans.length
-            };
-        }
-
-        if (response.raw) {
-            try {
-                const parsed = JSON.parse(response.raw);
-                if (Array.isArray(parsed)) {
-                    return { current: 1, rowCount: -1, rows: parsed, total: parsed.length };
-                }
-            } catch (e) {}
-        }
-
-        return response;
-    },
+    url: "/api/v0/getvlan/" + DEVICE_IP,
 
     post: function () {
         return { device: DEVICE_IP };
     },
 
-    url: "/api/v0/getvlan/" + DEVICE_IP,
+    responseHandler: function (response) {
+        // Ensure data array exists
+        let rows = [];
+        if (response.vlans && Array.isArray(response.vlans)) {
+            rows = response.vlans;
+        } else if (Array.isArray(response)) {
+            rows = response;
+        }
+
+        return {
+            current: 1,
+            rowCount: rows.length,
+            rows: rows,
+            total: rows.length
+        };
+    },
 
     formatters: {
         select: function(column, row) {
@@ -205,8 +179,7 @@ var vlanGrid = $("#vlan-table").bootgrid({
                     </a>`;
         }
     }
-})
-.on("loaded.rs.jquery.bootgrid", function () {
+}).on("loaded.rs.jquery.bootgrid", function () {
     $("#selectAllLabel").on("change", function(){
         $(".row-checkbox").prop("checked", this.checked);
     });
