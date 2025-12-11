@@ -86,25 +86,29 @@ function getCookie(name) {
     return null;
 }
 
-// Show saved data IMMEDIATELY
-function loadFromCookies() {
-    document.getElementById("device_type").innerText = getCookie("device_type") || "Loading...";
-    document.getElementById("bios_version").innerText = getCookie("bios_version") || "Loading...";
-    document.getElementById("firmware").innerText = getCookie("firmware") || "Loading...";
-    document.getElementById("serial").innerText = getCookie("serial") || "Loading...";
-    document.getElementById("mac").innerText = getCookie("mac") || "Loading...";
-    document.getElementById("current_time").innerText = getCookie("current_time") || "Loading...";
-    document.getElementById("uptime").innerText = getCookie("uptime") || "Loading...";
+// Add prefix based on hostname
+function ck(key) {
+    let host = "{{ $device->hostname }}";
+    return host + "_" + key;
 }
 
-// Background API update
+function loadFromCookies() {
+    document.getElementById("device_type").innerText = getCookie(ck("device_type")) || "Loading...";
+    document.getElementById("bios_version").innerText = getCookie(ck("bios_version")) || "Loading...";
+    document.getElementById("firmware").innerText = getCookie(ck("firmware")) || "Loading...";
+    document.getElementById("serial").innerText = getCookie(ck("serial")) || "Loading...";
+    document.getElementById("mac").innerText = getCookie(ck("mac")) || "Loading...";
+    document.getElementById("current_time").innerText = getCookie(ck("current_time")) || "Loading...";
+    document.getElementById("uptime").innerText = getCookie(ck("uptime")) || "Loading...";
+}
+
 function loadSystemInfo() {
 
-    let ip = getCookie("device_ip") || "{{ $device->hostname }}";
-    let apiToken = getCookie("api_token") || "{{ $data['api_token'] }}";
+    let ip = getCookie(ck("device_ip")) || "{{ $device->hostname }}";
+    let apiToken = getCookie(ck("api_token")) || "{{ $data['api_token'] }}";
 
-    setCookie("device_ip", ip);
-    setCookie("api_token", apiToken);
+    setCookie(ck("device_ip"), ip);
+    setCookie(ck("api_token"), apiToken);
 
     fetch(`/api/v0/system_info/${ip}`, {
         method: "GET",
@@ -119,25 +123,21 @@ function loadSystemInfo() {
 
         const d = res.data;
 
-        // Save to cookies for next fast load
-        setCookie("device_type", d.device_type);
-        setCookie("bios_version", d.bios_version);
-        setCookie("firmware", d.firmware);
-        setCookie("serial", d.serial);
-        setCookie("mac", d.mac);
-        setCookie("current_time", d.current_time);
-        setCookie("uptime", d.uptime);
+        setCookie(ck("device_type"), d.device_type);
+        setCookie(ck("bios_version"), d.bios_version);
+        setCookie(ck("firmware"), d.firmware);
+        setCookie(ck("serial"), d.serial);
+        setCookie(ck("mac"), d.mac);
+        setCookie(ck("current_time"), d.current_time);
+        setCookie(ck("uptime"), d.uptime);
 
-        // Update UI instantly
         loadFromCookies();
     });
 }
 
-// 1️⃣ show instantly
 loadFromCookies();
-
-// 2️⃣ update from API (slow but background)
 loadSystemInfo();
+
 
 </script>
 

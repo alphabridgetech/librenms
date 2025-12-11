@@ -53,7 +53,8 @@ class KunalApiController
     {
 
         $playbook = "{$this->pluginPath}/atest1.yml";
-        $hosts = "{$this->pluginPath}/ahosts.yml";
+        $hosts = "{$this->pluginPath}/hosts/{$hostname}.yml";
+
 
         $output = $this->runAnsible($playbook, $hosts);
 
@@ -84,38 +85,25 @@ class KunalApiController
     #                       GET HOSTNAME
     #------------------------------------------------------------
     public function gethostname($hostname)
-    {
-        $device = Device::where('hostname', $hostname)->first();
-        
-        if (!$device) {
-            return response()->json([
-                "status" => "error",
-                "message" => "Device not found in LibreNMS"
-            ], 404);
-        }
+{   
+    $playbook = "{$this->pluginPath}/gethostname.yml";
+    $hosts    = "{$this->pluginPath}/hosts/{$hostname}.yml";
 
-        return response()->json([
-            "status"   => "success",
-            "hostname" => $device->sysName,
-        ]);
-        
-        // $playbook = "{$this->pluginPath}/gethostname.yml";
-        // $hosts = "{$this->pluginPath}/hosts/{$hostname}.yml";
+    $output = $this->runAnsible($playbook, $hosts);
 
-        // $output = $this->runAnsible($playbook, $hosts);
+    // Extract hostname from output
+    preg_match('/Hostname:\s*([A-Za-z0-9\-_]+)/', $output, $match);
 
-      
-
-        // preg_match('/Hostname:\s*([A-Za-z0-9\-_]+)/', $output, $match);
-        // if (empty($match)) {
-        //     return $this->error("Hostname not found", $output);
-        // }
-
-        // return $this->success([
-        //     "hostname" => $device->sysName,
-        //     "raw"      => $output
-        // ]);
+    if (empty($match[1])) {
+        return $this->error("Hostname not found", $output);
     }
+
+    return $this->success([
+        "hostname" => $match[1],
+        "raw"      => $output
+    ]);
+}
+
 
     #------------------------------------------------------------
     #                     CHANGE HOSTNAME
