@@ -3,10 +3,6 @@
   hosts: alphabridge_devices
   gather_facts: no
 
-  vars:
-    vlan_add: "{{ vlan_add | default('') }}"
-    vlan_delete: "{{ vlan_delete | default('') }}"
-
   tasks:
 
     - name: Create Batch VLAN Python script
@@ -23,8 +19,8 @@
           HOST = "{{ ansible_host }}"
           USER = "{{ ansible_user }}"
           PASSWORD = "{{ ansible_password }}"
-          VLAN_ADD = "{{ vlan_add }}"
-          VLAN_DELETE = "{{ vlan_delete }}"
+          VLAN_ADD = "{{ vlan_add | default('') }}"
+          VLAN_DELETE = "{{ vlan_delete | default('') }}"
 
           CONNECT_TIMEOUT = 15
           PROMPT_TIMEOUT = 10
@@ -85,12 +81,10 @@
               tn.write(b"config\n")
               wait_for(tn, [b"#", b"config"])
 
-              # ADD VLANs
               for vid in add_vlans:
                   tn.write(f"vlan {vid}\n".encode())
                   wait_for(tn, [b"#", b"config_vlan", b"Error"])
 
-              # DELETE VLANs
               for vid in del_vlans:
                   tn.write(f"no vlan {vid}\n".encode())
                   wait_for(tn, [b"#", b"Error"])
