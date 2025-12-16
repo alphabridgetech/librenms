@@ -115,7 +115,7 @@
 
                 <div class="panel-footer text-right">
                     
-    <button class="btn btn-primary" onclick="applyVlanBatch()">Apply</button>
+    <button class="btn btn-primary" onclick="applyVlanBatch()"><span class="spinner-border" style="display:none;"></span>Apply</button>
     <button class="btn btn-default" onclick="resetVlanBatch()">Reset</button>
                 </div>
 
@@ -316,6 +316,7 @@ function applyVlanBatch() {
 
     var vlanAdd    = $("#vlan_add").val().trim();
     var vlanDelete = $("#vlan_delete").val().trim();
+    $(".spinner-border").show();
 
     if (!vlanAdd && !vlanDelete) {
         alert("Please enter VLAN Add or VLAN Delete value");
@@ -340,6 +341,7 @@ function applyVlanBatch() {
         success: function (response) {
 
             alert(response.message || "VLAN batch configuration applied successfully");
+            $(".spinner-border").hide();
 
             // Clear inputs
             resetVlanBatch();
@@ -349,6 +351,8 @@ function applyVlanBatch() {
         },
 
         error: function (xhr) {
+            $(".spinner-border").hide();
+
             var msg = "Failed to apply VLAN configuration";
             if (xhr.responseJSON && xhr.responseJSON.message) {
                 msg = xhr.responseJSON.message;
