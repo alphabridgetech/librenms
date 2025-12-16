@@ -131,13 +131,13 @@ if (! empty($_POST['hostname'])) {
             }//end if
 
             // SNMP & SSH settings ADDED BY KUNAL VERMA 11-11-2025
-            if (!empty($_POST['ssh_user'])) {
-                $new_device->ssh_user = strip_tags($_POST['ssh_user']);
-            }
+            $new_device->ssh_user = !empty($_POST['ssh_user'])
+                ? strip_tags($_POST['ssh_user'])
+                : 'admin';
 
-            if (!empty($_POST['ssh_pass'])) {
-                $new_device->ssh_pass = strip_tags($_POST['ssh_pass']);
-            }
+            $new_device->ssh_pass = !empty($_POST['ssh_pass'])
+                ? strip_tags($_POST['ssh_pass'])
+                : 'admin';
 
 
             try {
