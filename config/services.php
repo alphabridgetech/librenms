@@ -13,6 +13,7 @@ return [
     ],
     'gemini' => [
     'key' => 'AIzaSyBI8LgWDpvKsogtG0A1o-J-wcQl4oUQdKI',
+    // 'key' =>'AIzaSyDF9NA7oPPWEBxxD_lQcmnxrUjY9ZLF8p8',
     'endpoint' => 'https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent',
     'model' => env('GEMINI_MODEL', 'gemini-2.0-flash'),
     ],

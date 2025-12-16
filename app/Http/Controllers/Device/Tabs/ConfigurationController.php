@@ -106,6 +106,7 @@ class ConfigurationController implements DeviceTab
                 $this->getTabs($device),
                 'Basic Configuration'  => $this->getbasicconfigTabs($device),
                 'L2 Configuration'  => $this->getl2configTabs($device),
+                'System Management'  => $this->getsysmanageconfigTabs($device),
             ],
             'api_token' => $this->getUserLibreNMSToken(),
             'dropdownLinks' => $this->pageLinks($request),
@@ -297,6 +298,20 @@ class ConfigurationController implements DeviceTab
 
         if ($device->macs()->exists()) {
             // $tabs[] = ['name' => __('MAC Address Table'), 'url' => 'mactable'];
+        }
+
+        return $tabs;
+    }
+
+    public function getsysmanageconfigTabs(Device $device): array
+    {
+        $tabs = [
+            ['name' => __('System Software'), 'url' => 'systemsoftware'],
+            
+        ];
+
+        if ($device->macs()->exists()) {
+            $tabs[] = ['name' => __('Reboot'), 'url' => 'reboot'];
         }
 
         return $tabs;
