@@ -51,10 +51,10 @@ class KunalApiController
     #------------------------------------------------------------
     public function systeminfo($hostname)
     {
-
+        
         $playbook = "{$this->pluginPath}/atest1.yml";
         $hosts = "{$this->pluginPath}/hosts/{$hostname}.yml";
-
+        
 
         $output = $this->runAnsible($playbook, $hosts);
 
