@@ -104,6 +104,22 @@ class KunalApiController
     ]);
 }
 
+    #------------------------------------------------------------
+    #                       DEVICE REBOOT
+    #------------------------------------------------------------
+
+    public function devicereboot(Request $request, $hostname)
+    {
+        $playbook = "{$this->pluginPath}/rebootdevice.yml";
+        $hosts = "{$this->pluginPath}/hosts/{$hostname}.yml";
+
+        $output = $this->runAnsible($playbook, $hosts);
+
+        return $this->success([
+            "message" => "Device reboot initiated successfully",
+            "raw"     => $output
+        ]);
+    }
 
     #------------------------------------------------------------
     #                     CHANGE HOSTNAME
@@ -196,6 +212,36 @@ class KunalApiController
 
         return $this->success([
             "message" => "VLAN added successfully",
+            "raw"     => $output
+        ]);
+    }
+
+    #------------------------------------------------------------
+    #                            Add Vlan BATCH
+    #------------------------------------------------------------
+
+    public function addvlanbatch(Request $request, $hostname)
+    {
+        $data = $request->validate([
+            'vlan_add' => 'nullable|string',
+            'vlan_delete' => 'nullable|string',
+        ]);
+
+        $playbook = "{$this->pluginPath}/addvlanbatch.yml";
+        $hosts = "{$this->pluginPath}/hosts/{$hostname}.yml";
+
+        $extraVars = [];
+        if (!empty($data['vlan_add'])) {
+            $extraVars['vlan_add'] = $data['vlan_add'];
+        }
+        if (!empty($data['vlan_delete'])) {
+            $extraVars['vlan_delete'] = $data['vlan_delete'];
+        }
+
+        $output = $this->runAnsible($playbook, $hosts, $extraVars);
+
+        return $this->success([
+            "message" => "VLAN batch operation completed successfully",
             "raw"     => $output
         ]);
     }

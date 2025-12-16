@@ -67,6 +67,9 @@ Route::prefix('v0')->group(function () {
         Route::get('getvlan/{hostname}', [App\Api\Controllers\KunalApiController::class, 'getvlan'])->name('getvlan');
         Route::post('addvlan/{hostname}', [App\Api\Controllers\KunalApiController::class, 'addvlan']);
         Route::get('job-status/{jobId}', [App\Api\Controllers\KunalApiController::class, 'jobStatus']);
+        Route::post('devicereboot/{hostname}', [App\Api\Controllers\KunalApiController::class, 'devicereboot']);
+        Route::post('vlan/batch/{hostname}', [App\Api\Controllers\KunalApiController::class, 'addvlanbatch']);
+
 
 
 

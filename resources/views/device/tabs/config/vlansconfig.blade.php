@@ -8,6 +8,7 @@
     display: inline-block;
     animation: spin 0.75s linear infinite;
 }
+
 @keyframes spin { 100% { transform: rotate(360deg); } }
 </style>
 
@@ -62,7 +63,86 @@
         </div>
 
         <!-- Other Tabs -->
-        <div class="tab-pane" id="vlan_batch"><h4>VLAN Batch Configuration</h4></div>
+    <div class="tab-pane" id="vlan_batch">
+
+        <div class="container-fluid" style="margin-top: 20px;">
+            <div class="panel panel-primary">
+
+                <div class="panel-heading">
+                    <h3 class="panel-title">Batch VLAN Configuration</h3>
+                </div>
+
+                <div class="panel-body">
+                    <table class="table table-striped table-bordered" style="margin:0;">
+                        <tbody>
+
+                            <tr>
+                                <th width="200">VLAN Configured</th>
+                                <td id="vlan_configured">1,200</td>
+                            </tr>
+
+                            <tr>
+                                <th>VLAN Add</th>
+                                <td>
+                                    <div class="row">
+                                        <div class="col-sm-6">
+                                            <input type="text" class="form-control" id="vlan_add">
+                                        </div>
+                                        <div class="col-sm-6 text-muted" style="line-height:34px;">
+                                            &lt;2-4094&gt;
+                                        </div>
+                                    </div>
+                                </td>
+                            </tr>
+
+                            <tr>
+                                <th>VLAN Delete</th>
+                                <td>
+                                    <div class="row">
+                                        <div class="col-sm-6">
+                                            <input type="text" class="form-control" id="vlan_delete">
+                                        </div>
+                                        <div class="col-sm-6 text-muted" style="line-height:34px;">
+                                            &lt;2-4094&gt;
+                                        </div>
+                                    </div>
+                                </td>
+                            </tr>
+
+                        </tbody>
+                    </table>
+                </div>
+
+                <div class="panel-footer text-right">
+                    
+    <button class="btn btn-primary" onclick="applyVlanBatch()">Apply</button>
+    <button class="btn btn-default" onclick="resetVlanBatch()">Reset</button>
+                </div>
+
+            </div>
+
+            <!-- Help Panel -->
+            <div class="panel panel-default">
+                <div class="panel-heading">
+                    <h3 class="panel-title">Help</h3>
+                </div>
+                <div class="panel-body">
+                    <ul style="margin-bottom:0;">
+                        <li>VLAN ID (2-4094), such as (2,3,5,7) or (2-3,5-7) or (2-7) or (2 3,5 7-9)</li>
+                        <li>VLAN Operate: First add; Second delete.</li>
+                    </ul>
+                </div>
+            </div>
+
+        </div>
+
+    </div>
+
+        
+        
+        
+        
+      
         <div class="tab-pane" id="interface_vlan"><h4>Interface VLAN Attribute</h4></div>
         <div class="tab-pane" id="voice_vlan"><h4>Voice VLAN</h4></div>
         <div class="tab-pane" id="interface_voice_vlan"><h4>Interface Voice VLAN</h4></div>
@@ -231,4 +311,64 @@ $("#saveVlanBtn").on("click", function () {
         }
     });
 });
+
+function applyVlanBatch() {
+
+    var vlanAdd    = $("#vlan_add").val().trim();
+    var vlanDelete = $("#vlan_delete").val().trim();
+
+    if (!vlanAdd && !vlanDelete) {
+        alert("Please enter VLAN Add or VLAN Delete value");
+        return;
+    }
+
+    $.ajax({
+        url: "/api/v0/vlan/batch/" + DEVICE_IP,
+        method: "POST",
+        headers: {
+            "Authorization": "Bearer " + API_TOKEN,
+            "Accept": "application/json"
+        },
+        contentType: "application/json",
+
+        data: JSON.stringify({
+            device: DEVICE_IP,
+            vlan_add: vlanAdd,
+            vlan_delete: vlanDelete
+        }),
+
+        success: function (response) {
+
+            alert(response.message || "VLAN batch configuration applied successfully");
+
+            // Clear inputs
+            resetVlanBatch();
+
+            // Reload VLAN grid
+            $("#vlan-table").bootgrid("reload");
+        },
+
+        error: function (xhr) {
+            var msg = "Failed to apply VLAN configuration";
+            if (xhr.responseJSON && xhr.responseJSON.message) {
+                msg = xhr.responseJSON.message;
+            }
+            alert(msg);
+        }
+    });
+}
+
+function resetVlanBatch() {
+    $("#vlan_add").val("");
+    $("#vlan_delete").val("");
+}
+
+function isValidVlanInput(value) {
+    var regex = /^[0-9,\-\s]+$/;
+    return regex.test(value);
+}
+
+
+
+
 </script>
