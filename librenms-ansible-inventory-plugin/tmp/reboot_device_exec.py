@@ -2,7 +2,7 @@ import paramiko
 import time
 import sys
 
-HOST = "192.168.200.245"
+HOST = "192.168.200.244"
 USER = "admin"
 PASSWORD = "admin"
 

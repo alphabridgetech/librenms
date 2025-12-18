@@ -45,6 +45,11 @@
 
 <script>
     function devicereboot() {
+
+        if (!confirm("Are you sure you want to reboot this device?")) {
+            return; // user clicked NO
+        }
+
         const btn = document.getElementById("applyBtn");
 
         const ip = "{{ $device->hostname }}";
@@ -81,3 +86,4 @@
         });
     }
 </script>
+
