@@ -123,8 +123,7 @@ Route::prefix('v0')->group(function () {
 
         Route::get('poller_group/{poller_group_id_or_name?}', [App\Api\Controllers\LegacyApiController::class, 'get_poller_group'])->name('get_poller_group');
 
-        Route::post('chatbot/message', [App\Http\Controllers\ChatBotController::class, 'message'])
-        ->name('chatbot.message');
+        Route::post('chatbot/message', [App\Http\Controllers\ChatBotController::class, 'message']);
 
         
     });
