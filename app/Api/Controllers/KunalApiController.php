@@ -13,7 +13,7 @@ class KunalApiController
 
     public function __construct()
     {
-        $this->venv = base_path('bin/activate');
+        $this->venv = base_path('librenms-ansible-inventory-plugin/bin/activate');
         $this->pluginPath = base_path('librenms-ansible-inventory-plugin');
     }
 
