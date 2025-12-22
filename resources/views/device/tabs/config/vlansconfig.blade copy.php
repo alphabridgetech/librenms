@@ -12,11 +12,6 @@
 @keyframes spin { 100% { transform: rotate(360deg); } }
 </style>
 
-<link rel="stylesheet" href="//cdn.datatables.net/1.10.25/css/dataTables.bootstrap.min.css">
-
-<script src="//cdn.datatables.net/1.10.25/js/jquery.dataTables.min.js"></script>
-<script src="//cdn.datatables.net/1.10.25/js/dataTables.bootstrap.min.js"></script>
-
 <div class="container" style="margin-top:30px;">
     <!-- Tabs -->
     <ul class="nav nav-tabs">
@@ -38,19 +33,16 @@
                 </div>
             </div>
 
-            <table id="vlanTable" class="table table-striped table-bordered table-condensed">
-    <thead>
-        <tr>
-            <th width="40">
-                <input type="checkbox" id="selectAll">
-            </th>
-            <th>VLAN ID</th>
-            <th>VLAN Name</th>
-            <th width="80">Operate</th>
-        </tr>
-    </thead>
-</table>
-
+            <table id="vlan-table" class="table table-hover table-condensed table-striped" style="margin-top:12px;">
+                <thead>
+                    <tr>
+                        <th data-column-id="select" data-formatter="select" data-sortable="false" style="width:40px;"></th>
+                        <th data-column-id="id" data-type="numeric">VLAN ID</th>
+                        <th data-column-id="name">VLAN Name</th>
+                        <th data-column-id="operate" data-formatter="operate" data-sortable="false" style="width:80px;">Operate</th>
+                    </tr>
+                </thead>
+            </table>
 
             <div class="row" style="margin-top:10px;">
                 <div class="col-sm-6">
@@ -220,52 +212,58 @@ setCookie(COOKIE_PREFIX + "api_token", API_TOKEN);
 /* -----------------------
    BOOTGRID INITIALIZATION
 ----------------------- */
-var vlanTable = $('#vlanTable').DataTable({
-    processing: true,
-    serverSide: false,
-    ajax: {
-        url: "/api/v0/getvlan/" + DEVICE_IP,
-        type: "GET",
+var vlanGrid = $("#vlan-table").bootgrid({
+    ajax: true,
+    search: true,
+    rowCount: [10, 25, 50, -1],
+
+    ajaxSettings: {
+        method: "GET",
         headers: {
             "Authorization": "Bearer " + API_TOKEN,
             "Accept": "application/json"
-        },
-        dataSrc: function (json) {
-            if (json.vlans) return json.vlans;
-            return json;
         }
     },
-    columns: [
-        {
-            data: "id",
-            orderable: false,
-            render: function (data) {
-                return '<input type="checkbox" class="row-check" value="' + data + '">';
-            }
-        },
-        { data: "id" },
-        { data: "name" },
-        {
-            data: null,
-            orderable: false,
-            render: function (row) {
-                return `
-                    <button class="btn btn-xs btn-info edit-vlan"
-                        data-id="${row.id}"
-                        data-name="${row.name}">
-                        Edit
-                    </button>
-                `;
-            }
-        }
-    ],
-    order: [[1, "asc"]],
-    lengthMenu: [10, 25, 50, 100],
-    language: {
-        emptyTable: "No VLANs found"
-    }
-});
 
+    url: "/api/v0/getvlan/" + DEVICE_IP,
+
+    post: function () {
+        return { device: DEVICE_IP };
+    },
+
+    responseHandler: function (response) {
+        // Ensure data array exists
+        let rows = [];
+        if (response.vlans && Array.isArray(response.vlans)) {
+            rows = response.vlans;
+        } else if (Array.isArray(response)) {
+            rows = response;
+        }
+
+        return {
+            current: 1,
+            rowCount: rows.length,
+            rows: rows,
+            total: rows.length
+        };
+    },
+
+    formatters: {
+        select: function(column, row) {
+            return `<input type="checkbox" class="row-checkbox" data-id="${row.id}">`;
+        },
+        operate: function(column, row) {
+            return `<a href="#" class="btn btn-xs btn-info edit-vlan"
+                        data-id="${row.id}" data-name="${row.name}">
+                        Edit
+                    </a>`;
+        }
+    }
+}).on("loaded.rs.jquery.bootgrid", function () {
+    $("#selectAllLabel").on("change", function(){
+        $(".row-checkbox").prop("checked", this.checked);
+    });
+});
 
 /* -----------------------
    ADD VLAN MODAL
@@ -274,28 +272,6 @@ $("#btnAddVlan").on("click", function () {
     $("#addVlanForm")[0].reset();
     $("#addVlanModal").modal("show");
 });
-
-$('#selectAll').on('change', function () {
-    $('.row-check').prop('checked', this.checked);
-});
-
-$('#batchDeleteBtn').on('click', function () {
-    var ids = [];
-
-    $('.row-check:checked').each(function () {
-        ids.push($(this).val());
-    });
-
-    if (ids.length === 0) {
-        alert("Please select VLANs");
-        return;
-    }
-
-    // AJAX call for delete
-    console.log(ids);
-});
-
-
 
 $("#saveVlanBtn").on("click", function () {
     let vlan_id = $("#vlan_id").val();
