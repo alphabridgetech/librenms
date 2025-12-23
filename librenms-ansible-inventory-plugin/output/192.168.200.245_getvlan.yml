@@ -1,0 +1,22 @@
+ip: 192.168.200.245
+vlans:
+-   id: '1'
+    name: Default
+    ports:
+    - g0/2
+    - g0/3
+    - g0/4
+    - g0/5
+    - g0/6
+    - g0/7
+    - g0/8
+    - tg0/1
+    - tg0/2
+    - tg0/3
+    - tg0/4
+    status: Static
+-   id: '200'
+    name: VLAN0200
+    ports:
+    - g0/1
+    status: Static

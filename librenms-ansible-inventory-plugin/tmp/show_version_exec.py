@@ -2,9 +2,9 @@ import paramiko
 import time
 import re
 
-HOST = "192.168.200.245"
+HOST = "192.168.200.244"
 USER = "admin"
-PASSWORD = "admin"
+PASSWORD = "Admin@123#"
 
 try:
     ssh = paramiko.SSHClient()

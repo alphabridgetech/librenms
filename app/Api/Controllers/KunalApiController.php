@@ -219,49 +219,47 @@ public function gethostname($hostname)
     #                            get vlan
     #------------------------------------------------------------
 
-    public function getvlan($hostname)
+public function getvlan($hostname)
 {
-    $playbook = "{$this->pluginPath}/getvlan.yml";
-    $hosts = "{$this->pluginPath}/hosts/{$hostname}.yml";
+    $playbook = "{$this->pluginPath}/playbooks/getvlan.yml";
+    $hosts    = "{$this->pluginPath}/hosts/{$hostname}.yml";
 
-    $output = $this->runAnsible($playbook, $hosts);
+    // Run ansible
+    $ansibleOutput = $this->runAnsible($playbook, $hosts);
 
-    /**
-     * STEP 1 — Extract "msg" content
-     *
-     * This captures everything between "msg": " ... "
-     */
-    preg_match('/"msg":\s*"((?:\\\\.|[^"\\\\])*)"/s', $output, $match);
+    // YAML output file
+    $yamlFile = "{$this->pluginPath}/output/{$hostname}_getvlan.yml";
 
-    if (empty($match[1])) {
-        return $this->error("VLAN JSON not found", $output);
+    if (!file_exists($yamlFile)) {
+        return $this->error(
+            "VLAN output file not found",
+            $ansibleOutput
+        );
     }
 
-    $escapedJson = $match[1]; // Contains: [{\"id\":\"1\" ... }]
+    if (!function_exists('yaml_parse_file')) {
+        return $this->error(
+            "PHP YAML extension missing",
+            null
+        );
+    }
 
-    /**
-     * STEP 2 — Remove escape slashes
-     */
-    $cleanJson = stripcslashes($escapedJson);
+    $data = yaml_parse_file($yamlFile);
 
-    /**
-     * STEP 3 — Decode JSON
-     */
-    $vlanList = json_decode($cleanJson, true);
-
-    if (json_last_error() !== JSON_ERROR_NONE) {
-        return $this->error("JSON decode failed", [
-            "error" => json_last_error_msg(),
-            "raw" => $cleanJson
-        ]);
+    if (empty($data['vlans']) || !is_array($data['vlans'])) {
+        return $this->error(
+            "VLAN data invalid",
+            json_encode($data)
+        );
     }
 
     return $this->success([
-        "vlans" => $vlanList,
-        "count" => count($vlanList),
-        "raw"   => $cleanJson
+        "ip"    => $data['ip'] ?? $hostname,
+        "vlans" => $data['vlans']
     ]);
 }
+
+
 
 
     #------------------------------------------------------------
@@ -269,18 +267,48 @@ public function gethostname($hostname)
     #------------------------------------------------------------
 
     public function showvlaninterface($hostname)
-    {
-        
-        $playbook = "{$this->pluginPath}/showvlaninterface.yml";
-        $hosts = "{$this->pluginPath}/hosts/{$hostname}.yml";
+{
+    $playbook = "{$this->pluginPath}/playbooks/getinterface.yml";
+    $hosts    = "{$this->pluginPath}/hosts/{$hostname}.yml";
 
-        $output = $this->runAnsible($playbook, $hosts);
+    // Run Ansible
+    $ansibleOutput = $this->runAnsible($playbook, $hosts);
 
-        return $this->success([
-            "message" => "VLAN interface details retrieved successfully",
-            "raw"     => $output
-        ]);
+    // YAML output file
+    $yamlFile = "{$this->pluginPath}/output/{$hostname}_getinterface.yml";
+
+    if (!file_exists($yamlFile)) {
+        return $this->error(
+            "Interface output file not found",
+            $ansibleOutput
+        );
     }
+
+    $data = yaml_parse_file($yamlFile);
+
+    if ($data === false || !is_array($data)) {
+        return $this->error(
+            "Failed to parse interface YAML",
+            file_get_contents($yamlFile)
+        );
+    }
+
+    if (empty($data['interfaces']) || !is_array($data['interfaces'])) {
+        return $this->error(
+            "Interface data invalid or empty",
+            $data
+        );
+    }
+
+    return $this->success([
+        "ip"           => $data['ip'] ?? $hostname,
+        "current_time" => $data['current_time'] ?? null,
+        "interfaces"   => $data['interfaces'],
+        "count"        => count($data['interfaces']),
+        "raw"          => $data
+    ]);
+}
+
 
     public function addvlan(Request $request, $hostname)
     {
