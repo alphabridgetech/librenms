@@ -1,5 +1,6 @@
 import paramiko
 import time
+import re
 
 HOST = "192.168.200.245"
 USER = "admin"
@@ -8,30 +9,61 @@ PASSWORD = "admin"
 try:
     ssh = paramiko.SSHClient()
     ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
-    ssh.connect(HOST, username=USER, password=PASSWORD, look_for_keys=False, allow_agent=False)
+    ssh.connect(
+        HOST,
+        username=USER,
+        password=PASSWORD,
+        look_for_keys=False,
+        allow_agent=False
+    )
 
-    # Start interactive shell
     shell = ssh.invoke_shell()
-    time.sleep(1)
+    time.sleep(2)
 
-    # Enter privileged mode
+    # Flush banner
+    if shell.recv_ready():
+        shell.recv(65535)
+
     shell.send("enable\n")
     time.sleep(1)
-    shell.send(PASSWORD + "\n")  # If enable requires password
+    shell.send(PASSWORD + "\n")
     time.sleep(1)
 
-    # Run show version
+    if shell.recv_ready():
+        shell.recv(65535)
+
     shell.send("show version\n")
     time.sleep(3)
 
-    # Capture output
     output = ""
     while shell.recv_ready():
-        output += shell.recv(65535).decode()
-
-    print(output)
+        output += shell.recv(65535).decode(errors="ignore")
 
     ssh.close()
 
+    clean_lines = []
+
+    for line in output.splitlines():
+        line = line.strip()
+
+        if not line:
+            continue
+
+        # Remove echoed commands
+        if line.lower() in ("enable", "show version"):
+            continue
+
+        # Remove ANY prompt automatically
+        if re.match(r"^[A-Za-z0-9\-_\.]+(\(.*\))?[>#]$", line):
+            continue
+
+        # Remove CLI noise
+        if "unknown command" in line.lower():
+            continue
+
+        clean_lines.append(line)
+
+    print("\n".join(clean_lines))
+
 except Exception as e:
-    print("Exception:", e)
+    print("ERROR:", e)

@@ -50,59 +50,131 @@ class KunalApiController
     #                       SYSTEM INFO
     #------------------------------------------------------------
     public function systeminfo($hostname)
-    {
-        
-        $playbook = "{$this->pluginPath}/atest1.yml";
-        $hosts = "{$this->pluginPath}/hosts/{$hostname}.yml";
-        
+{
+    $playbook = "{$this->pluginPath}/playbooks/devicedetails.yml";
+    $hosts    = "{$this->pluginPath}/hosts/{$hostname}.yml";
 
-        $output = $this->runAnsible($playbook, $hosts);
+    // Run Ansible
+    $ansibleOutput = $this->runAnsible($playbook, $hosts);
 
-        preg_match('/"output.stdout":\s*"([\s\S]*?)"\s*}/', $output, $match);
-        if (empty($match[1])) {
-            return $this->error("output.stdout not found", $output);
-        }
+    // Correct YAML file
+    $yamlFile = "{$this->pluginPath}/output/{$hostname}_devicedetails.yml";
 
-        $raw = preg_replace("/[\r\n]+/", "", $match[1]);
-
-        $info = [
-            "device_type"  => $this->extract($raw, 'Welcome to ABTPL (.*?) Ethernet'),
-            "bios_version" => $this->extract($raw, 'Bootstrap, Version ([0-9\.]+)'),
-            "firmware"     => $this->extract($raw, 'Software, Version (.*?), RELEASE'),
-            "serial"       => $this->extract($raw, 'Serial num:(.*?),'),
-            "mac"          => $this->extract($raw, 'Base ethernet MAC Address:\s*([0-9a-fA-F:]+)'),
-            "current_time" => $this->extract($raw, 'The current time:\s*([0-9\-:\s]+)'),
-            "uptime"       => $this->extract($raw, 'uptime is (.*?),'),
-        ];
-
-        return $this->success([
-            "data" => $info,
-            "raw"  => $raw
-        ]);
+    if (!file_exists($yamlFile)) {
+        return $this->error(
+            "System info output file not found",
+            $ansibleOutput
+        );
     }
+
+    // YAML extension check (Alpine issue safe)
+    if (!function_exists('yaml_parse_file')) {
+        return $this->error(
+            "PHP YAML extension missing (php-yaml not installed)",
+            null
+        );
+    }
+
+    $data = yaml_parse_file($yamlFile);
+
+    if (empty($data['show_version'])) {
+        return $this->error(
+            "show_version not found in YAML",
+            json_encode($data)
+        );
+    }
+
+    $raw = trim($data['show_version']);
+
+    // ---------- Extract system info ----------
+    $info = [
+    "device_type" => $this->extract(
+        $raw,
+        '([A-Z0-9\/]+)\s+Software, Version'
+    ),
+
+    "bios_version" => $this->extract(
+        $raw,
+        'Bootstrap, Version ([0-9\.]+)'
+    ),
+
+    "firmware" => $this->extract(
+        $raw,
+        'Software, Version ([^,]+), RELEASE'
+    ),
+
+    "serial" => $this->extract(
+        $raw,
+        'Serial num:([^,]+)'
+    ),
+
+    "mac" => $this->extract(
+        $raw,
+        'Base ethernet MAC Address:\s*([0-9a-fA-F:]+)'
+    ),
+
+    
+    "current_time" => $this->extract(
+    $raw,
+        'The current time:\s*([0-9\-: ]+)'
+    ),
+
+
+    "uptime" => $this->extract(
+        $raw,
+        'uptime is ([^,]+)'
+    ),
+
+    "model" => $this->extract(
+        $raw,
+        'ABTPL\s+([A-Z0-9\/\-]+)'
+    ),
+];
+
+
+    return $this->success([
+        "ip"   => $data['ip'] ?? $hostname,
+        "data" => $info,
+        "raw"  => $raw
+    ]);
+}
+
 
     #------------------------------------------------------------
     #                       GET HOSTNAME
     #------------------------------------------------------------
-    public function gethostname($hostname)
-{   
-    $playbook = "{$this->pluginPath}/gethostname.yml";
+
+
+public function gethostname($hostname)
+{
+    $playbook = "{$this->pluginPath}/playbooks/gethostname.yml";
     $hosts    = "{$this->pluginPath}/hosts/{$hostname}.yml";
 
+    // Run ansible
     $output = $this->runAnsible($playbook, $hosts);
 
-    // Extract hostname from output
-    preg_match('/Hostname:\s*([A-Za-z0-9\-_]+)/', $output, $match);
+    // Expected output file
+    $yamlFile = "{$this->pluginPath}/output/{$hostname}_gethostname.yml";
+    
+    if (!file_exists($yamlFile)) {
+        return $this->error("Hostname output file not found", $output);
+    }
+    
+    
 
-    if (empty($match[1])) {
-        return $this->error("Hostname not found", $output);
+    $data = yaml_parse_file($yamlFile);
+
+    if (empty($data['hostname'])) {
+        return $this->error("Hostname not found in YAML", $data);
     }
 
     return $this->success([
-        "hostname" => $match[1],
-        "raw"      => $output
+        "ip"       => $data['ip'] ?? $hostname,
+        "hostname" => $data['hostname'],
+        "raw"      => $data
     ]);
 }
+
 
     #------------------------------------------------------------
     #                       DEVICE REBOOT
@@ -191,9 +263,24 @@ class KunalApiController
     ]);
 }
 
+
     #------------------------------------------------------------
-    #                            Add Vlan
+    #                            Add Vlan interface
     #------------------------------------------------------------
+
+    public function showvlaninterface($hostname)
+    {
+        
+        $playbook = "{$this->pluginPath}/showvlaninterface.yml";
+        $hosts = "{$this->pluginPath}/hosts/{$hostname}.yml";
+
+        $output = $this->runAnsible($playbook, $hosts);
+
+        return $this->success([
+            "message" => "VLAN interface details retrieved successfully",
+            "raw"     => $output
+        ]);
+    }
 
     public function addvlan(Request $request, $hostname)
     {
@@ -265,12 +352,17 @@ class KunalApiController
         return response()->json(["status" => "success"] + $data);
     }
 
-    private function error(string $msg, string $raw)
+    public function error(string $message, $raw = null)
     {
+        if (is_array($raw) || is_object($raw)) {
+            $raw = json_encode($raw, JSON_PRETTY_PRINT);
+        }
+
         return response()->json([
             "status" => "error",
-            "message" => $msg,
+            "message" => $message,
             "raw_output" => $raw
-        ], 500);
+        ], 400);
     }
+
 }

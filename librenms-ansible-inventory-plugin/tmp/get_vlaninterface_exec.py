@@ -1,7 +1,8 @@
 import paramiko
 import time
+import re
 
-HOST = "192.168.200.245"
+HOST = "192.168.200.244"
 USER = "admin"
 PASSWORD = "admin"
 
@@ -19,31 +20,34 @@ try:
     shell = ssh.invoke_shell()
     time.sleep(1)
 
+    # Enable mode
     shell.send("enable\n")
     time.sleep(1)
     shell.send(PASSWORD + "\n")
     time.sleep(1)
 
-    shell.send("show running-config | include hostname\n")
-    time.sleep(2)
+    # VLAN interface command
+    shell.send("show interface brief\n")
+    time.sleep(3)
 
     output = ""
     while shell.recv_ready():
-        output += shell.recv(65535).decode()
-
-    hostname_value = None
-    for line in output.splitlines():
-        line = line.strip()
-        if line.startswith("hostname "):
-            hostname_value = line.split("hostname ")[1].strip()
-            break
-
-    if hostname_value:
-        print(hostname_value)
-    else:
-        print("ERROR")
+        output += shell.recv(65535).decode(errors="ignore")
 
     ssh.close()
 
-except Exception:
-    print("ERROR")
+    # Extract VLAN interface lines
+    vlan_interfaces = []
+    for line in output.splitlines():
+        line = line.strip()
+        if re.match(r"^Vlan\d+", line):
+            vlan_interfaces.append(line)
+
+    if vlan_interfaces:
+        for v in vlan_interfaces:
+            print(v)
+    else:
+        print("ERROR: No VLAN interfaces found")
+
+except Exception as e:
+    print("Exception:", e)
