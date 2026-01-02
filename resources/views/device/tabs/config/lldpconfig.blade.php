@@ -60,10 +60,10 @@
 
                         <!-- Timer -->
                         <div class="form-group">
-                            <label class="col-sm-3 control-label">Timer</label>
+                            <label class="col-sm-3 control-label">Setting the packet transmission cycle</label>
                             <div class="col-sm-6">
-                                <input type="number" id="timer" class="form-control" min="5" max="65535">
-                                <span class="help-block">5 – 65535 seconds</span>
+                                <input type="number" id="timer" class="form-control" min="5" max="65534">
+                                <span class="help-block">5 – 65534 seconds</span>
                                 <div id="timer_error" class="text-danger" style="display:none;"></div>
                             </div>
                         </div>

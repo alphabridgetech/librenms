@@ -73,6 +73,7 @@ Route::prefix('v0')->group(function () {
         Route::post('changemtu/{hostname}', [App\Api\Controllers\KunalApiController::class, 'changemtu']);
         Route::get('getmtu/{hostname}', [App\Api\Controllers\KunalApiController::class, 'getmtu'])->name('getmtu');
         Route::get('getlldp/{hostname}', [App\Api\Controllers\KunalApiController::class, 'getlldp'])->name('getlldp');
+        Route::post('changelldp/{hostname}', [App\Api\Controllers\KunalApiController::class, 'changelldp']);
 
 
 

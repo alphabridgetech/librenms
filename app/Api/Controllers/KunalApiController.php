@@ -292,6 +292,31 @@ public function getmtu($hostname)
 }
 
     #------------------------------------------------------------
+    #                     CHANGE LLDP
+    #------------------------------------------------------------
+    public function changelldp(Request $request, $hostname)
+    {
+        $data = $request->validate([
+            'protocol_state' => 'required|string|in:open,close',
+            'holdtime' => 'nullable|integer|max:65535',
+            'timer' => 'nullable|integer|min:5|max:65534',
+            'reinit' => 'nullable|integer|min:2|max:5',
+        ]);
+        $playbook = "{$this->pluginPath}/playbooks/changelldp.yml";
+        $hosts = "{$this->pluginPath}/hosts/{$hostname}.yml";
+        $output = $this->runAnsible($playbook, $hosts, [
+            "protocol_state" => $data['protocol_state'],
+            "holdtime" => $data['holdtime'] ?? '',
+            "timer" => $data['timer'] ?? '',
+            "reinit" => $data['reinit'] ?? '',
+        ]);
+        return $this->success([
+            "message" => "LLDP configuration changed successfully",
+            "raw"     => $output
+        ]);
+    }
+
+    #------------------------------------------------------------
     #                            get vlan
     #------------------------------------------------------------
 

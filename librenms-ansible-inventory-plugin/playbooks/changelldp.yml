@@ -21,9 +21,9 @@
           USER = "{{ ansible_user }}"
           PASSWORD = "{{ ansible_password }}"
 
-          PROTOCOL_STATE = "{{ protocol_state }}"   # open / close
+          PROTOCOL_STATE = "{{ protocol_state }}"
           HOLDTIME = "{{ holdtime }}"
-          TIMER = "{{ timmer }}"
+          TIMER = "{{ timer }}"
           REINIT = "{{ reinit }}"
 
           try:
@@ -49,31 +49,23 @@
               shell.send(PASSWORD + "\n")
               time.sleep(1)
 
-              shell.send("configure terminal\n")
+              shell.send("config\n")
               time.sleep(1)
 
-              # LLDP enable / disable
               if PROTOCOL_STATE == "open":
                   shell.send("lldp run\n")
+                  time.sleep(1)
+                  shell.send(f"lldp holdtime {HOLDTIME}\n")
+                  time.sleep(0.5)
+                  shell.send(f"lldp timer {TIMER}\n")
+                  time.sleep(0.5)
+                  shell.send(f"lldp reinit {REINIT}\n")
               else:
                   shell.send("no lldp run\n")
 
               time.sleep(1)
-
-              # Apply LLDP parameters only if enabled
-              if PROTOCOL_STATE == "open":
-                  shell.send(f"lldp holdtime {HOLDTIME}\n")
-                  time.sleep(0.5)
-
-                  shell.send(f"lldp timer {TIMER}\n")
-                  time.sleep(0.5)
-
-                  shell.send(f"lldp reinit {REINIT}\n")
-                  time.sleep(0.5)
-
               shell.send("end\n")
               time.sleep(1)
-
               shell.send("write memory\n")
               time.sleep(2)
 
@@ -81,12 +73,16 @@
               print("SUCCESS")
 
           except Exception as e:
-              print("ERROR:", e)
+              print("ERROR")
+              print(e)
 
-    - name: Save lldp output to YAML
-      ansible.builtin.copy:
-        dest: "{{ output_dir }}/{{ ansible_host }}_getlldp.yml"
-        content: |
-          ip: "{{ ansible_host }}"
-          mtu: "{{ mtu_output.stdout | trim }}"
-      when: mtu_output.stdout | trim != "ERROR"
+    - name: Run LLDP SET script
+      ansible.builtin.command:
+        cmd: "{{ venv_python }} {{ script_path }}"
+      register: lldp_result
+      changed_when: false
+      failed_when: "'ERROR' in lldp_result.stdout"
+
+    - name: Show result
+      ansible.builtin.debug:
+        msg: "{{ lldp_result.stdout }}"
