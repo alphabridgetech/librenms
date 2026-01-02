@@ -51,6 +51,7 @@ class KunalApiController
     #------------------------------------------------------------
     public function systeminfo($hostname)
 {
+    
     $playbook = "{$this->pluginPath}/playbooks/devicedetails.yml";
     $hosts    = "{$this->pluginPath}/hosts/{$hostname}.yml";
 
@@ -83,6 +84,8 @@ class KunalApiController
             json_encode($data)
         );
     }
+
+    
 
     $raw = trim($data['show_version']);
 
@@ -175,6 +178,35 @@ public function gethostname($hostname)
     ]);
 }
 
+    #------------------------------------------------------------
+    #                       GET MTU
+    #------------------------------------------------------------
+public function getmtu($hostname)
+{
+    $playbook = "{$this->pluginPath}/playbooks/getmtu.yml";
+    $hosts    = "{$this->pluginPath}/hosts/{$hostname}.yml";
+    // Run ansible
+    $output = $this->runAnsible($playbook, $hosts);
+
+    // Expected output file
+    $yamlFile = "{$this->pluginPath}/output/{$hostname}_getmtu.yml";
+
+    if (!file_exists($yamlFile)) {
+        return $this->error("MTU output file not found", $output);
+    }
+
+    $data = yaml_parse_file($yamlFile);
+
+    if (empty($data['mtu'])) {
+        return $this->error("MTU not found in YAML", $data);
+    }
+
+    return $this->success([
+        "ip"   => $data['ip'] ?? $hostname,
+        "mtu"  => $data['mtu'],
+        "raw"  => $data
+    ]);
+}
 
     #------------------------------------------------------------
     #                       DEVICE REBOOT
@@ -202,7 +234,7 @@ public function gethostname($hostname)
             'hostname' => 'required|string'
         ])['hostname'];
 
-        $playbook = "{$this->pluginPath}/sethostname.yml";
+        $playbook = "{$this->pluginPath}/playbooks/changehostname.yml";
         $hosts = "{$this->pluginPath}/hosts/{$hostname}.yml";
 
         $output = $this->runAnsible($playbook, $hosts, [
@@ -214,6 +246,50 @@ public function gethostname($hostname)
             "raw"     => $output
         ]);
     }
+
+    #------------------------------------------------------------
+    #                     CHANGE MTU
+    #------------------------------------------------------------
+    public function changemtu(Request $request, $hostname)
+    {
+        $new = $request->validate([
+            'mtu' => 'required|integer|min:1518|max:9216'
+        ])['mtu'];
+        $playbook = "{$this->pluginPath}/playbooks/changemtu.yml";
+        $hosts = "{$this->pluginPath}/hosts/{$hostname}.yml";
+        $output = $this->runAnsible($playbook, $hosts, [
+            "new_mtu" => $new
+        ]);
+        return $this->success([
+            "message" => "MTU changed successfully",
+            "raw"     => $output
+        ]);
+    }
+
+    #------------------------------------------------------------
+    #                       GET LLDP
+    #------------------------------------------------------------
+    public function getlldp($hostname)
+{
+    $playbook = "{$this->pluginPath}/playbooks/getlldp.yml";
+    $hosts    = "{$this->pluginPath}/hosts/{$hostname}.yml";
+    // Run ansible
+    $output = $this->runAnsible($playbook, $hosts);
+    // Expected output file
+    $yamlFile = "{$this->pluginPath}/output/{$hostname}_getlldp.yml";
+    if (!file_exists($yamlFile)) {
+        return $this->error("LLDP output file not found", $output);
+    }
+    $data = yaml_parse_file($yamlFile);
+    if (empty($data['lldp'])) {
+        return $this->error("LLDP data not found in YAML", $data);
+    }
+    return $this->success([
+        "ip"   => $data['ip'] ?? $hostname,
+        "lldp" => $data['lldp'],
+        "raw"  => $data
+    ]);
+}
 
     #------------------------------------------------------------
     #                            get vlan

@@ -166,22 +166,22 @@
                 </div>
             </div>
 
-            <table id="interfaceTable" class="table table-striped table-bordered table-condensed">
-                <thead>
-                    <tr>
-                        <th width="40">
-                            <input type="checkbox" id="selectAll">
-                        </th>
-                        <th>Port</th>
-                        <th>Discription</th>
-                        <th>Status</th>
-                        <th>Vlan</th>
-                        <th>Duplex</th>
-                        <th>Speed</th>
-                        <th width="80">Type</th>
-                    </tr>
-                </thead>
-            </table>
+           <table id="interfaceTable" class="table table-striped table-bordered table-condensed">
+    <thead>
+        <tr>
+            <th width="40">
+                <input type="checkbox" id="selectAll">
+            </th>
+            <th>Port</th>
+            <th>Status</th>
+            <th>Vlan</th>
+            <th>Duplex</th>
+            <th>Speed</th>
+            <th width="80">Type</th>
+        </tr>
+    </thead>
+</table>
+
 
 
             <div class="row" style="margin-top:10px;">
@@ -326,6 +326,46 @@
             emptyTable: "No VLANs found"
         }
     });
+
+
+    /* -----------------------
+       HANDLE EDIT BUTTON
+    ----------------------- */
+    var interfaceTable = $('#interfaceTable').DataTable({
+    processing: true,
+    serverSide: false,
+    ajax: {
+        url: "/api/v0/vlan/interface/" + DEVICE_IP,
+        type: "GET",
+        headers: {
+            "Authorization": "Bearer " + API_TOKEN,
+            "Accept": "application/json"
+        },
+        dataSrc: function (json) {
+            return json.interfaces || [];
+        }
+    },
+    columns: [
+        {
+            data: "name",
+            orderable: false,
+            render: function (data) {
+                return `<input type="checkbox" class="row-check" value="${data}">`;
+            }
+        },
+        { data: "name" },          // Port
+        { data: "status" },        // Status
+        { data: "vlan" },          // VLAN
+        { data: "duplex" },        // Duplex
+        { data: "speed" },         // Speed
+        { data: "type" }           // Type
+    ],
+    order: [[1, "asc"]],
+    lengthMenu: [10, 25, 50, 100],
+    language: {
+        emptyTable: "No interfaces found"
+    }
+});
 
 
     /* -----------------------

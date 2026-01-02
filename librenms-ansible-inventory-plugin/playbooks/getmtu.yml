@@ -1,24 +1,18 @@
 ---
-- name: Network Device - Dynamic Show Version Collection
-  hosts: all
+- name: Get System MTU from network device
+  hosts: alphabridge_devices
   gather_facts: no
 
   vars:
+    script_path: "/opt/librenms/librenms-ansible-inventory-plugin/tmp/get_mtu_exec.py"
     output_dir: "/opt/librenms/librenms-ansible-inventory-plugin/output"
-    tmp_script: "/tmp/show_version_{{ inventory_hostname }}.py"
+    venv_python: "/opt/librenms/librenms-ansible-inventory-plugin/bin/python3"
 
   tasks:
 
-    - name: Ensure output directory exists
-      file:
-        path: "{{ output_dir }}"
-        state: directory
-        mode: "0755"
-      run_once: true
-
-    - name: Create dynamic show version parsing script
-      copy:
-        dest: "{{ tmp_script }}"
+    - name: Create Python SSH MTU script
+      ansible.builtin.copy:
+        dest: "{{ script_path }}"
         mode: "0755"
         content: |
           import paramiko
@@ -56,8 +50,8 @@
               if shell.recv_ready():
                   shell.recv(65535)
 
-              shell.send("show version\n")
-              time.sleep(3)
+              shell.send("show system mtu\n")
+              time.sleep(2)
 
               output = ""
               while shell.recv_ready():
@@ -65,40 +59,38 @@
 
               ssh.close()
 
-              clean_lines = []
-
+              mtu = None
               for line in output.splitlines():
                   line = line.strip()
 
-                  if not line:
-                      continue
+                  # Match: System MTU Jumbo size is 1900 bytes
+                  match = re.search(r'System MTU Jumbo size is (\d+)', line)
+                  if match:
+                      mtu = match.group(1)
+                      break
 
-                  if line.lower() in ("enable", "show version"):
-                      continue
-
-                  if re.match(r"^[A-Za-z0-9\-_\.]+(\(.*\))?[>#]$", line):
-                      continue
-
-                  if "unknown command" in line.lower():
-                      continue
-
-                  clean_lines.append(line)
-
-              print("\n".join(clean_lines))
+              if mtu:
+                  print(mtu)
+              else:
+                  print("ERROR")
 
           except Exception as e:
-              print(f"ERROR: {e}")
+              print("ERROR")
 
-    - name: Execute dynamic show version script
-      command: python3 "{{ tmp_script }}"
-      register: show_version_output
+    - name: Execute MTU script
+      ansible.builtin.command:
+        cmd: "{{ venv_python }} {{ script_path }}"
+      register: mtu_output
       changed_when: false
 
-    - name: Save output into YAML file
-      copy:
-        dest: "{{ output_dir }}/{{ ansible_host }}_devicedetails.yml"
+    - name: Save MTU output to YAML
+      ansible.builtin.copy:
+        dest: "{{ output_dir }}/{{ ansible_host }}_getmtu.yml"
         content: |
           ip: "{{ ansible_host }}"
-          show_version: | 
-            {{ show_version_output.stdout | indent(12) }}
-      
+          mtu: "{{ mtu_output.stdout | trim }}"
+      when: mtu_output.stdout | trim != "ERROR"
+
+    - name: Display MTU
+      ansible.builtin.debug:
+        msg: "MTU: {{ mtu_output.stdout | trim }}"

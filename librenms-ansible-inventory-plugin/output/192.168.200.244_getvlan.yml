@@ -411,7 +411,6 @@ vlans:
     name: VLAN0200
     ports:
     - g0/1
-    - g0/2
     - g0/3
     - g0/4
     - g0/5
@@ -441,6 +440,7 @@ vlans:
 -   id: '300'
     name: VLAN0300
     ports:
+    - g0/2
     - g0/10
     - g0/11
     - g0/12
