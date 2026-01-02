@@ -1,0 +1,92 @@
+---
+- name: Set LLDP configuration via SSH
+  hosts: all
+  gather_facts: no
+
+  vars:
+    script_path: "/opt/librenms/librenms-ansible-inventory-plugin/tmp/set_lldp_exec.py"
+    venv_python: "/opt/librenms/librenms-ansible-inventory-plugin/bin/python3"
+
+  tasks:
+
+    - name: Copy LLDP Python script
+      ansible.builtin.copy:
+        dest: "{{ script_path }}"
+        mode: "0755"
+        content: |
+          import paramiko
+          import time
+
+          HOST = "{{ ansible_host }}"
+          USER = "{{ ansible_user }}"
+          PASSWORD = "{{ ansible_password }}"
+
+          PROTOCOL_STATE = "{{ protocol_state }}"   # open / close
+          HOLDTIME = "{{ holdtime }}"
+          TIMER = "{{ timmer }}"
+          REINIT = "{{ reinit }}"
+
+          try:
+              ssh = paramiko.SSHClient()
+              ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+              ssh.connect(
+                  hostname=HOST,
+                  username=USER,
+                  password=PASSWORD,
+                  look_for_keys=False,
+                  allow_agent=False,
+                  timeout=10
+              )
+
+              shell = ssh.invoke_shell()
+              time.sleep(2)
+
+              if shell.recv_ready():
+                  shell.recv(65535)
+
+              shell.send("enable\n")
+              time.sleep(1)
+              shell.send(PASSWORD + "\n")
+              time.sleep(1)
+
+              shell.send("configure terminal\n")
+              time.sleep(1)
+
+              # LLDP enable / disable
+              if PROTOCOL_STATE == "open":
+                  shell.send("lldp run\n")
+              else:
+                  shell.send("no lldp run\n")
+
+              time.sleep(1)
+
+              # Apply LLDP parameters only if enabled
+              if PROTOCOL_STATE == "open":
+                  shell.send(f"lldp holdtime {HOLDTIME}\n")
+                  time.sleep(0.5)
+
+                  shell.send(f"lldp timer {TIMER}\n")
+                  time.sleep(0.5)
+
+                  shell.send(f"lldp reinit {REINIT}\n")
+                  time.sleep(0.5)
+
+              shell.send("end\n")
+              time.sleep(1)
+
+              shell.send("write memory\n")
+              time.sleep(2)
+
+              ssh.close()
+              print("SUCCESS")
+
+          except Exception as e:
+              print("ERROR:", e)
+
+    - name: Save lldp output to YAML
+      ansible.builtin.copy:
+        dest: "{{ output_dir }}/{{ ansible_host }}_getlldp.yml"
+        content: |
+          ip: "{{ ansible_host }}"
+          mtu: "{{ mtu_output.stdout | trim }}"
+      when: mtu_output.stdout | trim != "ERROR"

@@ -70,7 +70,9 @@ Route::prefix('v0')->group(function () {
         Route::post('devicereboot/{hostname}', [App\Api\Controllers\KunalApiController::class, 'devicereboot']);
         Route::post('vlan/batch/{hostname}', [App\Api\Controllers\KunalApiController::class, 'addvlanbatch']);
         Route::get('vlan/interface/{hostname}', [App\Api\Controllers\KunalApiController::class, 'showvlaninterface']);
-
+        Route::post('changemtu/{hostname}', [App\Api\Controllers\KunalApiController::class, 'changemtu']);
+        Route::get('getmtu/{hostname}', [App\Api\Controllers\KunalApiController::class, 'getmtu'])->name('getmtu');
+        Route::get('getlldp/{hostname}', [App\Api\Controllers\KunalApiController::class, 'getlldp'])->name('getlldp');
 
 
 

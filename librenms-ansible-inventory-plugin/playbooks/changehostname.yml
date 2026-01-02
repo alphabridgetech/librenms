@@ -1,0 +1,62 @@
+- name: Set hostname via SSH
+  hosts: all
+  gather_facts: no
+
+  tasks:
+
+    - name: Copy Python script
+      ansible.builtin.copy:
+        dest: "/opt/librenms/librenms-ansible-inventory-plugin/tmp/set_hostname_exec.py"
+        mode: '0755'
+        content: |
+          import paramiko
+          import time
+          import sys
+
+          HOST = "{{ ansible_host }}"
+          USER = "{{ ansible_user }}"
+          PASSWORD = "{{ ansible_password }}"
+          NEW_HOSTNAME = "{{ new_hostname }}"
+
+          try:
+              ssh = paramiko.SSHClient()
+              ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+              ssh.connect(HOST, username=USER, password=PASSWORD, look_for_keys=False, allow_agent=False)
+
+              shell = ssh.invoke_shell()
+              time.sleep(1)
+
+              shell.send("enable\n")
+              time.sleep(1)
+              shell.send(PASSWORD + "\n")
+              time.sleep(1)
+
+              shell.send("config\n")
+              time.sleep(1)
+
+              shell.send(f"hostname {NEW_HOSTNAME}\n")
+              time.sleep(1)
+
+              shell.send("end\n")
+              time.sleep(1)
+
+              shell.send("write memory\n")
+              time.sleep(2)
+
+              print("SUCCESS")
+
+              ssh.close()
+
+          except Exception as e:
+              print("ERROR:", e)
+
+    - name: Run script
+      ansible.builtin.command: >
+        /opt/librenms/librenms-ansible-inventory-plugin/bin/python3
+        /opt/librenms/librenms-ansible-inventory-plugin/tmp/set_hostname_exec.py
+      register: output
+      changed_when: true
+
+    - name: Debug
+      ansible.builtin.debug:
+        var: output.stdout

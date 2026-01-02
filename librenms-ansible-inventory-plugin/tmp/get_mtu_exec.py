@@ -10,17 +10,18 @@ try:
     ssh = paramiko.SSHClient()
     ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
     ssh.connect(
-        HOST,
+        hostname=HOST,
         username=USER,
         password=PASSWORD,
+        port=22,
         look_for_keys=False,
-        allow_agent=False
+        allow_agent=False,
+        timeout=10
     )
 
     shell = ssh.invoke_shell()
     time.sleep(2)
 
-    # Flush banner
     if shell.recv_ready():
         shell.recv(65535)
 
@@ -32,8 +33,8 @@ try:
     if shell.recv_ready():
         shell.recv(65535)
 
-    shell.send("show version\n")
-    time.sleep(3)
+    shell.send("show system mtu\n")
+    time.sleep(2)
 
     output = ""
     while shell.recv_ready():
@@ -41,29 +42,20 @@ try:
 
     ssh.close()
 
-    clean_lines = []
-
+    mtu = None
     for line in output.splitlines():
         line = line.strip()
 
-        if not line:
-            continue
+        # Match: System MTU Jumbo size is 1900 bytes
+        match = re.search(r'System MTU Jumbo size is (\d+)', line)
+        if match:
+            mtu = match.group(1)
+            break
 
-        # Remove echoed commands
-        if line.lower() in ("enable", "show version"):
-            continue
-
-        # Remove ANY prompt automatically
-        if re.match(r"^[A-Za-z0-9\-_\.]+(\(.*\))?[>#]$", line):
-            continue
-
-        # Remove CLI noise
-        if "unknown command" in line.lower():
-            continue
-
-        clean_lines.append(line)
-
-    print("\n".join(clean_lines))
+    if mtu:
+        print(mtu)
+    else:
+        print("ERROR")
 
 except Exception as e:
-    print("ERROR:", e)
+    print("ERROR")
