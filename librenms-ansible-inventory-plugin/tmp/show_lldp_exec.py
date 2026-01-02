@@ -48,9 +48,13 @@ try:
     holdtime = "120"   # default
     timer = "30"       # default
     reinit = "2"       # default
+    lldp_found = False
 
     for line in output.splitlines():
         line = line.strip()
+
+        if "lldp run" in line:
+            lldp_found = True
 
         if line == "lldp run":
             protocol = "open"
@@ -66,6 +70,9 @@ try:
         m = re.match(r"lldp reinit (\d+)", line)
         if m:
             reinit = m.group(1)
+
+    if not lldp_found:
+        protocol = "close"
 
     os.makedirs(os.path.dirname(OUTPUT_FILE), exist_ok=True)
 

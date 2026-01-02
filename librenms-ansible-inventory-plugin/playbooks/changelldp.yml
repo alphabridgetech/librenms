@@ -62,6 +62,12 @@
                   shell.send(f"lldp reinit {REINIT}\n")
               else:
                   shell.send("no lldp run\n")
+                  time.sleep(1)
+                  shell.send(f"lldp holdtime {HOLDTIME}\n")
+                  time.sleep(0.5)
+                  shell.send(f"lldp timer {TIMER}\n")
+                  time.sleep(0.5)
+                  shell.send(f"lldp reinit {REINIT}\n")
 
               time.sleep(1)
               shell.send("end\n")
