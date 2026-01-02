@@ -81,7 +81,9 @@
                 </div>
 
                 <div class="panel-footer">
-                    Help: Configure global LLDP parameters on the switch
+                    Help: Means the TTL(Time to live) of sending LLDP packets. Its default value is 120s.
+                    </br>
+                    Reinit: LLDP Indicates the delay for sending consecutive packets. The default value is 2s
                 </div>
             </div>
         </div>
@@ -138,9 +140,12 @@ function loadLldpConfig() {
     })
     .then(r => r.json())
     .then(res => {
+        console.log(res);
         if (res.status !== "success") return;
 
-        document.getElementById("protocol_state").value = res.lldp.protocol;
+        const protocolState = res.lldp.protocol;
+        document.getElementById("protocol_state").value = protocolState === "close" ? "close" : "open";
+        
         document.getElementById("holdtime").value = res.lldp.holdtime;
         document.getElementById("reinit").value = res.lldp.reinit;
         document.getElementById("timer").value = res.lldp.timer;

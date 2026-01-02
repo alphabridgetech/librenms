@@ -5,7 +5,7 @@ HOST = "192.168.200.244"
 USER = "admin"
 PASSWORD = "Alpha@123#"
 
-PROTOCOL_STATE = "open"
+PROTOCOL_STATE = "close"
 HOLDTIME = "120"
 TIMER = "30"
 REINIT = "2"
@@ -46,6 +46,12 @@ try:
         shell.send(f"lldp reinit {REINIT}\n")
     else:
         shell.send("no lldp run\n")
+        time.sleep(1)
+        shell.send(f"lldp holdtime {HOLDTIME}\n")
+        time.sleep(0.5)
+        shell.send(f"lldp timer {TIMER}\n")
+        time.sleep(0.5)
+        shell.send(f"lldp reinit {REINIT}\n")
 
     time.sleep(1)
     shell.send("end\n")
