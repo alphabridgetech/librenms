@@ -38,6 +38,7 @@ class InventoryController implements DeviceTab
 
     public function __construct()
     {
+        
         if (LibrenmsConfig::get('enable_inventory')) {
             $device = DeviceCache::getPrimary();
 
