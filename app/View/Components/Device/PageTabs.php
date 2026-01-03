@@ -71,7 +71,7 @@ class PageTabs extends Component
         'qos' => \App\Http\Controllers\Device\Tabs\QosController::class,
         'latency' => \App\Http\Controllers\Device\Tabs\LatencyController::class,
         'configuration' => \App\Http\Controllers\Device\Tabs\ConfigurationController::class,
-        'alphabridge' => \App\Http\Controllers\Device\Tabs\alphabridgeController::class,
+        //'alphabridge' => \App\Http\Controllers\Device\Tabs\alphabridgeController::class,
         'nac' => \App\Http\Controllers\Device\Tabs\NacController::class,
         'notes' => \App\Http\Controllers\Device\Tabs\NotesController::class,
         'edit' => \App\Http\Controllers\Device\Tabs\EditController::class,
