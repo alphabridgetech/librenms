@@ -510,6 +510,50 @@ public function getvlan($hostname)
 }
 
 
+    public function voicevlanshow(Request $request,$hostname)
+    {
+   
+
+   $playbook = "{$this->pluginPath}/playbooks/voicevlanshow.yml";
+    $hosts    = "{$this->pluginPath}/hosts/{$hostname}.yml";
+
+    // Run Ansible
+    $ansibleOutput = $this->runAnsible($playbook, $hosts);
+
+    // YAML output file
+    $yamlFile = "{$this->pluginPath}/output/{$hostname}_voicevlanshow.yml";
+
+    if (!file_exists($yamlFile)) {
+        return $this->error(
+            "voice vlan output file not found",
+            $ansibleOutput
+        );
+    }
+
+    $data = yaml_parse_file($yamlFile);
+
+    if ($data === false || !is_array($data)) {
+        return $this->error(
+            "Failed to parse voice vlan YAML",
+            file_get_contents($yamlFile)
+        );
+    }
+
+    if (empty($data['interfaces']) || !is_array($data['interfaces'])) {
+        return $this->error(
+            "voice vlan data invalid or empty",
+            $data
+        );
+    }
+
+    return $this->success([
+        "ip"           => $data['ip'] ?? $hostname,
+        "mac_addresses" => $data['mac_addresses'] ?? null,
+        "raw"          => $data
+    ]);
+
+    }
+
 
 
 

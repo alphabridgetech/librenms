@@ -76,6 +76,7 @@ Route::prefix('v0')->group(function () {
         Route::post('changelldp/{hostname}', [App\Api\Controllers\KunalApiController::class, 'changelldp']);
         Route::get('getlldpinterface/{hostname}', [App\Api\Controllers\KunalApiController::class, 'getlldpinterface'])->name('getlldpinterface');
         Route::post('vlandelete/{hostname}', [App\Api\Controllers\KunalApiController::class, 'vlandelete'])->name('vlandelete');
+        Route::post('voicevlanshow/{hostname}', [App\Api\Controllers\KunalApiController::class, 'voicevlanshow'])->name('voicevlanshow');
 
 
 

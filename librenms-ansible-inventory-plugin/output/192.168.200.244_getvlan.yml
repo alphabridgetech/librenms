@@ -131,24 +131,6 @@ vlans:
     name: VLAN0130
     ports: []
     status: Static
--   id: '132'
-    name: kunaltest
-    ports: []
-    status: Static
--   id: '133'
-    name: testkunal
-    ports:
-    - g0/1
-    - g0/3
-    - g0/6
-    - g0/8
-    - g0/10
-    - g0/11
-    - g0/12
-    - g0/14
-    - g0/15
-    - g0/22
-    status: Static
 -   id: '134'
     name: VLAN0134
     ports: []

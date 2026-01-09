@@ -50,7 +50,7 @@
                         </th>
                         <th>VLAN ID</th>
                         <th>VLAN Name</th>
-                        <th width="80">Operate</th>
+                        {{-- <th width="80">Operate</th> --}}
                     </tr>
                 </thead>
             </table>
@@ -304,19 +304,19 @@
             {
                 data: "name"
             },
-            {
-                data: null,
-                orderable: false,
-                render: function(row) {
-                    return `
-                    <button class="btn btn-xs btn-info edit-vlan"
-                        data-id="${row.id}"
-                        data-name="${row.name}">
-                        Edit
-                    </button>
-                `;
-                }
-            }
+            // {
+            //     data: null,
+            //     orderable: false,
+            //     render: function(row) {
+            //         return `
+            //         <button class="btn btn-xs btn-info edit-vlan"
+            //             data-id="${row.id}"
+            //             data-name="${row.name}">
+            //             Edit
+            //         </button>
+            //     `;
+            //     }
+            // }
         ],
         order: [
             [1, "asc"]
