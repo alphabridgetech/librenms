@@ -58,7 +58,7 @@
 
             <div class="row" style="margin-top:10px;">
                 <div class="col-sm-6">
-                    <label><input id="selectAllLabel" type="checkbox"> Select All / None</label>
+                    
                 </div>
                 <div class="col-sm-6 text-right">
                     <button id="batchDeleteBtn" class="btn btn-danger btn-sm">Batch Delete</button>
@@ -380,21 +380,38 @@
         $('.row-check').prop('checked', this.checked);
     });
 
-    $('#batchDeleteBtn').on('click', function() {
-        var ids = [];
+    $('#batchDeleteBtn').on('click', function () {
+    let ids = [];
 
-        $('.row-check:checked').each(function() {
-            ids.push($(this).val());
-        });
-
-        if (ids.length === 0) {
-            alert("Please select VLANs");
-            return;
-        }
-
-        // AJAX call for delete
-        console.log(ids);
+    $('.row-check:checked').each(function () {
+        ids.push($(this).val());
     });
+
+    if (ids.length === 0) {
+        alert("Please select VLANs");
+        return;
+    }
+
+    $.ajax({
+        url: "/api/v0/vlan/batch/" + DEVICE_IP,
+        method: "POST",
+        headers: {
+            "Authorization": "Bearer " + API_TOKEN,
+            "Accept": "application/json"
+        },
+        contentType: "application/json",
+        data: JSON.stringify({
+            vlan_delete: ids.join(',')   // ✅ IMPORTANT
+        }),
+        success: function (response) {
+            alert(response.message || "VLAN Deleted successfully");
+        },
+        error: function (xhr) {
+            alert(xhr.responseJSON?.message || "VLAN delete failed");
+        }
+    });
+});
+
 
 
 

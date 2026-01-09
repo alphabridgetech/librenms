@@ -292,6 +292,32 @@ public function getmtu($hostname)
 }
 
     #------------------------------------------------------------
+    #                   GET LLDP INTERFACE
+    #------------------------------------------------------------
+    public function getlldpinterface($hostname)
+{
+    $playbook = "{$this->pluginPath}/playbooks/getlldpinterface.yml";
+    $hosts    = "{$this->pluginPath}/hosts/{$hostname}.yml";
+    // Run ansible
+    $output = $this->runAnsible($playbook, $hosts);
+    // Expected output file
+    $yamlFile = "{$this->pluginPath}/output/{$hostname}_getlldpinterface.yml";
+    if (!file_exists($yamlFile)) {
+        return $this->error("LLDP Interface output file not found", $output);
+    }
+    $data = yaml_parse_file($yamlFile);
+    if (empty($data['lldp_interfaces'])) {
+        return $this->error("LLDP Interface data not found in YAML", $data);
+    }
+    return $this->success([
+        "ip"              => $data['ip'] ?? $hostname,
+        "lldp"=> $data['lldp'] ?? [],
+        "lldp_interfaces" => $data['lldp_interfaces'],
+        "raw"             => $data
+    ]);
+}
+
+    #------------------------------------------------------------
     #                     CHANGE LLDP
     #------------------------------------------------------------
     public function changelldp(Request $request, $hostname)
@@ -461,6 +487,28 @@ public function getvlan($hostname)
             "raw"     => $output
         ]);
     }
+
+    public function vlandelete(Request $request, $hostname)
+{
+    $data = $request->validate([
+        'vlan_delete' => 'required'
+    ]);
+
+    $playbook = "{$this->pluginPath}/addvlanbatch.yml";
+    $hosts    = "{$this->pluginPath}/hosts/{$hostname}.yml";
+
+    $extraVars = [
+        'vlan_delete' => $data['vlan_delete']
+    ];
+
+    $output = $this->runAnsible($playbook, $hosts, $extraVars);
+
+    return $this->success([
+        "message" => "VLAN deleted successfully",
+        "raw"     => $output
+    ]);
+}
+
 
 
 

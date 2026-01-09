@@ -74,6 +74,8 @@ Route::prefix('v0')->group(function () {
         Route::get('getmtu/{hostname}', [App\Api\Controllers\KunalApiController::class, 'getmtu'])->name('getmtu');
         Route::get('getlldp/{hostname}', [App\Api\Controllers\KunalApiController::class, 'getlldp'])->name('getlldp');
         Route::post('changelldp/{hostname}', [App\Api\Controllers\KunalApiController::class, 'changelldp']);
+        Route::get('getlldpinterface/{hostname}', [App\Api\Controllers\KunalApiController::class, 'getlldpinterface'])->name('getlldpinterface');
+        Route::post('vlandelete/{hostname}', [App\Api\Controllers\KunalApiController::class, 'vlandelete'])->name('vlandelete');
 
 
 

@@ -5,22 +5,34 @@
 
   vars:
     output_dir: "/opt/librenms/librenms-ansible-inventory-plugin/output"
+    script_path: "/opt/librenms/librenms-ansible-inventory-plugin/tmp/show_lldp_exec.py"
+    python_bin: "/opt/librenms/librenms-ansible-inventory-plugin/bin/python3"
 
   tasks:
+
     - name: Copy Python LLDP SHOW script
       ansible.builtin.copy:
-        dest: "/opt/librenms/librenms-ansible-inventory-plugin/tmp/show_lldp_exec.py"
+        dest: "{{ script_path }}"
         mode: "0755"
         content: |
           import paramiko
           import time
           import re
           import os
+          import sys
 
           HOST = "{{ ansible_host }}"
           USER = "{{ ansible_user }}"
           PASSWORD = "{{ ansible_password }}"
           OUTPUT_FILE = "{{ output_dir }}/{{ ansible_host }}_getlldp.yml"
+
+          def read_channel(chan, wait=1):
+              time.sleep(wait)
+              output = ""
+              while chan.recv_ready():
+                  output += chan.recv(65535).decode(errors="ignore")
+                  time.sleep(0.2)
+              return output
 
           try:
               ssh = paramiko.SSHClient()
@@ -35,43 +47,34 @@
               )
 
               shell = ssh.invoke_shell()
-              time.sleep(2)
-
-              if shell.recv_ready():
-                  shell.recv(65535)
+              read_channel(shell, 2)
 
               shell.send("enable\n")
-              time.sleep(1)
+              read_channel(shell, 1)
               shell.send(PASSWORD + "\n")
-              time.sleep(1)
+              read_channel(shell, 1)
 
-              if shell.recv_ready():
-                  shell.recv(65535)
+              shell.send("terminal length 0\n")
+              read_channel(shell, 1)
 
               shell.send("show running-config non-interface\n")
-              time.sleep(2)
-
-              output = ""
-              while shell.recv_ready():
-                  output += shell.recv(65535).decode(errors="ignore")
+              output = read_channel(shell, 3)
 
               ssh.close()
 
-              # ✅ DEFAULT VALUES
+              # ---------- DEFAULT VALUES ----------
               protocol = "close"
-              holdtime = "120"   # default
-              timer = "30"       # default
-              reinit = "2"       # default
+              holdtime = "120"
+              timer = "30"
+              reinit = "2"
               lldp_found = False
 
               for line in output.splitlines():
                   line = line.strip()
 
-                  if "lldp run" in line:
-                      lldp_found = True
-
                   if line == "lldp run":
                       protocol = "open"
+                      lldp_found = True
 
                   m = re.match(r"lldp holdtime (\d+)", line)
                   if m:
@@ -103,12 +106,11 @@
           except Exception as e:
               print("ERROR")
               print(str(e))
+              sys.exit(1)
 
     - name: Run LLDP SHOW script
       ansible.builtin.command:
-        cmd: >
-          /opt/librenms/librenms-ansible-inventory-plugin/bin/python3
-          /opt/librenms/librenms-ansible-inventory-plugin/tmp/show_lldp_exec.py
+        cmd: "{{ python_bin }} {{ script_path }}"
       register: lldp_output
       changed_when: false
       failed_when: "'ERROR' in lldp_output.stdout"
@@ -116,4 +118,3 @@
     - name: Display LLDP output
       ansible.builtin.debug:
         msg: "{{ lldp_output.stdout }}"
-

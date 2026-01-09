@@ -5,7 +5,7 @@ HOST = "192.168.200.244"
 USER = "admin"
 PASSWORD = "Alpha@123#"
 
-PROTOCOL_STATE = "close"
+PROTOCOL_STATE = "open"
 HOLDTIME = "120"
 TIMER = "30"
 REINIT = "2"

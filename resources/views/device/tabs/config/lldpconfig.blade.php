@@ -1,15 +1,26 @@
 <style>
-.spinner-border {
-    width: 16px;
-    height: 16px;
-    border: 2px solid #fff;
-    border-right-color: transparent;
-    border-radius: 50%;
-    display: inline-block;
-    animation: spin 0.75s linear infinite;
-}
-@keyframes spin { 100% { transform: rotate(360deg); } }
+    .spinner-border {
+        width: 16px;
+        height: 16px;
+        border: 2px solid #fff;
+        border-right-color: transparent;
+        border-radius: 50%;
+        display: inline-block;
+        animation: spin 0.75s linear infinite;
+    }
+
+    @keyframes spin {
+        100% {
+            transform: rotate(360deg);
+        }
+    }
 </style>
+
+<link rel="stylesheet" href="//cdn.datatables.net/1.10.25/css/dataTables.bootstrap.min.css">
+
+<script src="//cdn.datatables.net/1.10.25/js/jquery.dataTables.min.js"></script>
+<script src="//cdn.datatables.net/1.10.25/js/dataTables.bootstrap.min.js"></script>
+
 
 <div class="container" style="margin-top:30px;">
     <ul class="nav nav-tabs">
@@ -71,7 +82,8 @@
                         <!-- Apply -->
                         <div class="form-group">
                             <div class="col-sm-offset-3 col-sm-6">
-                                <button type="button" id="applyBtn" class="btn btn-primary" onclick="applyLldpConfig()">
+                                <button type="button" id="applyBtn" class="btn btn-primary"
+                                    onclick="applyLldpConfig()">
                                     Apply
                                 </button>
                             </div>
@@ -88,119 +100,236 @@
             </div>
         </div>
 
-        <div class="tab-pane" id="lldp_interface_config"></div>
+        <div class="tab-pane" id="lldp_interface_config">
+            <button class="btn btn-primary" id="btnAddVlan">
+                <i class="glyphicon glyphicon-plus"></i> Add
+            </button>
+            <div class="row" style="margin-top:15px;">
+                <div class="col-sm-6">
+                    <p id="pagingInfo" class="small-muted">Loading...</p>
+                </div>
+            </div>
+
+            <table id="lldpinterfaceTable" class="table table-striped table-bordered table-condensed">
+                <thead>
+                    <tr>
+                        <th width="40">
+                            <input type="checkbox" id="selectAll">
+                        </th>
+                        <th>Port</th>
+                        <th>Receive LLDP Packet</th>
+                        <th>Send LLDP Packet</th>
+                        <th>Management-IP</th>
+                    </tr>
+                </thead>
+            </table>
+
+
+            <div class="row" style="margin-top:10px;">
+                <div class="col-sm-6">
+                    <label><input id="selectAllLabel" type="checkbox"> Select All / None</label>
+                </div>
+                <div class="col-sm-6 text-right">
+                    <button id="batchDeleteBtn" class="btn btn-danger btn-sm">Batch Delete</button>
+                </div>
+            </div>
+
+            <div class="alert alert-info" style="margin-top:20px;">
+                <ul>
+                    {{-- <li>lldp interface configuration</li> --}}
+                </ul>
+            </div>
+
+        </div>
     </div>
 </div>
 
 <script>
-/* -----------------------
+    /* -----------------------
    COOKIE HELPERS
 ----------------------- */
-function setCookie(name, value, days = 7) {
-    const d = new Date();
-    d.setTime(d.getTime() + (days * 86400000));
-    document.cookie = name + "=" + encodeURIComponent(value) + ";expires=" + d.toUTCString() + ";path=/";
-}
+    function setCookie(name, value, days = 7) {
+        const d = new Date();
+        d.setTime(d.getTime() + (days * 86400000));
+        document.cookie = name + "=" + encodeURIComponent(value) + ";expires=" + d.toUTCString() + ";path=/";
+    }
 
-function getCookie(name) {
-    const match = document.cookie.match(new RegExp('(^| )' + name + '=([^;]+)'));
-    return match ? decodeURIComponent(match[2]) : null;
-}
+    function getCookie(name) {
+        const match = document.cookie.match(new RegExp('(^| )' + name + '=([^;]+)'));
+        return match ? decodeURIComponent(match[2]) : null;
+    }
 
-/* -----------------------
-   ERROR HANDLING
------------------------ */
-function showError(id, msg) {
-    const el = document.getElementById(id);
-    el.innerText = msg;
-    el.style.display = "block";
-}
-function clearErrors() {
-    ["holdtime_error", "reinit_error", "timer_error"].forEach(id => {
-        document.getElementById(id).style.display = "none";
-    });
-}
+    /* -----------------------
+       ERROR HANDLING
+    ----------------------- */
+    function showError(id, msg) {
+        const el = document.getElementById(id);
+        el.innerText = msg;
+        el.style.display = "block";
+    }
 
-/* -----------------------
-   CONSTANTS
------------------------ */
-const DEVICE_IP = "{{ $device->hostname }}";
-const API_TOKEN = "{{ $data['api_token'] }}";
-const COOKIE_PREFIX = DEVICE_IP + "_";
+    function clearErrors() {
+        ["holdtime_error", "reinit_error", "timer_error"].forEach(id => {
+            document.getElementById(id).style.display = "none";
+        });
+    }
 
-/* -----------------------
-   LOAD LLDP CONFIG
------------------------ */
-function loadLldpConfig() {
-    fetch(`/api/v0/getlldp/${DEVICE_IP}`, {
+    /* -----------------------
+       CONSTANTS
+    ----------------------- */
+    const DEVICE_IP = "{{ $device->hostname }}";
+    const API_TOKEN = "{{ $data['api_token'] }}";
+    const COOKIE_PREFIX = DEVICE_IP + "_";
+
+    /* -----------------------
+       LOAD LLDP CONFIG
+    ----------------------- */
+    function loadLldpConfig() {
+        fetch(`/api/v0/getlldp/${DEVICE_IP}`, {
+                headers: {
+                    "Authorization": "Bearer " + API_TOKEN,
+                    "Accept": "application/json"
+                }
+            })
+            .then(r => r.json())
+            .then(res => {
+                console.log(res);
+                if (res.status !== "success") return;
+
+                const protocolState = res.lldp.protocol;
+                document.getElementById("protocol_state").value = protocolState === "close" ? "close" : "open";
+
+                document.getElementById("holdtime").value = res.lldp.holdtime;
+                document.getElementById("reinit").value = res.lldp.reinit;
+                document.getElementById("timer").value = res.lldp.timer;
+
+                setCookie(COOKIE_PREFIX + "lldp", JSON.stringify(res.lldp));
+            });
+    }
+
+
+    var globalLLDP = false;
+
+var lldpinterfaceTable = $('#lldpinterfaceTable').DataTable({
+    processing: true,
+    serverSide: false,
+    ajax: {
+        url: "/api/v0/getlldpinterface/" + DEVICE_IP,
+        type: "GET",
         headers: {
             "Authorization": "Bearer " + API_TOKEN,
-            "Accept": "application/json"
-        }
-    })
-    .then(r => r.json())
-    .then(res => {
-        console.log(res);
-        if (res.status !== "success") return;
-
-        const protocolState = res.lldp.protocol;
-        document.getElementById("protocol_state").value = protocolState === "close" ? "close" : "open";
-        
-        document.getElementById("holdtime").value = res.lldp.holdtime;
-        document.getElementById("reinit").value = res.lldp.reinit;
-        document.getElementById("timer").value = res.lldp.timer;
-
-        setCookie(COOKIE_PREFIX + "lldp", JSON.stringify(res.lldp));
-    });
-}
-
-/* -----------------------
-   APPLY LLDP CONFIG
------------------------ */
-function applyLldpConfig() {
-    clearErrors();
-
-    const btn = document.getElementById("applyBtn");
-    btn.disabled = true;
-    btn.innerHTML = '<span class="spinner-border"></span> Applying...';
-
-    const payload = {
-        protocol_state: document.getElementById("protocol_state").value,
-        holdtime: +document.getElementById("holdtime").value,
-        reinit: +document.getElementById("reinit").value,
-        timer: +document.getElementById("timer").value
-    };
-
-    fetch(`/api/v0/changelldp/${DEVICE_IP}`, {
-        method: "POST",
-        headers: {
-            "Authorization": "Bearer " + API_TOKEN,
-            "Content-Type": "application/json",
             "Accept": "application/json"
         },
-        body: JSON.stringify(payload)
-    })
-    .then(r => r.json())
-    .then(res => {
-        btn.disabled = false;
-        btn.innerHTML = "Apply";
+        dataSrc: function (json) {
+            // 🔥 capture global lldp status
+            globalLLDP = json.lldp === true;
 
-        if (res.status === "success") {
-            alert("LLDP configuration updated successfully");
-            setCookie(COOKIE_PREFIX + "lldp", JSON.stringify(payload));
-        } else if (res.errors) {
-            if (res.errors.holdtime) showError("holdtime_error", res.errors.holdtime[0]);
-            if (res.errors.reinit) showError("reinit_error", res.errors.reinit[0]);
-            if (res.errors.timer) showError("timer_error", res.errors.timer[0]);
+            if (json.lldp_interfaces) {
+                return json.lldp_interfaces;
+            }
+            return json;
         }
-    })
-    .catch(() => {
-        btn.disabled = false;
-        btn.innerHTML = "Apply";
-        alert("Request failed");
-    });
-}
+    },
+    columns: [
+        {
+            data: "id",
+            orderable: false,
+            render: function (data) {
+                return '<input type="checkbox" class="row-check" value="' + data + '">';
+            }
+        },
+        { data: "port" },
 
-/* AUTO LOAD */
-loadLldpConfig();
+        /* RECEIVE LLDP */
+        {
+            data: "receive",
+            render: function (data, type, row) {
+                let disabled = globalLLDP ? "" : "disabled";
+
+                return `
+                    <select class="form-select form-select-sm lldp-receive"
+                            data-id="${row.id}" ${disabled}>
+                        <option value="Enable" ${data === "Enable" ? "selected" : ""}>Enable</option>
+                        <option value="Disable" ${data === "Disable" ? "selected" : ""}>Disable</option>
+                    </select>
+                `;
+            }
+        },
+
+        /* SEND LLDP */
+        {
+            data: "send",
+            render: function (data, type, row) {
+                let disabled = globalLLDP ? "" : "disabled";
+
+                return `
+                    <select class="form-select form-select-sm lldp-send"
+                            data-id="${row.id}" ${disabled}>
+                        <option value="Enable" ${data === "Enable" ? "selected" : ""}>Enable</option>
+                        <option value="Disable" ${data === "Disable" ? "selected" : ""}>Disable</option>
+                    </select>
+                `;
+            }
+        },
+
+        { data: "management_ip" }
+    ],
+    order: [[1, "asc"]],
+    lengthMenu: [10, 25, 50, 100],
+    language: {
+        emptyTable: "No LLDP interfaces found"
+    }
+});
+
+
+
+    /* -----------------------
+       APPLY LLDP CONFIG
+    ----------------------- */
+    function applyLldpConfig() {
+        clearErrors();
+
+        const btn = document.getElementById("applyBtn");
+        btn.disabled = true;
+        btn.innerHTML = '<span class="spinner-border"></span> Applying...';
+
+        const payload = {
+            protocol_state: document.getElementById("protocol_state").value,
+            holdtime: +document.getElementById("holdtime").value,
+            reinit: +document.getElementById("reinit").value,
+            timer: +document.getElementById("timer").value
+        };
+
+        fetch(`/api/v0/changelldp/${DEVICE_IP}`, {
+                method: "POST",
+                headers: {
+                    "Authorization": "Bearer " + API_TOKEN,
+                    "Content-Type": "application/json",
+                    "Accept": "application/json"
+                },
+                body: JSON.stringify(payload)
+            })
+            .then(r => r.json())
+            .then(res => {
+                btn.disabled = false;
+                btn.innerHTML = "Apply";
+
+                if (res.status === "success") {
+                    alert("LLDP configuration updated successfully");
+                    setCookie(COOKIE_PREFIX + "lldp", JSON.stringify(payload));
+                } else if (res.errors) {
+                    if (res.errors.holdtime) showError("holdtime_error", res.errors.holdtime[0]);
+                    if (res.errors.reinit) showError("reinit_error", res.errors.reinit[0]);
+                    if (res.errors.timer) showError("timer_error", res.errors.timer[0]);
+                }
+            })
+            .catch(() => {
+                btn.disabled = false;
+                btn.innerHTML = "Apply";
+                alert("Request failed");
+            });
+    }
+
+    /* AUTO LOAD */
+    loadLldpConfig();
 </script>

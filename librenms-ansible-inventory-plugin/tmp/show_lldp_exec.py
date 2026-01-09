@@ -2,11 +2,20 @@ import paramiko
 import time
 import re
 import os
+import sys
 
 HOST = "192.168.200.244"
 USER = "admin"
 PASSWORD = "Alpha@123#"
 OUTPUT_FILE = "/opt/librenms/librenms-ansible-inventory-plugin/output/192.168.200.244_getlldp.yml"
+
+def read_channel(chan, wait=1):
+    time.sleep(wait)
+    output = ""
+    while chan.recv_ready():
+        output += chan.recv(65535).decode(errors="ignore")
+        time.sleep(0.2)
+    return output
 
 try:
     ssh = paramiko.SSHClient()
@@ -21,43 +30,34 @@ try:
     )
 
     shell = ssh.invoke_shell()
-    time.sleep(2)
-
-    if shell.recv_ready():
-        shell.recv(65535)
+    read_channel(shell, 2)
 
     shell.send("enable\n")
-    time.sleep(1)
+    read_channel(shell, 1)
     shell.send(PASSWORD + "\n")
-    time.sleep(1)
+    read_channel(shell, 1)
 
-    if shell.recv_ready():
-        shell.recv(65535)
+    shell.send("terminal length 0\n")
+    read_channel(shell, 1)
 
     shell.send("show running-config non-interface\n")
-    time.sleep(2)
-
-    output = ""
-    while shell.recv_ready():
-        output += shell.recv(65535).decode(errors="ignore")
+    output = read_channel(shell, 3)
 
     ssh.close()
 
-    # ✅ DEFAULT VALUES
+    # ---------- DEFAULT VALUES ----------
     protocol = "close"
-    holdtime = "120"   # default
-    timer = "30"       # default
-    reinit = "2"       # default
+    holdtime = "120"
+    timer = "30"
+    reinit = "2"
     lldp_found = False
 
     for line in output.splitlines():
         line = line.strip()
 
-        if "lldp run" in line:
-            lldp_found = True
-
         if line == "lldp run":
             protocol = "open"
+            lldp_found = True
 
         m = re.match(r"lldp holdtime (\d+)", line)
         if m:
@@ -89,3 +89,4 @@ try:
 except Exception as e:
     print("ERROR")
     print(str(e))
+    sys.exit(1)

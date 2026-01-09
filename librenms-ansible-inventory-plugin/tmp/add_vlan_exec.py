@@ -4,11 +4,11 @@ import time
 import sys
 import traceback
 
-HOST = "192.168.200.245"
+HOST = "192.168.200.244"
 USER = "admin"
-PASSWORD = "admin"
-VLAN_ID = "201"
-VLAN_NAME = "VLAN02001"
+PASSWORD = "Alpha@123#"
+VLAN_ID = "1432"
+VLAN_NAME = "testing"
 
 CONNECT_TIMEOUT = 15
 POLL_INTERVAL = 0.2
