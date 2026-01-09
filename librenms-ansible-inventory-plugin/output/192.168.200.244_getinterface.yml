@@ -1,5 +1,5 @@
 count: 22
-current_time: '2026-01-02 13:03:09'
+current_time: '2026-01-09 17:21:16'
 interfaces:
 -   duplex: auto
     name: g0/1
@@ -12,7 +12,7 @@ interfaces:
     speed: auto
     status: down
     type: Giga-TX
-    vlan: '300'
+    vlan: '1'
 -   duplex: auto
     name: g0/3
     speed: auto
@@ -31,10 +31,10 @@ interfaces:
     status: down
     type: Giga-TX
     vlan: '200'
--   duplex: auto
+-   duplex: full
     name: g0/6
-    speed: auto
-    status: down
+    speed: 1000Mb
+    status: up
     type: Giga-TX
     vlan: Trunk(1)
 -   duplex: auto
@@ -60,7 +60,7 @@ interfaces:
     speed: auto
     status: down
     type: Giga-TX
-    vlan: '300'
+    vlan: Trunk(1)
 -   duplex: auto
     name: g0/11
     speed: auto
@@ -97,10 +97,10 @@ interfaces:
     status: down
     type: Giga-TX
     vlan: '200'
--   duplex: auto
+-   duplex: full
     name: g0/17
-    speed: auto
-    status: down
+    speed: 100Mb
+    status: up
     type: Giga-TX
     vlan: '200'
 -   duplex: auto
@@ -132,6 +132,6 @@ interfaces:
     speed: 100Mb
     status: up
     type: Giga-TX
-    vlan: '200'
+    vlan: Trunk(1)
 ip: 192.168.200.244
 status: success

@@ -2,7 +2,8 @@ ip: 192.168.200.244
 vlans:
 -   id: '1'
     name: Default
-    ports: []
+    ports:
+    - g0/2
     status: Static
 -   id: '100'
     name: VLAN0100
@@ -30,10 +31,6 @@ vlans:
     name: VLAN0105
     ports: []
     status: Static
--   id: '106'
-    name: VLAN0106
-    ports: []
-    status: Static
 -   id: '107'
     name: VLAN0107
     ports: []
@@ -52,7 +49,10 @@ vlans:
     status: Static
 -   id: '111'
     name: VLAN0111
-    ports: []
+    ports:
+    - g0/6
+    - g0/10
+    - g0/22
     status: Static
 -   id: '112'
     name: VLAN0112
@@ -131,17 +131,23 @@ vlans:
     name: VLAN0130
     ports: []
     status: Static
--   id: '131'
-    name: k
-    ports: []
-    status: Static
 -   id: '132'
     name: kunaltest
     ports: []
     status: Static
 -   id: '133'
-    name: VLAN0133
-    ports: []
+    name: testkunal
+    ports:
+    - g0/1
+    - g0/3
+    - g0/6
+    - g0/8
+    - g0/10
+    - g0/11
+    - g0/12
+    - g0/14
+    - g0/15
+    - g0/22
     status: Static
 -   id: '134'
     name: VLAN0134
@@ -414,7 +420,6 @@ vlans:
     - g0/3
     - g0/4
     - g0/5
-    - g0/6
     - g0/7
     - g0/8
     - g0/9
@@ -436,14 +441,6 @@ vlans:
 -   id: '250'
     name: VLAN0250
     ports: []
-    status: Static
--   id: '300'
-    name: VLAN0300
-    ports:
-    - g0/2
-    - g0/10
-    - g0/11
-    - g0/12
     status: Static
 -   id: '4082'
     name: harshita
