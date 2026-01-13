@@ -163,10 +163,6 @@ vlans:
     name: VLAN0141
     ports: []
     status: Static
--   id: '142'
-    name: VLAN0142
-    ports: []
-    status: Static
 -   id: '143'
     name: VLAN0143
     ports: []

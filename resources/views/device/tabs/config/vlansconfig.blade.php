@@ -45,7 +45,7 @@
             <table id="vlanTable" class="table table-striped table-bordered table-condensed">
                 <thead>
                     <tr>
-                        <th width="40">
+                        <th>
                             <input type="checkbox" id="selectAll">
                         </th>
                         <th>VLAN ID</th>
@@ -58,7 +58,7 @@
 
             <div class="row" style="margin-top:10px;">
                 <div class="col-sm-6">
-                    
+
                 </div>
                 <div class="col-sm-6 text-right">
                     <button id="batchDeleteBtn" class="btn btn-danger btn-sm">Batch Delete</button>
@@ -166,21 +166,21 @@
                 </div>
             </div>
 
-           <table id="interfaceTable" class="table table-striped table-bordered table-condensed">
-    <thead>
-        <tr>
-            <th width="40">
-                <input type="checkbox" id="selectAll">
-            </th>
-            <th>Port</th>
-            <th>Status</th>
-            <th>Vlan</th>
-            <th>Duplex</th>
-            <th>Speed</th>
-            <th width="80">Type</th>
-        </tr>
-    </thead>
-</table>
+            <table id="interfaceTable" class="table table-striped table-bordered table-condensed">
+                <thead>
+                    <tr>
+                        <th width="40">
+                            <input type="checkbox" id="selectAll">
+                        </th>
+                        <th>Port</th>
+                        <th>Status</th>
+                        <th>Vlan</th>
+                        <th>Duplex</th>
+                        <th>Speed</th>
+                        <th>Type</th>
+                    </tr>
+                </thead>
+            </table>
 
 
 
@@ -195,7 +195,8 @@
 
             <div class="alert alert-info" style="margin-top:20px;">
                 <ul>
-                    <li>VLAN-allowed and VLAN-untagged: (1-4094), such as (1,3,5,7) Or (1,3-5,7) Or (1-7) Or (1 3,5 7-9)</li>
+                    <li>VLAN-allowed and VLAN-untagged: (1-4094), such as (1,3,5,7) Or (1,3-5,7) Or (1-7) Or (1 3,5 7-9)
+                    </li>
                 </ul>
             </div>
         </div>
@@ -204,7 +205,45 @@
 
 
         <div class="tab-pane" id="voice_vlan">
-            <h4>Voice VLAN</h4>
+            <button class="btn btn-primary" id="btnAddvoiceVlan">
+                <i class="glyphicon glyphicon-plus"></i> Add
+            </button>
+            <div class="row" style="margin-top:15px;">
+                <div class="col-sm-6">
+                    <p id="pagingInfo" class="small-muted">Loading...</p>
+                </div>
+            </div>
+
+            <table id="voicevlanTable" class="table table-striped table-bordered table-condensed">
+                <thead>
+                    <tr>
+                        <th>
+                            <input type="checkbox" id="selectAll">
+                        </th>
+                        <th>MAC Address</th>
+                        <th>MAC MASK</th>
+                        {{-- <th width="80">Operate</th> --}}
+                    </tr>
+                </thead>
+            </table>
+
+
+            <div class="row" style="margin-top:10px;">
+                <div class="col-sm-6">
+
+                </div>
+                <div class="col-sm-6 text-right">
+                    <button id="batchVoicevlanDeleteBtn" class="btn btn-danger btn-sm">Batch Delete</button>
+                </div>
+            </div>
+
+            <div class="alert alert-info" style="margin-top:20px;">
+                <ul>
+                    <li> </li>
+
+                </ul>
+            </div>
+
         </div>
         <div class="tab-pane" id="interface_voice_vlan">
             <h4>Interface Voice VLAN</h4>
@@ -327,45 +366,101 @@
         }
     });
 
+    /* ---------------------
+    voice vlan show
+    -----------------------*/
+
+    var voicevlanTable = $('#voicevlanTable').DataTable({
+        processing: true,
+        serverSide: false,
+        ajax: {
+            url: "/api/v0/voicevlanshow/" + DEVICE_IP,
+            type: "GET",
+            headers: {
+                "Authorization": "Bearer " + API_TOKEN,
+                "Accept": "application/json"
+            },
+            dataSrc: function(json) {
+                return json.mac_addresses ?? json;
+            }
+        },
+        columns: [{
+                data: null,
+                orderable: false,
+                render: function(data, type, row) {
+                    return `<input type="checkbox" class="row-check voice" data-mac="${row.mac}"
+                    data-mask="${row.mask}">`;
+                }
+            },
+            {
+                data: "mac"
+            },
+            {
+                data: "mask"
+            }
+        ],
+        order: [
+            [1, "asc"]
+        ],
+        lengthMenu: [10, 25, 50, 100],
+        language: {
+            emptyTable: "No Voice Vlan found"
+        }
+    });
+
+
 
     /* -----------------------
        HANDLE EDIT BUTTON
     ----------------------- */
     var interfaceTable = $('#interfaceTable').DataTable({
-    processing: true,
-    serverSide: false,
-    ajax: {
-        url: "/api/v0/vlan/interface/" + DEVICE_IP,
-        type: "GET",
-        headers: {
-            "Authorization": "Bearer " + API_TOKEN,
-            "Accept": "application/json"
-        },
-        dataSrc: function (json) {
-            return json.interfaces || [];
-        }
-    },
-    columns: [
-        {
-            data: "name",
-            orderable: false,
-            render: function (data) {
-                return `<input type="checkbox" class="row-check" value="${data}">`;
+        processing: true,
+        serverSide: false,
+        ajax: {
+            url: "/api/v0/vlan/interface/" + DEVICE_IP,
+            type: "GET",
+            headers: {
+                "Authorization": "Bearer " + API_TOKEN,
+                "Accept": "application/json"
+            },
+            dataSrc: function(json) {
+                return json.interfaces || [];
             }
         },
-        { data: "name" },          // Port
-        { data: "status" },        // Status
-        { data: "vlan" },          // VLAN
-        { data: "duplex" },        // Duplex
-        { data: "speed" },         // Speed
-        { data: "type" }           // Type
-    ],
-    order: [[1, "asc"]],
-    lengthMenu: [10, 25, 50, 100],
-    language: {
-        emptyTable: "No interfaces found"
-    }
-});
+        columns: [{
+                data: "name",
+                orderable: false,
+                render: function(data) {
+                    return `<input type="checkbox" class="row-check" value="${data}">`;
+                }
+            },
+            {
+                data: "name"
+            }, // Port
+            {
+                data: "status"
+            }, // Status
+            {
+                data: "vlan"
+            }, // VLAN
+            {
+                data: "duplex"
+            }, // Duplex
+            {
+                data: "speed"
+            }, // Speed
+            {
+                data: "type"
+            } // Type
+        ],
+        order: [
+            [1, "asc"]
+        ],
+        lengthMenu: [10, 25, 50, 100],
+        language: {
+            emptyTable: "No interfaces found"
+        }
+    });
 
 
     /* -----------------------
@@ -380,37 +475,80 @@
         $('.row-check').prop('checked', this.checked);
     });
 
-    $('#batchDeleteBtn').on('click', function () {
-    let ids = [];
+    $('#batchDeleteBtn').on('click', function() {
+        let ids = [];
 
-    $('.row-check:checked').each(function () {
-        ids.push($(this).val());
-    });
+        $('.row-check:checked').each(function() {
+            ids.push($(this).val());
+        });
 
-    if (ids.length === 0) {
-        alert("Please select VLANs");
-        return;
-    }
-
-    $.ajax({
-        url: "/api/v0/vlan/batch/" + DEVICE_IP,
-        method: "POST",
-        headers: {
-            "Authorization": "Bearer " + API_TOKEN,
-            "Accept": "application/json"
-        },
-        contentType: "application/json",
-        data: JSON.stringify({
-            vlan_delete: ids.join(',')   // ✅ IMPORTANT
-        }),
-        success: function (response) {
-            alert(response.message || "VLAN Deleted successfully");
-        },
-        error: function (xhr) {
-            alert(xhr.responseJSON?.message || "VLAN delete failed");
+        if (ids.length === 0) {
+            alert("Please select VLANs");
+            return;
         }
+
+        $.ajax({
+            url: "/api/v0/vlan/batch/" + DEVICE_IP,
+            method: "POST",
+            headers: {
+                "Authorization": "Bearer " + API_TOKEN,
+                "Accept": "application/json"
+            },
+            contentType: "application/json",
+            data: JSON.stringify({
+                vlan_delete: ids.join(',') // ✅ IMPORTANT
+            }),
+            success: function(response) {
+                alert(response.message || "VLAN Deleted successfully");
+            },
+            error: function(xhr) {
+                alert(xhr.responseJSON?.message || "VLAN delete failed");
+            }
+        });
     });
-});
+
+
+    $('#batchVoicevlanDeleteBtn').on('click', function() {
+
+        let macs = [];
+        let masks = [];
+
+        $('.row-check.voice:checked').each(function() {
+            macs.push($(this).data('mac'));
+            masks.push($(this).data('mask'));
+        });
+
+        if (!macs.length) {
+            alert("Please select Voice VLAN");
+            return;
+        }
+
+        console.log('====================================');
+        console.log(macs);
+        console.log(masks);
+        console.log('====================================');
+
+        $.ajax({
+            url: "/api/v0/voicevlan/batch/" + DEVICE_IP,
+            type: "POST",
+            headers: {
+                "Authorization": "Bearer " + API_TOKEN,
+                "Accept": "application/json"
+            },
+            contentType: "application/json",
+            data: JSON.stringify({
+                mac: macs,
+                mask: masks
+            }),
+            success: function(res) {
+                alert(res.message || "Voice VLAN deleted");
+                voicevlanTable.ajax.reload(null, false);
+            }
+        });
+    });
+
+
+
 
 
 

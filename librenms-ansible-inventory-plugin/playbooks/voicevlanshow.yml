@@ -5,7 +5,7 @@
 
   vars:
     output_dir: "/opt/librenms/librenms-ansible-inventory-plugin/output"
-    script_path: "/opt/librenms/librenms-ansible-inventory-plugin/tmp/show_voice_vlan_exec.py"
+    script_path: "/opt/librenms/librenms-ansible-inventory-plugin/tmp/showvoicevlanexec.py"
     python_bin: "/opt/librenms/librenms-ansible-inventory-plugin/bin/python3"
 
   tasks:
@@ -24,7 +24,7 @@
           HOST = "{{ ansible_host }}"
           USER = "{{ ansible_user }}"
           PASSWORD = "{{ ansible_password }}"
-          OUTPUT_FILE = "{{ output_dir }}/{{ ansible_host }}_voice_vlan.yml"
+          OUTPUT_FILE = "{{ output_dir }}/{{ ansible_host }}_voicevlanshow.yml"
 
           def read_all(chan, timeout=5):
               end = time.time() + timeout
@@ -88,9 +88,7 @@
 
               with open(OUTPUT_FILE, "w") as f:
                   f.write(f"ip: {HOST}\n")
-                  f.write("voice_vlan:\n")
-                  f.write("  type: mac-based\n")
-                  f.write("  mac_addresses:\n")
+                  f.write("mac_addresses:\n")
                   for item in voice_macs:
                       f.write(f"    - mac: \"{item['mac']}\"\n")
                       f.write(f"      mask: \"{item['mask']}\"\n")

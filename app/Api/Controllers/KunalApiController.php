@@ -510,49 +510,89 @@ public function getvlan($hostname)
 }
 
 
-    public function voicevlanshow(Request $request,$hostname)
+    public function voicevlandelete(Request $request, $hostname)
     {
-   
+        // ✅ Validate arrays
+        $data = $request->validate([
+            'mac'  => 'required|array|min:1',
+            'mask' => 'required|array|min:1',
+        ]);
 
-   $playbook = "{$this->pluginPath}/playbooks/voicevlanshow.yml";
-    $hosts    = "{$this->pluginPath}/hosts/{$hostname}.yml";
+        $playbook = "{$this->pluginPath}/playbooks/voicevlanbatch.yml";
+        $hosts    = "{$this->pluginPath}/hosts/{$hostname}.yml";
 
-    // Run Ansible
-    $ansibleOutput = $this->runAnsible($playbook, $hosts);
+        $outputs = [];
 
-    // YAML output file
-    $yamlFile = "{$this->pluginPath}/output/{$hostname}_voicevlanshow.yml";
+        // ✅ Loop and delete ONE BY ONE
+        foreach ($data['mac'] as $index => $mac) {
 
-    if (!file_exists($yamlFile)) {
-        return $this->error(
-            "voice vlan output file not found",
-            $ansibleOutput
-        );
+            $mask = $data['mask'][$index] ?? null;
+            if (!$mask) {
+                continue; // safety
+            }
+
+            $extraVars = [
+                'mac'  => $mac,
+                'mask' => $mask,
+            ];
+
+            $outputs[] = [
+                'mac'    => $mac,
+                'result' => $this->runAnsible($playbook, $hosts, $extraVars),
+            ];
+        }
+
+        return $this->success([
+            "message" => "Voice VLAN deleted successfully",
+            "results" => $outputs
+        ]);
     }
 
-    $data = yaml_parse_file($yamlFile);
 
-    if ($data === false || !is_array($data)) {
-        return $this->error(
-            "Failed to parse voice vlan YAML",
-            file_get_contents($yamlFile)
-        );
+
+
+
+
+    public function voicevlanshow(Request $request, $hostname)
+    {
+        $playbook = "{$this->pluginPath}/playbooks/voicevlanshow.yml";
+        $hosts    = "{$this->pluginPath}/hosts/{$hostname}.yml";
+
+        // Run Ansible
+        $ansibleOutput = $this->runAnsible($playbook, $hosts);
+
+        // YAML output file
+        $yamlFile = "{$this->pluginPath}/output/{$hostname}_voicevlanshow.yml";
+
+        if (!file_exists($yamlFile)) {
+            return $this->error(
+                "voice vlan output file not found",
+                $ansibleOutput
+            );
+        }
+
+        $data = yaml_parse_file($yamlFile);
+
+        if ($data === false || !is_array($data)) {
+            return $this->error(
+                "Failed to parse voice vlan YAML",
+                file_get_contents($yamlFile)
+            );
+        }
+
+        // ✅ Ensure mac_addresses is always an array
+        $macAddresses = $data['mac_addresses'] ?? [];
+        if (!is_array($macAddresses)) {
+            $macAddresses = [];
+        }
+
+        return $this->success([
+            "ip"            => $data['ip'] ?? $hostname,
+            "mac_addresses" => $macAddresses,
+            "raw"           => $data
+        ]);
     }
 
-    if (empty($data['interfaces']) || !is_array($data['interfaces'])) {
-        return $this->error(
-            "voice vlan data invalid or empty",
-            $data
-        );
-    }
-
-    return $this->success([
-        "ip"           => $data['ip'] ?? $hostname,
-        "mac_addresses" => $data['mac_addresses'] ?? null,
-        "raw"          => $data
-    ]);
-
-    }
 
 
 

@@ -35,6 +35,8 @@ use LibreNMS\Util\Smokeping;
 
 class ChatbotController implements DeviceTab
 {
+    
+    
     public function visible(Device $device): bool
     {
         return LibrenmsConfig::get('smokeping.integration') || $device->getAttrib('override_icmp_disable') !== 'true';
