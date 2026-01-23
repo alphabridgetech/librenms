@@ -10,11 +10,13 @@ class KunalApiController
 {
     private string $venv;
     private string $pluginPath;
+    private string $tftpPath;
 
     public function __construct()
     {
         $this->venv = base_path('librenms-ansible-inventory-plugin/bin/activate');
         $this->pluginPath = base_path('librenms-ansible-inventory-plugin');
+        $this->tftpPath = '/tftpboot';
     }
 
     public function __call($method_name, $arguments)
@@ -457,6 +459,48 @@ public function getvlan($hostname)
             "raw"     => $output
         ]);
     }
+
+    #------------------------------------------------------------
+    #                            tftp upload
+    #------------------------------------------------------------
+
+public function tftpupload(Request $request, $hostname)
+{
+    $data = $request->validate([
+        'tftp_server' => 'required|string',
+        'file'        => 'required|file'
+    ]);
+
+    $tftpPath = $this->tftpPath;
+
+    if (!is_dir($tftpPath)) {
+        return $this->error("TFTP directory not mounted");
+    }
+
+    $filename = $request->file('file')->getClientOriginalName();
+    
+
+    // Move file into TFTP volume
+    $request->file('file')->move($tftpPath, $filename);
+
+    $playbook = "{$this->pluginPath}/playbooks/tftpupload.yml";
+    $hosts    = "{$this->pluginPath}/hosts/{$hostname}.yml";
+
+    $output = $this->runAnsible($playbook, $hosts, [
+        "tftp_server" => $data['tftp_server'],
+        "filename"    => $filename,
+        "local_file"  => $tftpPath,
+    ]);
+
+    return $this->success([
+        "message"  => "File uploaded to /tftpboot & TFTP ready",
+        "filename" => $filename,
+        "raw"      => $output
+    ]);
+}
+
+
+
 
     #------------------------------------------------------------
     #                            Add Vlan BATCH

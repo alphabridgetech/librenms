@@ -78,6 +78,7 @@ Route::prefix('v0')->group(function () {
         Route::post('vlandelete/{hostname}', [App\Api\Controllers\KunalApiController::class, 'vlandelete'])->name('vlandelete');
         Route::get('voicevlanshow/{hostname}', [App\Api\Controllers\KunalApiController::class, 'voicevlanshow'])->name('voicevlanshow');
         Route::post('voicevlan/batch/{hostname}', [App\Api\Controllers\KunalApiController::class, 'voicevlandelete'])->name('voicevlandelete');
+        Route::post('tftpupload/{hostname}', [App\Api\Controllers\KunalApiController::class, 'tftpupload'])->name('tftpupload');
 
 
 

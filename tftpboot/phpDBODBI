@@ -1,0 +1,131 @@
+!version 2.2.0F build 148149
+service timestamps log date
+service timestamps debug date
+!
+!
+hostname AS212XTS
+!
+!
+!
+lldp run
+!
+!
+!
+!
+!
+!
+spanning-tree mode rstp
+!
+!
+!
+!
+!
+!
+!
+!
+!
+!
+!
+!
+!
+!
+!
+!
+aaa authentication login default local
+aaa authentication enable default none
+aaa authorization exec default local
+!
+username admin password 0 admin
+!
+!
+!
+no ipv6 unicast-routing
+!
+!
+interface Null0
+!
+interface GigaEthernet0/1
+!
+interface GigaEthernet0/2
+ switchport pvid 200
+!
+interface GigaEthernet0/3
+!
+interface GigaEthernet0/4
+!
+interface GigaEthernet0/5
+!
+interface GigaEthernet0/6
+!
+interface GigaEthernet0/7
+!
+interface GigaEthernet0/8
+!
+interface TGigaEthernet0/1
+!
+interface TGigaEthernet0/2
+!
+interface TGigaEthernet0/3
+!
+interface TGigaEthernet0/4
+!
+interface VLAN1
+ no ip address
+ no ip directed-broadcast
+!
+interface VLAN200
+ ip address 192.168.200.245 255.255.255.0
+ no ip directed-broadcast
+!
+!
+!
+!
+vlan 1,200
+!
+!
+!
+!
+!
+!
+!
+!
+!
+!
+!
+!
+!
+!
+!
+ip exf
+!
+ipv6 exf
+!
+!
+!
+!
+ip telnet attack-defense
+ip telnet enable
+!
+ip http server
+!
+!
+tftp-server
+!
+!
+snmp-server community 0 public RO 
+!
+!
+!
+ip sshd save
+ip sshd enable
+!
+!
+!
+!
+!
+!
+!
+!
+!Pending configurations for absent linecards:
+!
+!No configurations pending global
