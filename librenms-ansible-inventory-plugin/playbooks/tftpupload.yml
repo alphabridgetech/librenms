@@ -1,42 +1,34 @@
 ---
-- name: Show Voice VLAN (MAC-based) configuration via SSH
-  hosts: all
+- name: Upload file to device via TFTP
+  hosts: alphabridge_devices
   gather_facts: no
 
   vars:
-    output_dir: "/opt/librenms/librenms-ansible-inventory-plugin/output"
-    script_path: "/opt/librenms/librenms-ansible-inventory-plugin/tmp/showvoicevlanexec.py"
-    python_bin: "/opt/librenms/librenms-ansible-inventory-plugin/bin/python3"
+    script_path: "/opt/librenms/librenms-ansible-inventory-plugin/tmp/tftpupload_exec.py"
+    venv_python: "/opt/librenms/librenms-ansible-inventory-plugin/bin/python3"
 
   tasks:
 
-    - name: Copy Python Voice VLAN SHOW script
+    - name: Create TFTP upload Python script
       ansible.builtin.copy:
         dest: "{{ script_path }}"
         mode: "0755"
         content: |
           import paramiko
           import time
-          import os
-          import sys
-          import re
 
           HOST = "{{ ansible_host }}"
           USER = "{{ ansible_user }}"
           PASSWORD = "{{ ansible_password }}"
-          OUTPUT_FILE = "{{ output_dir }}/{{ ansible_host }}_voicevlanshow.yml"
 
-          def read_all(chan, timeout=5):
-              end = time.time() + timeout
+          TFTP_SERVER = "{{ tftp_server }}"
+          FILENAME = "{{ filename }}"
+
+          def read_all(shell, delay=1):
+              time.sleep(delay)
               output = ""
-              while time.time() < end:
-                  if chan.recv_ready():
-                      data = chan.recv(65535).decode(errors="ignore")
-                      output += data
-                      if "--More--" in data:
-                          chan.send(" ")
-                  else:
-                      time.sleep(0.2)
+              while shell.recv_ready():
+                  output += shell.recv(65535).decode(errors="ignore")
               return output
 
           try:
@@ -46,67 +38,44 @@
                   hostname=HOST,
                   username=USER,
                   password=PASSWORD,
+                  port=22,
                   look_for_keys=False,
                   allow_agent=False,
                   timeout=10
               )
 
               shell = ssh.invoke_shell()
-              time.sleep(1)
-              shell.recv(65535)
+              read_all(shell, 2)
 
               shell.send("enable\n")
-              time.sleep(0.5)
+              read_all(shell, 1)
               shell.send(PASSWORD + "\n")
-              time.sleep(0.5)
+              read_all(shell, 2)
 
-              shell.send("terminal length 0\n")
-              time.sleep(0.5)
+              # Correct device-specific TFTP command
+              shell.send(f"copy tftp:{FILENAME} flash: {TFTP_SERVER}\n")
+              output = read_all(shell, 3)
 
-              shell.send("show running-config non-interface | include voice-vlan\n")
-              output = read_all(shell, 5)
+              if "Destination file name" in output:
+                  shell.send(FILENAME + "\n")
+                  output += read_all(shell, 3)
+
+              if "successfully receive" in output.lower():
+                  print("SUCCESS")
+              else:
+                  print(output)
 
               ssh.close()
 
-              voice_macs = []
-
-              for line in output.splitlines():
-                  line = line.strip()
-                  # Example:
-                  # voice-vlan mac-address 0800.27ea.e2f5 mask ffff.ffff.ffff
-                  m = re.search(
-                      r"voice-vlan\s+mac-address\s+([0-9a-fA-F\.]+)\s+mask\s+([0-9a-fA-F\.]+)",
-                      line
-                  )
-                  if m:
-                      voice_macs.append({
-                          "mac": m.group(1),
-                          "mask": m.group(2)
-                      })
-
-              os.makedirs(os.path.dirname(OUTPUT_FILE), exist_ok=True)
-
-              with open(OUTPUT_FILE, "w") as f:
-                  f.write(f"ip: {HOST}\n")
-                  f.write("mac_addresses:\n")
-                  for item in voice_macs:
-                      f.write(f"    - mac: \"{item['mac']}\"\n")
-                      f.write(f"      mask: \"{item['mask']}\"\n")
-
-              print("SUCCESS")
-
           except Exception as e:
-              print("ERROR")
-              print(str(e))
-              sys.exit(1)
+              print("ERROR:", e)
 
-    - name: Run Voice VLAN SHOW script
+    - name: Execute TFTP upload script
       ansible.builtin.command:
-        cmd: "{{ python_bin }} {{ script_path }}"
-      register: voice_vlan_output
-      changed_when: false
-      failed_when: "'ERROR' in voice_vlan_output.stdout"
+        cmd: "{{ venv_python }} {{ script_path }}"
+      register: tftp_output
+      changed_when: true
 
-    - name: Display Voice VLAN output
+    - name: Show TFTP upload result
       ansible.builtin.debug:
-        msg: "{{ voice_vlan_output.stdout }}"
+        var: tftp_output.stdout

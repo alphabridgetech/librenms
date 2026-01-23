@@ -479,6 +479,8 @@ public function tftpupload(Request $request, $hostname)
 
     $filename = $request->file('file')->getClientOriginalName();
     
+    
+    
 
     // Move file into TFTP volume
     $request->file('file')->move($tftpPath, $filename);
