@@ -510,12 +510,7 @@ public function tftpupload(Request $request, $hostname)
     ]);
 
     $baseTftpPath = $this->tftpPath;          // e.g. /tftpboot
-    $deviceFolder = $baseTftpPath . '/' . $hostname;
-
-    // ✅ 1. Create hostname/IP folder if not exists
-    if (!is_dir($deviceFolder)) {
-        mkdir($deviceFolder, 0755, true);
-    }
+    
 
     // ✅ 2. Build final filename
     $filename = $hostname . '_' . $request->filename;
