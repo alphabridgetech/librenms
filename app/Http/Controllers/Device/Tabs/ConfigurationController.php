@@ -40,6 +40,7 @@ use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\Validator;
 use LibreNMS\Interfaces\UI\DeviceTab;
 use App\Models\ApiToken;
+use Illuminate\Support\Facades\File;
 use Illuminate\Database\Eloquent\ModelNotFoundException;
 
 class ConfigurationController implements DeviceTab
@@ -98,16 +99,35 @@ class ConfigurationController implements DeviceTab
         $data = match ($tab) {
             default => $this->portData($device, $request),
         };
+
+        /*
+    |--------------------------------------------------------------------------
+    | Read files from /tftpboot
+    |--------------------------------------------------------------------------
+    */
+    $tftpFiles = [];
+    $tftpPath  = '/tftpboot';
+
+    if (File::exists($tftpPath)) {
+        $tftpFiles = collect(File::files($tftpPath))
+            ->filter(fn ($file) => $file->isFile())
+            ->map(fn ($file) => $file->getFilename())
+            ->sort()
+            ->values()
+            ->toArray();
+    }
         
         return array_merge([
             'tab' => $tab,
             'details' => $this->detail,
+            
             'submenu' => [
                 $this->getTabs($device),
                 'Basic Configuration'  => $this->getbasicconfigTabs($device),
                 'L2 Configuration'  => $this->getl2configTabs($device),
                 'System Management'  => $this->getsysmanageconfigTabs($device),
             ],
+            'tftp_files' => $tftpFiles,
             'api_token' => $this->getUserLibreNMSToken(),
             'dropdownLinks' => $this->pageLinks($request),
             'perPage' => $this->settings['perPage'],
@@ -312,6 +332,7 @@ class ConfigurationController implements DeviceTab
         ];
 
         if ($device->macs()->exists()) {
+            $tabs[] = ['name' => __('Startup-Config'), 'url' => 'startupconfig'];
             $tabs[] = ['name' => __('Reboot'), 'url' => 'reboot'];
         }
 
