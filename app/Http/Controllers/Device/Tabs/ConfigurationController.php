@@ -116,6 +116,8 @@ class ConfigurationController implements DeviceTab
             ->values()
             ->toArray();
     }
+    $tftpServer = $request->getHost();
+
         
         return array_merge([
             'tab' => $tab,
@@ -127,6 +129,7 @@ class ConfigurationController implements DeviceTab
                 'L2 Configuration'  => $this->getl2configTabs($device),
                 'System Management'  => $this->getsysmanageconfigTabs($device),
             ],
+            'tftpServer' => $tftpServer,
             'tftp_files' => $tftpFiles,
             'api_token' => $this->getUserLibreNMSToken(),
             'dropdownLinks' => $this->pageLinks($request),

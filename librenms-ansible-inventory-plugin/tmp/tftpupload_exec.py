@@ -5,8 +5,8 @@ HOST = "192.168.200.245"
 USER = "admin"
 PASSWORD = "admin"
 
-TFTP_SERVER = "192.168.200.63"
-FILENAME = "startup-config"
+TFTP_SERVER = "192.168.200.72"
+FILENAME = "192.168.200.245_startup-config"
 
 def read_all(shell, delay=1):
     time.sleep(delay)
