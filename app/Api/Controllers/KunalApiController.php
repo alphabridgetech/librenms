@@ -542,6 +542,30 @@ public function tftpupload(Request $request, $hostname)
     ]);
 }
 
+    public function tftpexport(Request $request, $hostname)
+    {
+        
+        $request->validate([
+            'tftp_server' => 'required|string',
+            'filename'    => 'required|string',
+        ]);
+        $playbook = "{$this->pluginPath}/playbooks/tftpexport.yml";
+        $hosts    = "{$this->pluginPath}/hosts/{$hostname}.yml";
+
+        $destination_file = $hostname . '_' . $request->filename;
+
+        $output = $this->runAnsible($playbook, $hosts, [
+            "tftp_server" => $request->tftp_server,
+            "filename"    => $request->filename,
+            "destination_file" => $destination_file,
+        ]);
+        return $this->success([
+            "message"  => "TFTP export initiated",
+            "filename" => $request->filename,
+            "raw"      => $output
+        ]);
+    }
+
 
 
 

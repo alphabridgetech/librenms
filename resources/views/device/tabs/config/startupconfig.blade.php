@@ -13,7 +13,9 @@
             <div class="form-group">
                 <label class="col-sm-3 control-label">Export the current startup-config</label>
                 <div class="col-sm-6">
-                    <input type="text" class="form-control" value="Switch.bin">
+                    <input type="text" id="tftpServer_ex" class="form-control" value="{{ $data['tftpServer'] }}"
+                        placeholder="192.168.1.10" hidden>
+                    <input type="text" class="form-control" value="startup-config">
                 </div>
             </div>
 
@@ -115,7 +117,7 @@
     btn.disabled = true;
     btn.innerHTML = '<span class="spinner-border"></span> Importing...';
 
-    fetch(`/api/v0/startup-config/import/${ip}`, {
+    fetch(`/api/v0/tftpupload/${ip}`, {
         method: "POST",
         headers: {
             "Authorization": "Bearer " + apiToken,
@@ -150,11 +152,12 @@
         const ip = "{{ $device->hostname }}";
         const apiToken = "{{ $data['api_token'] }}";
         const filename = "startup-config";
+        const tftpServer = document.getElementById("tftpServer_ex").value;
 
         btn.disabled = true;
         btn.innerHTML = '<span class="spinner-border"></span> Exporting...';
 
-        fetch(`/api/v0/device/startup-config/export/${ip}`, {
+        fetch(`/api/v0/tftpexport/${ip}`, {
                 method: "POST",
                 headers: {
                     "Authorization": "Bearer " + apiToken,
@@ -162,7 +165,8 @@
                     "Accept": "application/json"
                 },
                 body: JSON.stringify({
-                    filename: filename
+                    filename: filename,
+                    tftp_server: tftpServer               
                 })
             })
             .then(res => res.json())

@@ -1,15 +1,15 @@
 ---
-- name: Upload file to device via TFTP
+- name: Export startup-config from device to TFTP
   hosts: alphabridge_devices
   gather_facts: no
 
   vars:
-    script_path: "/opt/librenms/librenms-ansible-inventory-plugin/tmp/tftpupload_exec.py"
+    script_path: "/opt/librenms/librenms-ansible-inventory-plugin/tmp/tftpexport_exec.py"
     venv_python: "/opt/librenms/librenms-ansible-inventory-plugin/bin/python3"
 
   tasks:
 
-    - name: Create TFTP upload Python script
+    - name: Create TFTP export Python script
       ansible.builtin.copy:
         dest: "{{ script_path }}"
         mode: "0755"
@@ -22,8 +22,8 @@
           PASSWORD = "{{ ansible_password }}"
 
           TFTP_SERVER = "{{ tftp_server }}"
-          SOURCE_FILE = "{{ filename }}"
-          DEST_FILE = "{{ destination_path }}"
+          FILENAME = "{{ filename }}"
+          DEST_FILE = "{{ destination_file }}"
 
           def read_all(shell, delay=1):
               time.sleep(delay)
@@ -48,14 +48,14 @@
               shell = ssh.invoke_shell()
               read_all(shell, 2)
 
-              # Enter enable mode
+              # Enable mode
               shell.send("enable\n")
               read_all(shell, 1)
               shell.send(PASSWORD + "\n")
               read_all(shell, 2)
 
-              # EXACT device command
-              cmd = f"copy tftp:{SOURCE_FILE} flash: {TFTP_SERVER}\n"
+              # EXACT export command
+              cmd = f"copy flash:{FILENAME} tftp: {TFTP_SERVER}\n"
               shell.send(cmd)
               output = read_all(shell, 3)
 
@@ -64,8 +64,8 @@
                   shell.send(DEST_FILE + "\n")
                   output += read_all(shell, 3)
 
-              # Success check
-              if "successfully receive" in output.lower():
+              # Success detection
+              if "successfully send" in output.lower():
                   print("SUCCESS")
               else:
                   print("FAILED OUTPUT:")
@@ -76,12 +76,12 @@
           except Exception as e:
               print("ERROR:", e)
 
-    - name: Execute TFTP upload script
+    - name: Execute TFTP export script
       ansible.builtin.command:
         cmd: "{{ venv_python }} {{ script_path }}"
       register: tftp_output
       changed_when: true
 
-    - name: Show TFTP upload result
+    - name: Show TFTP export result
       ansible.builtin.debug:
         var: tftp_output.stdout

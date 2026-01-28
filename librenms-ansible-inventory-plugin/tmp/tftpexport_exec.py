@@ -6,8 +6,8 @@ USER = "admin"
 PASSWORD = "admin"
 
 TFTP_SERVER = "192.168.200.73"
-SOURCE_FILE = "192.168.200.245_startup-config"
-DEST_FILE = "startup-config"
+FILENAME = "startup-config"
+DEST_FILE = "192.168.200.245_startup-config"
 
 def read_all(shell, delay=1):
     time.sleep(delay)
@@ -32,14 +32,14 @@ try:
     shell = ssh.invoke_shell()
     read_all(shell, 2)
 
-    # Enter enable mode
+    # Enable mode
     shell.send("enable\n")
     read_all(shell, 1)
     shell.send(PASSWORD + "\n")
     read_all(shell, 2)
 
-    # EXACT device command
-    cmd = f"copy tftp:{SOURCE_FILE} flash: {TFTP_SERVER}\n"
+    # EXACT export command
+    cmd = f"copy flash:{FILENAME} tftp: {TFTP_SERVER}\n"
     shell.send(cmd)
     output = read_all(shell, 3)
 
@@ -48,8 +48,8 @@ try:
         shell.send(DEST_FILE + "\n")
         output += read_all(shell, 3)
 
-    # Success check
-    if "successfully receive" in output.lower():
+    # Success detection
+    if "successfully send" in output.lower():
         print("SUCCESS")
     else:
         print("FAILED OUTPUT:")
