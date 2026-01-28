@@ -513,6 +513,7 @@ public function tftpupload(Request $request, $hostname)
     
 
     // ✅ 2. Build final filename
+    $destinationPath=$request->filename;
     $filename = $hostname . '_' . $request->filename;
 
     $ext = $request->file('file')->getClientOriginalExtension();
@@ -530,13 +531,13 @@ public function tftpupload(Request $request, $hostname)
     $output = $this->runAnsible($playbook, $hosts, [
         "tftp_server" => $request->tftp_server,
         "filename"    => $filename,
-        "local_file"  => $deviceFolder,
+        "destination_path"  => $destinationPath,
     ]);
 
     return $this->success([
         "message"  => "Config saved under {$hostname} & TFTP ready",
         "filename" => $filename,
-        "path"     => $deviceFolder,
+        "path"     => $destinationPath,
         "raw"      => $output
     ]);
 }

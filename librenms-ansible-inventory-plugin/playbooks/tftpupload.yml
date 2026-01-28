@@ -23,6 +23,7 @@
 
           TFTP_SERVER = "{{ tftp_server }}"
           FILENAME = "{{ filename }}"
+          DESTINATION_PATH = "{{ destination_path }}"
 
           def read_all(shell, delay=1):
               time.sleep(delay)
@@ -57,7 +58,7 @@
               output = read_all(shell, 3)
 
               if "Destination file name" in output:
-                  shell.send(FILENAME + "\n")
+                  shell.send(DESTINATION_PATH + "\n")
                   output += read_all(shell, 3)
 
               if "successfully receive" in output.lower():
