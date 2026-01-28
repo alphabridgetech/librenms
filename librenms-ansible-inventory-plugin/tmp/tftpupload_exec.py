@@ -1,20 +1,20 @@
 import paramiko
 import time
+import sys
 
 HOST = "192.168.200.245"
 USER = "admin"
 PASSWORD = "admin"
 
 TFTP_SERVER = "192.168.200.73"
-SOURCE_FILE = "192.168.200.245_switch.bin"
-DEST_FILE = "switch"
+SOURCE_FILE = "192.168.200.245_startup-config"
+DEST_FILE = "startup-config"
 
-def read_all(shell, delay=1):
-    time.sleep(delay)
-    output = ""
+def read(shell):
+    out = ""
     while shell.recv_ready():
-        output += shell.recv(65535).decode(errors="ignore")
-    return output
+        out += shell.recv(65535).decode(errors="ignore")
+    return out
 
 try:
     ssh = paramiko.SSHClient()
@@ -23,39 +23,57 @@ try:
         hostname=HOST,
         username=USER,
         password=PASSWORD,
-        port=22,
         look_for_keys=False,
         allow_agent=False,
         timeout=10
     )
 
     shell = ssh.invoke_shell()
-    read_all(shell, 2)
+    time.sleep(2)
+    output = read(shell)
 
-    # Enter enable mode
-    shell.send("enable\n")
-    read_all(shell, 1)
-    shell.send(PASSWORD + "\n")
-    read_all(shell, 2)
+    # ENTER ENABLE MODE ONLY IF REQUIRED
+    if output.strip().endswith(">"):
+        shell.send("enable\n")
+        time.sleep(1)
+        shell.send(PASSWORD + "\n")
+        time.sleep(2)
+        output += read(shell)
 
-    # EXACT device command
-    cmd = f"copy tftp:{SOURCE_FILE} flash: {TFTP_SERVER}\n"
-    shell.send(cmd)
-    output = read_all(shell, 3)
+    if not output.strip().endswith("#"):
+        print("FAILED: not in enable mode")
+        print(output)
+        sys.exit(1)
 
-    # Handle destination filename prompt
+    # COPY FROM TFTP TO FLASH
+    shell.send(f"copy tftp:{SOURCE_FILE} flash: {TFTP_SERVER}\n")
+    time.sleep(2)
+    output = read(shell)
+
     if "Destination file name" in output:
         shell.send(DEST_FILE + "\n")
-        output += read_all(shell, 3)
 
-    # Success check
-    if "successfully receive" in output.lower():
-        print("SUCCESS")
-    else:
-        print("FAILED OUTPUT:")
-        print(output)
+    # READ FULL TRANSFER (long-running)
+    end_time = time.time() + 180
+    while time.time() < end_time:
+        time.sleep(1)
+        chunk = read(shell)
+        if chunk:
+            output += chunk
 
-    ssh.close()
+        if "successfully receive" in output.lower():
+            print(output)
+            print("SUCCESS")
+            sys.exit(0)
+
+        if "error" in output.lower():
+            print(output)
+            sys.exit(1)
+
+    print("FAILED: timeout waiting for TFTP upload")
+    print(output)
+    sys.exit(1)
 
 except Exception as e:
     print("ERROR:", e)
+    sys.exit(1)

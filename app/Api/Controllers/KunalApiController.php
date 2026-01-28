@@ -482,9 +482,9 @@ public function getvlan($hostname)
         $filename = $hostname . '_' . $request->filename;
 
         $ext = $request->file('file')->getClientOriginalExtension();
-        if ($ext) {
-            $filename .= '.' . $ext;
-        }
+        // if ($ext) {
+        //     $filename .= '.' . $ext;
+        // }
 
         $request->file('file')->move($baseTftpPath, $filename);
         
@@ -493,10 +493,12 @@ public function getvlan($hostname)
         $playbook = "{$this->pluginPath}/playbooks/tftpupload.yml";
         $hosts    = "{$this->pluginPath}/hosts/{$hostname}.yml";
 
+       
+
         $output = $this->runAnsible($playbook, $hosts, [
             "tftp_server" => $request->tftp_server,
             "filename"    => $filename,
-            "destination_path"  => $destinationPath,
+            "destination_file"  => $destinationPath,
         ]);
 
         return $this->success([

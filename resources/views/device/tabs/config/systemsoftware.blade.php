@@ -14,7 +14,7 @@
                 <label class="col-sm-3 control-label">Export the current System Software</label>
                 <div class="col-sm-6">
                     <input type="text" id="tftpServer_ex" class="form-control" value="{{ $data['tftpServer'] }}" placeholder="192.168.1.10" hidden>
-                    <input type="text" class="form-control" value="switch.bin">
+                    <input type="text" class="form-control" id="filename_ex" value="switch.bin">
                 </div>
             </div>
 
@@ -54,7 +54,7 @@
                 <label class="col-sm-3 control-label">File name on the server</label>
                 <div class="col-sm-12">
                     <select id="configFileName" class="form-control">
-                        <option value="switch">switch.bin</option>
+                        <option value="switch.bin">switch.bin</option>
                         <option value="web.wrp">web.wrp</option>
                     </select>
                 </div>
@@ -150,7 +150,8 @@
         const btn = document.getElementById("exportBtn");
         const ip = "{{ $device->hostname }}";
         const apiToken = "{{ $data['api_token'] }}";
-        const filename = "switch.bin";
+
+        const filename = document.getElementById("filename_ex").value;
         const tftpServer = document.getElementById("tftpServer_ex").value;
 
         btn.disabled = true;
@@ -170,9 +171,7 @@
             })
             .then(res => res.json())
             .then(res => {
-                console.log('====================================');
-                console.log(res);
-                console.log('====================================');
+               
                 btn.disabled = false;
                 btn.innerHTML = 'Export the current System Software';
 
