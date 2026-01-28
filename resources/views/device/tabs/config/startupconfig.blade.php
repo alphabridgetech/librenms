@@ -171,11 +171,15 @@
             })
             .then(res => res.json())
             .then(res => {
+                console.log('====================================');
+                console.log(res);
+                console.log('====================================');
                 btn.disabled = false;
                 btn.innerHTML = 'Export the current startup-config';
 
                 if (res.status === "success") {
                     alert("Startup-config exported successfully!");
+                    window.location.href = res.download_url;
                 } else {
                     alert("Export failed!");
                 }

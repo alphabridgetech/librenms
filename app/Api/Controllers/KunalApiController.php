@@ -553,18 +553,28 @@ public function tftpupload(Request $request, $hostname)
         $hosts    = "{$this->pluginPath}/hosts/{$hostname}.yml";
 
         $destination_file = $hostname . '_' . $request->filename;
+        $exportPath = "{$this->tftpPath}/{$destination_file}";
 
         $output = $this->runAnsible($playbook, $hosts, [
             "tftp_server" => $request->tftp_server,
             "filename"    => $request->filename,
             "destination_file" => $destination_file,
         ]);
+        if (!file_exists($exportPath)) {
+        return $this->error("Export failed, file not found");
+        }
         return $this->success([
             "message"  => "TFTP export initiated",
             "filename" => $request->filename,
-            "raw"      => $output
+            "raw"      => $output,
+            "download_url" => url("/tftp/download/{$destination_file}"),
         ]);
     }
+
+    
+
+
+
 
 
 

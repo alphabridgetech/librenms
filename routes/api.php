@@ -80,6 +80,7 @@ Route::prefix('v0')->group(function () {
         Route::post('voicevlan/batch/{hostname}', [App\Api\Controllers\KunalApiController::class, 'voicevlandelete'])->name('voicevlandelete');
         Route::post('tftpupload/{hostname}', [App\Api\Controllers\KunalApiController::class, 'tftpupload'])->name('tftpupload');
         Route::post('tftpexport/{hostname}', [App\Api\Controllers\KunalApiController::class, 'tftpexport'])->name('tftpexport');        
+   
 
 
 

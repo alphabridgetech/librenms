@@ -53,6 +53,7 @@ use App\Http\Controllers\Device\Tabs\alphabridgeController;
 use App\Http\Controllers\VLANController;
 use App\Http\Controllers\MibsUploadController;
 use App\Http\Controllers\ChatBotController;
+use App\Http\Controllers\TftpDownloadController;
 
 /*
 |--------------------------------------------------------------------------
@@ -64,6 +65,12 @@ use App\Http\Controllers\ChatBotController;
 | contains the "web" middleware group. Now create something great!
 |
 */
+
+//tftp download
+Route::get(
+    '/tftp/download/{file}',
+    [TftpDownloadController::class, 'download']
+)->name('tftp.download');
 
 // Auth
 AuthFacade::routes(['register' => false, 'reset' => false, 'verify' => false]);
