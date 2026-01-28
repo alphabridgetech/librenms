@@ -1,9 +1,9 @@
 <div class="container" style="margin-top:30px;">
 
-    <!-- Export the current startup-config -->
+    <!-- Export the current System Software -->
     <div class="panel panel-primary">
         <div class="panel-heading">
-            <strong>Export the current startup-config</strong>
+            <strong>Export the current System Software</strong>
         </div>
 
         <div class="panel-body">
@@ -11,11 +11,10 @@
 
 
             <div class="form-group">
-                <label class="col-sm-3 control-label">Export the current startup-config</label>
+                <label class="col-sm-3 control-label">Export the current System Software</label>
                 <div class="col-sm-6">
-                    <input type="text" id="tftpServer_ex" class="form-control" value="{{ $data['tftpServer'] }}"
-                        placeholder="192.168.1.10" hidden>
-                    <input type="text" class="form-control" value="startup-config">
+                    <input type="text" id="tftpServer_ex" class="form-control" value="{{ $data['tftpServer'] }}" placeholder="192.168.1.10" hidden>
+                    <input type="text" class="form-control" value="switch.bin">
                 </div>
             </div>
 
@@ -23,7 +22,7 @@
 
 
             <button type="button" id="exportBtn" class="btn btn-primary" onclick="exportStartupConfig()">
-                Export the current startup-config
+                Export the current System Software
             </button>
 
         </div>
@@ -55,8 +54,8 @@
                 <label class="col-sm-3 control-label">File name on the server</label>
                 <div class="col-sm-12">
                     <select id="configFileName" class="form-control">
-                        <option value="startup-config">startup-config</option>
-                        <option value="bvss-config">bvss-config</option>
+                        <option value="switch">switch.bin</option>
+                        <option value="web.wrp">web.wrp</option>
                     </select>
                 </div>
             </div>
@@ -151,7 +150,7 @@
         const btn = document.getElementById("exportBtn");
         const ip = "{{ $device->hostname }}";
         const apiToken = "{{ $data['api_token'] }}";
-        const filename = "startup-config";
+        const filename = "switch.bin";
         const tftpServer = document.getElementById("tftpServer_ex").value;
 
         btn.disabled = true;
@@ -175,10 +174,10 @@
                 console.log(res);
                 console.log('====================================');
                 btn.disabled = false;
-                btn.innerHTML = 'Export the current startup-config';
+                btn.innerHTML = 'Export the current System Software';
 
                 if (res.status === "success") {
-                    alert("Startup-config exported successfully!");
+                    alert("System Software exported successfully!");
                     window.location.href = res.download_url;
                 } else {
                     alert("Export failed!");
@@ -186,7 +185,7 @@
             })
             .catch(err => {
                 btn.disabled = false;
-                btn.innerHTML = 'Export the current startup-config';
+                btn.innerHTML = 'Export the current System Software';
                 alert("Error: " + err);
             });
     }

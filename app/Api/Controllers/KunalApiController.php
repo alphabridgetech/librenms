@@ -464,83 +464,48 @@ public function getvlan($hostname)
     #                            tftp upload
     #------------------------------------------------------------
 
-// public function tftpupload(Request $request, $hostname)
-// {
-//     $data = $request->validate([
-//         'tftp_server' => 'required|string',
-//         'file'        => 'required|file'
-//     ]);
 
-//     $tftpPath = $this->tftpPath;
+    //tftp 27-01-2026
+    public function tftpupload(Request $request, $hostname)
+    {
+        $request->validate([
+            'tftp_server' => 'required|string',
+            'file'        => 'required|file',
+            'filename'    => 'required|string',
+        ]);
 
-//     if (!is_dir($tftpPath)) {
-//         return $this->error("TFTP directory not mounted");
-//     }
+        $baseTftpPath = $this->tftpPath;          // e.g. /tftpboot
+        
 
-//     $filename = $request->file('file')->getClientOriginalName();
-    
-    
-    
+        // ✅ 2. Build final filename
+        $destinationPath=$request->filename;
+        $filename = $hostname . '_' . $request->filename;
 
-//     // Move file into TFTP volume
-//     $request->file('file')->move($tftpPath, $filename);
+        $ext = $request->file('file')->getClientOriginalExtension();
+        if ($ext) {
+            $filename .= '.' . $ext;
+        }
 
-//     $playbook = "{$this->pluginPath}/playbooks/tftpupload.yml";
-//     $hosts    = "{$this->pluginPath}/hosts/{$hostname}.yml";
+        $request->file('file')->move($baseTftpPath, $filename);
+        
 
-//     $output = $this->runAnsible($playbook, $hosts, [
-//         "tftp_server" => $data['tftp_server'],
-//         "filename"    => $filename,
-//         "local_file"  => $tftpPath,
-//     ]);
+        // Ansible
+        $playbook = "{$this->pluginPath}/playbooks/tftpupload.yml";
+        $hosts    = "{$this->pluginPath}/hosts/{$hostname}.yml";
 
-//     return $this->success([
-//         "message"  => "File uploaded to /tftpboot & TFTP ready",
-//         "filename" => $filename,
-//         "raw"      => $output
-//     ]);
-// }
+        $output = $this->runAnsible($playbook, $hosts, [
+            "tftp_server" => $request->tftp_server,
+            "filename"    => $filename,
+            "destination_path"  => $destinationPath,
+        ]);
 
-public function tftpupload(Request $request, $hostname)
-{
-    $request->validate([
-        'tftp_server' => 'required|string',
-        'file'        => 'required|file',
-        'filename'    => 'required|string',
-    ]);
-
-    $baseTftpPath = $this->tftpPath;          // e.g. /tftpboot
-    
-
-    // ✅ 2. Build final filename
-    $destinationPath=$request->filename;
-    $filename = $hostname . '_' . $request->filename;
-
-    $ext = $request->file('file')->getClientOriginalExtension();
-    if ($ext) {
-        $filename .= '.' . $ext;
+        return $this->success([
+            "message"  => "Config saved under {$hostname} & TFTP ready",
+            "filename" => $filename,
+            "path"     => $destinationPath,
+            "raw"      => $output
+        ]);
     }
-
-    $request->file('file')->move($baseTftpPath, $filename);
-    
-
-    // Ansible
-    $playbook = "{$this->pluginPath}/playbooks/tftpupload.yml";
-    $hosts    = "{$this->pluginPath}/hosts/{$hostname}.yml";
-
-    $output = $this->runAnsible($playbook, $hosts, [
-        "tftp_server" => $request->tftp_server,
-        "filename"    => $filename,
-        "destination_path"  => $destinationPath,
-    ]);
-
-    return $this->success([
-        "message"  => "Config saved under {$hostname} & TFTP ready",
-        "filename" => $filename,
-        "path"     => $destinationPath,
-        "raw"      => $output
-    ]);
-}
 
     public function tftpexport(Request $request, $hostname)
     {

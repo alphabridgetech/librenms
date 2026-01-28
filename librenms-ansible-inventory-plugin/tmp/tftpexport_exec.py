@@ -6,8 +6,8 @@ USER = "admin"
 PASSWORD = "admin"
 
 TFTP_SERVER = "192.168.200.73"
-FILENAME = "startup-config"
-DEST_FILE = "192.168.200.245_startup-config"
+FILENAME = "switch.bin"
+DEST_FILE = "192.168.200.245_switch.bin"
 
 def read_all(shell, delay=1):
     time.sleep(delay)
