@@ -41,11 +41,11 @@
                                 @endforeach
                             </select>
                         </div>
-                    <div class="col-md-5">
-                    <label for="mibfile" class="form-label">{{ __('Select Software file') }}</label>
-                    <input type="file" name="mibfile" id="mibfile" class="form-control mt-3" required>
-                    <div class="form-text">Accepted: .mib, .txt — max 5MB</div>
-                </div>
+                        <div class="col-md-5">
+                            <label for="sysfile" class="form-label">{{ __('Select Software file') }}</label>
+                            <input type="file" name="sysfile" id="sysfile" class="form-control mt-3" required>
+                            <div class="form-text">Accepted: .bin</div>
+                        </div>
                     </div>
                 </form>
 
@@ -55,31 +55,26 @@
 
             {{-- Table --}}
             <div class="table-responsive">
-                <table id="custommibs" class="table table-bordered table-condensed">
+                <table id="customsysupload" class="table table-bordered table-condensed">
                     <thead>
                         <tr>
-                            <th></th>
-                            {{-- <th data-column-id="id" data-visible="true" data-identifier="true" data-type="numeric">ID</th> --}}
+                          <th data-column-id="select" data-formatter="checkbox" data-sortable="false" style="width:30px; text-align:center;"></th>
                             <th data-column-id="filename" data-formatter="text">{{ __('Device Names') }}</th>
                             <th data-column-id="model_name" data-formatter="text">{{ __('hostname') }}</th>
                             <th data-column-id="uploader" data-formatter="text">{{ __('hardware') }}</th>
-                            {{-- <th data-column-id="created_at">{{ __('sysObjectID') }}</th> --}}
-                            <th data-column-id="actions" data-formatter="actions" data-sortable="false"
-                                data-searchable="false">{{ __('Actions') }}</th>
                         </tr>
                     </thead>
                     <tbody>
                         @foreach ($devices as $device)
                             <tr>
-                                
-                                <td><input type="checkbox" name="device_ids[]" aria-label="..." value="{{ $device->device_id }}">
+                                <td style="text-align: center;">
+                                    <input type="checkbox" name="device_ids[]" value="{{ $device->device_id }}">
+                                </td>
                                 </td>
                                 <td>{{ $device->device_id }}</td>
                                 <td>{{ $device->hostname }}</td>
                                 <td>{{ $device->hardware }}</td>
                                 <td>{{ $device->sysObjectID }}</td>
-                                {{-- <td>{{ $device->created_at->format('Y-m-d H:i') }}</td> --}}
-
                             </tr>
                         @endforeach
                     </tbody>
@@ -89,17 +84,16 @@
             <div class="row g-3 align-items-center">
                 <div class="col-md-6">
                 </div>
-               
+
                 <div class="col-md-6">
                     <label class="form-label d-block">&nbsp;</label>
                     <button type="submit" class="btn btn-primary w-100 mt-3">
                         <i class="fa fa-upload"></i> {{ __('Upload') }}
                     </button>
                 </div>
-               
+
             </div>
         </x-panel>
-
     </div>
 @endsection
 
@@ -109,55 +103,129 @@
 @section('javascript')
     <script type="application/javascript">
     $(document).ready(function () {
-        var grid = $("#custommibs");
-        grid.bootgrid({
-            formatters: {
-                text: function (column, row) {
-                    let div = document.createElement('div');
-                    div.innerText = row[column.id] || '';
-                    return div.innerHTML;
-                },
-                actions: function (column, row) {
-                    let downloadUrl = "{{ route('mibs.download', ':id') }}".replace(':id', row['id']);
-                    let downloadBtn = '<a href="'+ downloadUrl +'" class="btn btn-sm btn-success" title="{{ __('Download') }}"><i class="fa fa-download"></i></a> ';
 
-                    @can('delete', \App\Models\CustomMib::class)
-                        let deleteBtn = '<button type="button" class="btn btn-sm btn-danger" onclick="deleteMib('+ row['id'] +');" title="{{ __('Delete') }}"><i class="fa fa-trash"></i></button>';
-                    @else
-                        let deleteBtn = '';
-                    @endcan
-
-                    return downloadBtn + deleteBtn;
-                }
-            }
-        });
-
-        grid.css('display','table'); // show after bootgrid init
+    //device_ids getting value on button click
+    $('button[type="submit"]').on('click', function(e) {
+       
     });
 
-    function deleteMib(id) {
-        if (!confirm('{{ __("Are you sure you want to delete this MIB?") }}')) return;
 
-        $.ajax({
-            url: '{{ route('mibs.destroy', ':id') }}'.replace(':id', id),
-            type: 'DELETE',
-            data: { _token: '{{ csrf_token() }}' },
-            success: function (msg) {
-                $("#custommibs").bootgrid("remove", [id]);
-                toastr.success(msg);
+    // Initialize Bootgrid
+    var grid = $("#customsysupload");
+
+    grid.bootgrid({
+        formatters: {
+            checkbox: function(column, row) {
+                // Each row checkbox
+                return '<input type="checkbox" class="rowCheckbox" name="device_ids[]" value="' + row.device_id + '">';
             },
-            error: function () {
-                toastr.error('{{ __("The MIB could not be deleted") }}');
+            text: function(column, row) {
+                return row[column.id] || '';
             }
-        });
+        },
+        rowCount: -1 // show all rows
+    });
+
+    grid.css('display','table');
+
+    // Add "Select All" checkbox manually **above the table**
+    if ($('#selectAllWrapper').length === 0) {
+        $('<div id="selectAllWrapper" class="checkbox" style="margin-bottom:10px;">' +
+            '<label><input type="checkbox" id="checkAll"> Select All</label>' +
+          '</div>').insertBefore('#custommibs'); // prepend before table
     }
+
+    // "Select All" functionality
+    $(document).on('change', '#checkAll', function () {
+        $('.rowCheckbox').prop('checked', $(this).prop('checked'));
+    });
+
+    // Automatically uncheck Select All if any row is unchecked
+    $(document).on('change', '.rowCheckbox', function () {
+        if ($('.rowCheckbox:checked').length === $('.rowCheckbox').length) {
+            $('#checkAll').prop('checked', true);
+        } else {
+            $('#checkAll').prop('checked', false);
+        }
+    });
+
+});
+
 </script>
 @endsection
 
 @section('css')
     <style>
-        #custommibs form {
+        #customsysupload form {
             display: inline;
         }
     </style>
+@endsection
+@section('javascript')
+<script>
+$(function () {
+
+    // Bootgrid init
+    $("#customsysupload").bootgrid({
+        formatters: {
+            checkbox: function (column, row) {
+                return '<input type="checkbox" class="rowCheckbox" value="'+ row.device_id +'">';
+            }
+        },
+        rowCount: -1
+    });
+
+    // Select All
+    $('#checkAll').on('change', function () {
+        $('.rowCheckbox').prop('checked', this.checked);
+    });
+
+    $(document).on('change', '.rowCheckbox', function () {
+        $('#checkAll').prop(
+            'checked',
+            $('.rowCheckbox:checked').length === $('.rowCheckbox').length
+        );
+    });
+
+    // Upload via AJAX
+    $('#uploadBtn').on('click', function () {
+
+        let deviceIds = [];
+        $('.rowCheckbox:checked').each(function () {
+            deviceIds.push($(this).val());
+        });
+
+        if (deviceIds.length === 0) {
+            alert('Select at least one device');
+            return;
+        }
+
+        let file = $('#sysfile')[0].files[0];
+        if (!file) {
+            alert('Please select a file');
+            return;
+        }
+
+        let formData = new FormData();
+        formData.append('_token', '{{ csrf_token() }}');
+        formData.append('sysfile', file);
+        deviceIds.forEach(id => formData.append('device_ids[]', id));
+
+        $.ajax({
+            url: "{{ route('syssoftbulk.store') }}",
+            method: "POST",
+            data: formData,
+            contentType: false,
+            processData: false,
+            success: function (res) {
+                alert('Upload successful');
+            },
+            error: function () {
+                alert('Upload failed');
+            }
+        });
+    });
+
+});
+</script>
 @endsection
