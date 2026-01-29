@@ -623,8 +623,8 @@
                                                                aria-hidden="true"></i> {{ __('Global Settings') }}</a></li>
                         <li><a href="{{ url('validate') }}"><i class="fa fa-check-circle fa-fw fa-lg"
                                                                aria-hidden="true"></i> {{ __('Validate Config') }}</a></li>
-                                    <li><a href="{{ route('mibs.index') }}"><i class="fa fa-upload fa-fw fa-lg"
-                                                                    aria-hidden="true"></i> {{ __('MIbs Upload') }}</a>
+                        <li><a href="{{ route('mibs.index') }}"><i class="fa fa-upload fa-fw fa-lg" aria-hidden="true"></i> {{ __('MIbs Upload') }}</a>
+                        <li><a href="{{ route('syssoftbulk.index') }}"><i class="fa fa-upload fa-fw fa-lg" aria-hidden="true"></i> {{ __('Software Bulk Upload') }}</a>
                         <li role="presentation" class="divider"></li>
                         <li><a href="{{ route('users.index') }}"><i class="fa fa-user-circle-o fa-fw fa-lg"
                                                                     aria-hidden="true"></i> {{ __('Manage Users') }}</a>

@@ -54,6 +54,7 @@ use App\Http\Controllers\VLANController;
 use App\Http\Controllers\MibsUploadController;
 use App\Http\Controllers\ChatBotController;
 use App\Http\Controllers\TftpDownloadController;
+use App\Http\Controllers\SystemBulkUploadController;
 
 /*
 |--------------------------------------------------------------------------
@@ -187,9 +188,12 @@ Route::middleware(['auth'])->group(function () {
     Route::get('locations', [LocationController::class, 'index']);
     Route::resource('preferences', UserPreferencesController::class)->only('index', 'store');
     Route::resource('users', UserController::class);
-    //added by kunal 
+    //added by kunal for mibs upload 
     Route::resource('mibs', MibsUploadController::class);
     Route::get('mibs/download/{id}', [MibsUploadController::class,'download'])->name('mibs.download');
+
+    //added by kunal for system software bulk upload
+    Route::resource('syssoftbulk', SystemBulkUploadController::class);
     //kunal add 
     Route::resource('chatbot', ChatBotController::class);
     Route::post('chatbot/messages', [ChatBotController::class, 'message'])
