@@ -26,42 +26,26 @@
 
             {{-- Upload Form --}}
             @can('create', \App\Models\CustomMib::class)
-                <form action="{{ route('mibs.store') }}" method="POST" enctype="multipart/form-data" class="mb-4 card p-3">
+                <form action="{{ route('syssoftbulk.index') }}" method="GET" enctype="multipart/form-data" class="mb-4 card p-3">
                     @csrf
                     <div class="row g-3 align-items-center">
                         <div class="col-md-3">
                             <label class="form-label">{{ __('Link to device (optional)') }}</label>
-                            <select name="model_name" class="form-control">
+                            <select name="model_name" class="form-control" onchange="this.form.submit()">
                                 <option value="">{{ __('-- None --') }}</option>
-                                @foreach ($devices as $dev)
-                                    @php
-                                        // Get OID from device
-                                        $oid = $dev->sysObjectID ?? ($dev->sysObjectId ?? '');
-
-                                        // Trim extra dots and split
-                                        $parts = explode('.', trim($oid, '.'));
-
-                                        $modelNum = '';
-                                        $count = count($parts);
-
-                                        if ($count > 0) {
-                                            if (isset($parts[$count - 1]) && $parts[$count - 1] == '0') {
-                                                $modelNum = $parts[$count - 2] ?? '';
-                                            } else {
-                                                $modelNum = $parts[$count - 1];
-                                            }
-                                        }
-                                    @endphp
-
-                                    <option value="{{ $modelNum }}">
-                                        {{ ($dev->sysName ?? '') . ' (' . ($modelNum ?: 'Unknown') . ')' }}
+                                @foreach ($deviceFilter as $hardware)
+                                    <option value="{{ $hardware }}"
+                                        {{ ($modelName ?? '') === $hardware ? 'selected' : '' }}>
+                                        {{ $hardware }}
                                     </option>
                                 @endforeach
                             </select>
-
                         </div>
-
-
+                    <div class="col-md-5">
+                    <label for="mibfile" class="form-label">{{ __('Select Software file') }}</label>
+                    <input type="file" name="mibfile" id="mibfile" class="form-control mt-3" required>
+                    <div class="form-text">Accepted: .mib, .txt — max 5MB</div>
+                </div>
                     </div>
                 </form>
 
@@ -74,14 +58,11 @@
                 <table id="custommibs" class="table table-bordered table-condensed">
                     <thead>
                         <tr>
-                            <th data-column-id="checkbox" data-formatter="checkbox">
-                            {{-- checkbox --}}
-                            <input type="checkbox" class="select" value="" />
-                            </th>
+                            <th></th>
                             {{-- <th data-column-id="id" data-visible="true" data-identifier="true" data-type="numeric">ID</th> --}}
-                            <th data-column-id="filename" data-formatter="text">{{ __('Device Name') }}</th>
+                            <th data-column-id="filename" data-formatter="text">{{ __('Device Names') }}</th>
                             <th data-column-id="model_name" data-formatter="text">{{ __('hostname') }}</th>
-                            <th data-column-id="uploader" data-formatter="text">{{ __('sysName') }}</th>
+                            <th data-column-id="uploader" data-formatter="text">{{ __('hardware') }}</th>
                             {{-- <th data-column-id="created_at">{{ __('sysObjectID') }}</th> --}}
                             <th data-column-id="actions" data-formatter="actions" data-sortable="false"
                                 data-searchable="false">{{ __('Actions') }}</th>
@@ -90,12 +71,15 @@
                     <tbody>
                         @foreach ($devices as $device)
                             <tr>
+                                
+                                <td><input type="checkbox" name="device_ids[]" aria-label="..." value="{{ $device->device_id }}">
+                                </td>
                                 <td>{{ $device->device_id }}</td>
                                 <td>{{ $device->hostname }}</td>
-                                <td>{{ $device->sysName }}</td>
+                                <td>{{ $device->hardware }}</td>
                                 <td>{{ $device->sysObjectID }}</td>
                                 {{-- <td>{{ $device->created_at->format('Y-m-d H:i') }}</td> --}}
-                                <td></td>
+
                             </tr>
                         @endforeach
                     </tbody>
@@ -103,24 +87,24 @@
             </div>
             {{-- End Table --}}
             <div class="row g-3 align-items-center">
-                 <div class="col-md-3">
-                 </div>
-                <div class="col-md-5">
-                    <label for="mibfile" class="form-label">{{ __('Select Software file') }}</label>
-                    <input type="file" name="mibfile" id="mibfile" class="form-control mt-3" required>
-                    <div class="form-text">Accepted: .mib, .txt — max 5MB</div>
+                <div class="col-md-6">
                 </div>
-                <div class="col-md-4">
+               
+                <div class="col-md-6">
                     <label class="form-label d-block">&nbsp;</label>
                     <button type="submit" class="btn btn-primary w-100 mt-3">
                         <i class="fa fa-upload"></i> {{ __('Upload') }}
                     </button>
                 </div>
+               
             </div>
         </x-panel>
 
     </div>
 @endsection
+
+
+
 
 @section('javascript')
     <script type="application/javascript">

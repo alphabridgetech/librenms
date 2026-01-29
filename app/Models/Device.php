@@ -84,6 +84,8 @@ class Device extends BaseModel
         'type',
         'version',
         'uptime',
+        'ssh_user',
+        'ssh_pass'
     ];
 
     /**
