@@ -291,51 +291,116 @@ class ChatBotController extends Controller
     /** -----------------------
      * LLM HANDLER
      * --------------------- */
+    // private function handleLLMQuery($prompt)
+    // {
+    //     try {
+    //         $endpoint = config('services.gemini.endpoint');
+    //         $apiKey = config('services.gemini.key');
+
+    //         $payload = [
+    //             'contents' => [
+    //                 ['parts' => [['text' => $prompt]]]
+    //             ]
+    //         ];
+            
+
+    //         $response = Http::withHeaders([
+    //             'x-goog-api-key' => $apiKey,
+    //             'Content-Type' => 'application/json',
+    //         ])->timeout(30)->post($endpoint, $payload);
+
+    //         $data = $response->json();
+    //         $reply = 'No response from LLM.';
+
+    //         if (isset($data['candidates'][0]['content']['parts'][0]['text'])) {
+    //             $reply = trim($data['candidates'][0]['content']['parts'][0]['text']);
+    //         }
+
+    //         // detect JSON command
+    //         if (preg_match('/\{[\s\S]*\}/', $reply, $match)) {
+    //             $jsonStr = $match[0];
+    //             $actionData = json_decode($jsonStr, true);
+
+    //             if (json_last_error() === JSON_ERROR_NONE && isset($actionData['action'])) {
+    //                 $result = $this->executeLLMAction($actionData);
+    //                 return response()->json([
+    //                     'reply' => "🧠 Executed Action:\n" . json_encode($actionData, JSON_PRETTY_PRINT) . "\n\nResult: $result",
+    //                     'type' => 'action'
+    //                 ]);
+    //             }
+    //         }
+
+    //         return response()->json(['reply' => $reply, 'type' => 'llm']);
+
+    //     } catch (\Exception $e) {
+    //         Log::error('LLM request failed', ['err' => $e->getMessage()]);
+    //         return response()->json(['reply' => 'LLM server failed.', 'type' => 'llm']);
+    //     }
+    // }
+
     private function handleLLMQuery($prompt)
-    {
-        try {
-            $endpoint = config('services.gemini.endpoint');
-            $apiKey = config('services.gemini.key');
+{
+    try {
+        $endpoint = config('services.chatbot.endpoint');
+        $apiKey   = config('services.chatbot.key');
 
-            $payload = [
-                'contents' => [
-                    ['parts' => [['text' => $prompt]]]
+        $payload = [
+            'model' => config('services.chatbot.model'), // or any OpenRouter model
+            'messages' => [
+                [
+                    'role' => 'user',
+                    'content' => $prompt
                 ]
-            ];
+            ],
+            'temperature' => 0.7
+        ];
 
-            $response = Http::withHeaders([
-                'x-goog-api-key' => $apiKey,
-                'Content-Type' => 'application/json',
-            ])->timeout(30)->post($endpoint, $payload);
+        $response = Http::withHeaders([
+            'Authorization' => 'Bearer ' . $apiKey,
+            'Content-Type'  => 'application/json',
+            'HTTP-Referer'  => url('/'),        // required by OpenRouter
+            'X-Title'       => 'Telequill Chat',       // optional but recommended
+        ])->timeout(30)->post($endpoint, $payload);
 
-            $data = $response->json();
-            $reply = 'No response from LLM.';
+        $data = $response->json();
+        $reply = 'No response from LLM.';
 
-            if (isset($data['candidates'][0]['content']['parts'][0]['text'])) {
-                $reply = trim($data['candidates'][0]['content']['parts'][0]['text']);
-            }
-
-            // detect JSON command
-            if (preg_match('/\{[\s\S]*\}/', $reply, $match)) {
-                $jsonStr = $match[0];
-                $actionData = json_decode($jsonStr, true);
-
-                if (json_last_error() === JSON_ERROR_NONE && isset($actionData['action'])) {
-                    $result = $this->executeLLMAction($actionData);
-                    return response()->json([
-                        'reply' => "🧠 Executed Action:\n" . json_encode($actionData, JSON_PRETTY_PRINT) . "\n\nResult: $result",
-                        'type' => 'action'
-                    ]);
-                }
-            }
-
-            return response()->json(['reply' => $reply, 'type' => 'llm']);
-
-        } catch (\Exception $e) {
-            Log::error('LLM request failed', ['err' => $e->getMessage()]);
-            return response()->json(['reply' => 'LLM server failed.', 'type' => 'llm']);
+        if (isset($data['choices'][0]['message']['content'])) {
+            $reply = trim($data['choices'][0]['message']['content']);
         }
+
+        // detect JSON command inside LLM response
+        if (preg_match('/\{[\s\S]*\}/', $reply, $match)) {
+            $jsonStr = $match[0];
+            $actionData = json_decode($jsonStr, true);
+
+            if (json_last_error() === JSON_ERROR_NONE && isset($actionData['action'])) {
+                $result = $this->executeLLMAction($actionData);
+
+                return response()->json([
+                    'reply' => "🧠 Executed Action:\n"
+                        . json_encode($actionData, JSON_PRETTY_PRINT)
+                        . "\n\nResult: $result",
+                    'type' => 'action'
+                ]);
+            }
+        }
+
+        return response()->json([
+            'reply' => $reply,
+            'type'  => 'llm'
+        ]);
+
+    } catch (\Exception $e) {
+        Log::error('LLM request failed', ['err' => $e->getMessage()]);
+
+        return response()->json([
+            'reply' => 'LLM server failed.',
+            'type'  => 'llm'
+        ]);
     }
+}
+
 
     /** -----------------------
      * EXECUTE LLM ACTION

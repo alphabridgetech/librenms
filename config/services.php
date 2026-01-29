@@ -11,12 +11,11 @@ return [
     'librenms' => [
     'url' => 'http://localhost:8000/',
     ],
-    'gemini' => [
-        'key' => 'AIzaSyD0LCwKAo5--G6h7Lm6M8ZXr8VDHHtslXM',
-    // 'key' => 'AIzaSyBI8LgWDpvKsogtG0A1o-J-wcQl4oUQdKI',
-    // 'key' =>'AIzaSyDF9NA7oPPWEBxxD_lQcmnxrUjY9ZLF8p8',
-    'endpoint' => 'https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent',
-    'model' => env('GEMINI_MODEL', 'gemini-2.0-flash'),
+    'chatbot' => [
+   
+    'key'=> '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',
+    'endpoint' => 'https://openrouter.ai/api/v1/chat/completions',
+    'model' => 'arcee-ai/trinity-large-preview:free',
     ],
 
 
