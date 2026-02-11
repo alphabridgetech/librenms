@@ -194,6 +194,21 @@ Route::middleware(['auth'])->group(function () {
 
     //added by kunal for system software bulk upload
     Route::resource('syssoftbulk', SystemBulkUploadController::class);
+    // Add to routes/web.php for testing
+Route::post('test-file-upload', function(Request $request) {
+    Log::info('Test file upload', [
+        'has_files' => $request->hasFile('sysfiles'),
+        'all_files' => array_keys($request->allFiles()),
+        'files' => $request->file('sysfiles')
+    ]);
+    
+    return response()->json([
+        'received' => $request->hasFile('sysfiles'),
+        'count' => $request->hasFile('sysfiles') ? count($request->file('sysfiles')) : 0,
+        'keys' => array_keys($request->allFiles())
+    ]);
+});
+
     //kunal add 
     Route::resource('chatbot', ChatBotController::class);
     Route::post('chatbot/messages', [ChatBotController::class, 'message'])

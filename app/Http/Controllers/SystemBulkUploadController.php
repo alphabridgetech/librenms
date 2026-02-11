@@ -17,152 +17,283 @@ use LibreNMS\Authentication\LegacyAuth;
 use Spatie\Permission\Models\Role;
 use Illuminate\Support\Facades\Storage;
 use URL;
+use Illuminate\Support\Facades\Log;
+use Illuminate\Support\Facades\Validator;
 
 class SystemBulkUploadController extends Controller
 {
+    protected $tftpPath;
+    protected $pluginPath;
+    protected $venv;
+
+    public function __construct()
+    {
+        $this->venv = base_path('librenms-ansible-inventory-plugin/bin/activate');
+        $this->pluginPath = base_path('librenms-ansible-inventory-plugin');
+        $this->tftpPath = '/tftpboot';
+    }
+
     public function index(Request $request)
-{
-    $this->authorize('viewAny', CustomMib::class);
+    {
+        $this->authorize('viewAny', CustomMib::class);
 
-    // dropdown list (unique hardware)
-    $deviceFilter = Device::whereNotNull('hardware')
-        ->distinct()
-        ->orderBy('hardware')
-        ->pluck('hardware');
+        // dropdown list (unique hardware)
+        $deviceFilter = Device::whereNotNull('hardware')
+            ->distinct()
+            ->orderBy('hardware')
+            ->pluck('hardware');
 
-    // selected model_names (multiple selection)
-    $selectedModels = $request->input('model_names', []);
-    
-    if (!is_array($selectedModels)) {
-        $selectedModels = [$selectedModels];
+        // selected model_names (multiple selection)
+        $selectedModels = $request->input('model_names', []);
+        
+        if (!is_array($selectedModels)) {
+            $selectedModels = [$selectedModels];
+        }
+
+        // Filter out empty values
+        $selectedModels = array_filter($selectedModels);
+
+        // devices query
+        $devicesQuery = Device::orderBy('hostname')
+            ->select('device_id', 'hostname', 'sysName', 'sysObjectID', 'hardware');
+
+        // APPLY FILTERS IF SELECTED
+        if (!empty($selectedModels)) {
+            $devicesQuery->whereIn('hardware', $selectedModels);
+        }
+
+        $devices = $devicesQuery->get();
+
+        return view('syssoftbulk.index', compact(
+            'devices',
+            'deviceFilter',
+            'selectedModels'
+        ));
     }
-
-    // Filter out empty values
-    $selectedModels = array_filter($selectedModels);
-
-    // devices query
-    $devicesQuery = Device::orderBy('hostname')
-        ->select('device_id', 'hostname', 'sysName', 'sysObjectID', 'hardware');
-
-    // APPLY FILTERS IF SELECTED
-    if (!empty($selectedModels)) {
-        $devicesQuery->whereIn('hardware', $selectedModels);
-    }
-
-    $devices = $devicesQuery->get();
-
-    return view('syssoftbulk.index', compact(
-        'devices',
-        'deviceFilter',
-        'selectedModels'
-    ));
-}
-
 
     public function store(Request $request)
     {
-        
-        $this->authorize('create', CustomMib::class);
-
-        $request->validate([
-            'model_name' => 'nullable|string',
-            'mibfile' => 'required|file|max:5120', // 5MB limit
-            'overwrite' => 'nullable|boolean',
+        Log::info('Bulk upload request received', [
+            'all_files' => $request->allFiles(),
+            'has_files' => $request->hasFile('sysfiles'),
+            'files_keys' => array_keys($request->allFiles())
         ]);
 
-        $model_name = $request->input('model_name') ?: 'general';
-        $overwrite = $request->boolean('overwrite', false);
+        $this->authorize('create', CustomMib::class);
 
-        $file = $request->file('mibfile');
-        $filename = basename($file->getClientOriginalName());
+        // Validate request
+        $validator = Validator::make($request->all(), [
+            'device_ids' => 'required|array',
+            'device_ids.*' => 'exists:devices,device_id',
+            // 'sysfiles' => 'required|array',
+            // 'sysfiles.*' => 'required|file|mimes:bin'
+        ]);
 
-        // Base directory
-        $baseDir = rtrim(Config::get('install_dir'), '/') . '/mibs/custom/';
-
-        // Sanitize model_name for folder
-        $subDir = preg_replace('/[^A-Za-z0-9_\-]/', '_', $model_name);
-        $uploadDir = $baseDir . $subDir . '/';
-
-        // Ensure directory exists
-        if (!is_dir($uploadDir) && !mkdir($uploadDir, 0755, true) && !is_dir($uploadDir)) {
-            return back()->withErrors(['mibfile' => "Cannot create directory: $uploadDir"])->withInput();
+        if ($validator->fails()) {
+            Log::error('Validation failed', ['errors' => $validator->errors()]);
+            return response()->json([
+                'message' => 'Validation failed',
+                'errors' => $validator->errors()
+            ], 422);
         }
 
-        $targetPath = $uploadDir . $filename;
+        $results = [
+            'success' => [],
+            'failed' => []
+        ];
 
-        // Check if file exists
-        if (file_exists($targetPath) && !$overwrite) {
-            return back()->withErrors([
-                'mibfile' => "A MIB with this filename already exists in this folder. Check 'Overwrite' to replace it."
-            ])->withInput();
-        }
+        // Get all selected devices
+        $devices = Device::whereIn('device_id', $request->device_ids)->get();
 
-        try {
-            $file->move($uploadDir, $filename);
-        } catch (\Exception $e) {
-            return back()->withErrors(['mibfile' => 'Failed to save file: ' . $e->getMessage()])->withInput();
-        }
+        // Debug: Log the structure of uploaded files
+        Log::info('Uploaded files structure', [
+            'sysfiles' => $request->file('sysfiles'),
+            'device_ids' => $request->device_ids
+        ]);
 
-        // Update DB: overwrite existing record if file already exists in the same folder
-        $mib = CustomMib::updateOrCreate(
-            ['filename' => $filename, 'model_name' => $model_name],
-            [
-                'path' => $targetPath, // store full path including folder
-                'user_id' => Auth::id(),
-            ]
-        );
+        // Process each file with its corresponding devices
+        foreach ($request->file('sysfiles') as $model => $file) {
+            Log::info('Processing file for model', [
+                'model' => $model, 
+                'file_name' => $file->getClientOriginalName()
+            ]);
 
-        return redirect()->route('mibs.index')->with('status', 'MIB uploaded successfully.');
-    }
+            // Get devices of this model that are in the selected device_ids
+            $devicesForModel = $devices->where('hardware', $model);
+            
+            if ($devicesForModel->isEmpty()) {
+                Log::warning('No devices found for model', ['model' => $model]);
+                continue;
+            }
 
-
-
-
-
-
-
-    public function download($id)
-    {
-        $custommib = CustomMib::findOrFail($id);
-
-        $this->authorize('view', $custommib);
-
-        $filePath = $custommib->path;
-
-        // If the path is relative, prepend the base directory
-        if (!Str::startsWith($filePath, '/')) {
-            $filePath = rtrim(Config::get('install_dir'), '/') . '/mibs/custom/' . $filePath;
-        }
-
-        if (!file_exists($filePath)) {
-            return redirect()->route('mibs.index')
-                ->withErrors(['download' => 'File not found on disk.']);
-        }
-
-        return response()->download($filePath, $custommib->filename);
-    }
-
-
-
-
-    public function destroy(CustomMib $mib)
-    {
-        $this->authorize('delete', $mib);
-
-        // dd($mib->path); 
-
-        if (!empty($mib->path) && file_exists($mib->path)) {
-            try {
-                unlink($mib->path);
-            } catch (\Exception $e) {
-                return response()->json('Failed to delete file: ' . $e->getMessage(), 500);
+            // For each device in this model, upload and process
+            foreach ($devicesForModel as $device) {
+                try {
+                    $result = $this->processDeviceUpload($device, $file, $model);
+                    
+                    if ($result['success']) {
+                        $results['success'][] = [
+                            'device_id' => $device->device_id,
+                            'hostname' => $device->hostname,
+                            'hardware' => $device->hardware,
+                            'filename' => $result['filename'],
+                            'message' => $result['message']
+                        ];
+                    } else {
+                        $results['failed'][] = [
+                            'device_id' => $device->device_id,
+                            'hostname' => $device->hostname,
+                            'hardware' => $device->hardware,
+                            'error' => $result['error']
+                        ];
+                    }
+                } catch (\Exception $e) {
+                    Log::error('Bulk upload failed for device ' . $device->hostname . ': ' . $e->getMessage());
+                    
+                    $results['failed'][] = [
+                        'device_id' => $device->device_id,
+                        'hostname' => $device->hostname,
+                        'hardware' => $device->hardware,
+                        'error' => $e->getMessage()
+                    ];
+                }
             }
         }
 
-        $mib->delete();
+        $message = count($results['success']) . ' devices successful, ' . 
+                   count($results['failed']) . ' devices failed';
 
-        return response()->json('MIB deleted successfully.');
+        if (count($results['failed']) > 0) {
+            return response()->json([
+                'message' => $message,
+                'results' => $results
+            ], 207); // Multi-Status
+        }
+
+        return response()->json([
+            'message' => $message,
+            'results' => $results
+        ]);
     }
 
+    private function processDeviceUpload($device, $file, $model)
+    {
+        try {
+            // Ensure TFTP directory exists
+            if (!is_dir($this->tftpPath)) {
+                mkdir($this->tftpPath, 0755, true);
+            }
 
+            // Generate filename: hostname_model_filename.bin
+            $originalName = $file->getClientOriginalName();
+            $filename = $device->hostname . '_' . $model . '_' . $originalName;
+            
+            // Move file to TFTP directory
+            $file->move($this->tftpPath, $filename);
+
+            // Set TFTP server (you might want to make this configurable)
+            $tftpServer = config('app.tftp_server', '10.1.1.1');
+
+            // Create host file for Ansible if it doesn't exist
+            $hostFile = $this->ensureHostFile($device->hostname);
+
+            // Run Ansible playbook
+            $playbook = "{$this->pluginPath}/playbooks/tftpupload.yml";
+            $hosts = "{$this->pluginPath}/hosts/{$device->hostname}.yml";
+
+            $output = $this->runAnsible($playbook, $hosts, [
+                "tftp_server" => $tftpServer,
+                "filename" => $filename,
+                "destination_file" => $originalName,
+            ]);
+
+            // Log the upload
+            Log::info('Bulk upload successful for device ' . $device->hostname, [
+                'device_id' => $device->device_id,
+                'filename' => $filename,
+                'model' => $model
+            ]);
+
+            return [
+                'success' => true,
+                'filename' => $filename,
+                'message' => 'Uploaded and processed successfully',
+                'output' => $output
+            ];
+
+        } catch (\Exception $e) {
+            Log::error('Device upload failed: ' . $e->getMessage(), [
+                'device' => $device->hostname,
+                'model' => $model,
+                'file' => $file->getClientOriginalName()
+            ]);
+
+            return [
+                'success' => false,
+                'error' => $e->getMessage()
+            ];
+        }
+    }
+
+    private function ensureHostFile($hostname)
+    {
+        $hostsDir = "{$this->pluginPath}/hosts";
+        
+        if (!is_dir($hostsDir)) {
+            mkdir($hostsDir, 0755, true);
+        }
+
+        $hostFile = "{$hostsDir}/{$hostname}.yml";
+        
+        if (!file_exists($hostFile)) {
+            $content = "[devices]\n{$hostname} ansible_host={$hostname}\n\n[devices:vars]\nansible_connection=network_cli\nansible_network_os=ios\nansible_user=librenms\nansible_password=your_password\nansible_become=yes\nansible_become_method=enable";
+            file_put_contents($hostFile, $content);
+        }
+
+        return $hostFile;
+    }
+
+    private function runAnsible(string $playbook, string $hosts, array $extraVars = []): string
+    {
+        $extraVarsString = "";
+
+        if (!empty($extraVars)) {
+            foreach ($extraVars as $key => $value) {
+                // Escape special characters
+                $escapedValue = escapeshellarg($value);
+                $extraVarsString .= " --extra-vars \"{$key}={$value}\"";
+            }
+        }
+
+        // Check if venv exists
+        if (file_exists($this->venv)) {
+            $cmd = "source {$this->venv} && ansible-playbook -i {$hosts} {$playbook}{$extraVarsString} 2>&1";
+        } else {
+            $cmd = "ansible-playbook -i {$hosts} {$playbook}{$extraVarsString} 2>&1";
+        }
+
+        Log::debug('Running Ansible command: ' . $cmd);
+        
+        $output = shell_exec($cmd);
+        
+        if ($output === null) {
+            throw new \Exception('Failed to execute Ansible playbook');
+        }
+
+        return $output;
+    }
+
+    public function getUploadStatus(Request $request)
+    {
+        $deviceIds = $request->input('device_ids', []);
+        
+        if (empty($deviceIds)) {
+            return response()->json(['status' => 'no_devices']);
+        }
+
+        return response()->json([
+            'status' => 'ready',
+            'message' => 'Ready to upload'
+        ]);
+    }
 }
