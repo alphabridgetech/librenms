@@ -20,7 +20,7 @@ use URL;
 
 class SystemBulkUploadController extends Controller
 {
-   public function index(Request $request)
+    public function index(Request $request)
 {
     $this->authorize('viewAny', CustomMib::class);
 
@@ -30,16 +30,23 @@ class SystemBulkUploadController extends Controller
         ->orderBy('hardware')
         ->pluck('hardware');
 
-    // selected model_name (hardware)
-    $modelName = $request->input('model_name');
+    // selected model_names (multiple selection)
+    $selectedModels = $request->input('model_names', []);
+    
+    if (!is_array($selectedModels)) {
+        $selectedModels = [$selectedModels];
+    }
+
+    // Filter out empty values
+    $selectedModels = array_filter($selectedModels);
 
     // devices query
     $devicesQuery = Device::orderBy('hostname')
         ->select('device_id', 'hostname', 'sysName', 'sysObjectID', 'hardware');
 
-    // APPLY FILTER ONLY IF SELECTED
-    if (!empty($modelName)) {
-        $devicesQuery->where('hardware', $modelName);
+    // APPLY FILTERS IF SELECTED
+    if (!empty($selectedModels)) {
+        $devicesQuery->whereIn('hardware', $selectedModels);
     }
 
     $devices = $devicesQuery->get();
@@ -47,7 +54,7 @@ class SystemBulkUploadController extends Controller
     return view('syssoftbulk.index', compact(
         'devices',
         'deviceFilter',
-        'modelName'
+        'selectedModels'
     ));
 }
 
