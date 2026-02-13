@@ -2,13 +2,13 @@ import paramiko
 import time
 import sys
 
-HOST = "192.168.200.245"
+HOST = "192.168.200.246"
 USER = "admin"
 PASSWORD = "admin"
 
-TFTP_SERVER = "192.168.200.73"
-SOURCE_FILE = "192.168.200.245_startup-config"
-DEST_FILE = "startup-config"
+TFTP_SERVER = "192.168.200.128"
+SOURCE_FILE = "192168200246.bin"
+DEST_FILE = "switch.bin"
 
 def read(shell):
     out = ""

@@ -204,9 +204,9 @@ class SystemBulkUploadController extends Controller
 
     private function runAnsibleFirmwareUpload($device, $filename)
     {
-        
+       
         $hosts = "{$this->pluginPath}/hosts/{$device->hostname}.yml";
-        $playbook = "{$this->pluginPath}/playbooks/tftp_upload.yml";
+        $playbook = "{$this->pluginPath}/playbooks/tftpupload.yml";
 
 
         $tftpServer = "192.168.200.128"; 
