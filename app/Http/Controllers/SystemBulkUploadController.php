@@ -91,6 +91,7 @@ class SystemBulkUploadController extends Controller
 
     public function process(Request $request)
     {
+        // dd($request->all());
         $this->authorize('create', CustomMib::class);
         
         // Validate request
@@ -98,13 +99,13 @@ class SystemBulkUploadController extends Controller
             'selected_devices' => 'required|array',
             'selected_devices.*' => 'exists:devices,device_id',
             'uploads' => 'required|array',
-            'uploads.*' => 'required|file|mimes:bin,img,tar,tar.gz,zip,txt|max:102400', // 100MB max
+            'uploads.*' => 'required|file|mimes:bin|max:102400', // 100MB max
         ], [
             'selected_devices.required' => 'Please select at least one device',
             'selected_devices.*.exists' => 'One or more selected devices do not exist',
             'uploads.required' => 'Please upload at least one file',
             'uploads.*.required' => 'All selected hardware models require a file upload',
-            'uploads.*.mimes' => 'Invalid file format. Allowed formats: .bin, .img, .tar, .tar.gz, .zip, .txt',
+            'uploads.*.mimes' => 'Invalid file format. Allowed formats: .bin',
             'uploads.*.max' => 'File size cannot exceed 100MB',
         ]);
 
@@ -116,7 +117,9 @@ class SystemBulkUploadController extends Controller
 
         // Get selected devices and uploaded files
         $selectedDeviceIds = $request->input('selected_devices');
+        
         $selectedDevices = Device::whereIn('device_id', $selectedDeviceIds)->get();
+        
         $uploads = $request->file('uploads');
         
         $successCount = 0;
@@ -160,7 +163,7 @@ class SystemBulkUploadController extends Controller
                 // Check if file already exists
                 if (file_exists($filePath)) {
                     // Add timestamp to make unique
-                    $filename = $safeHostname . '_' . time() . '_' . $safeOriginalName;
+                    $filename = $safeHostname .'_' . $safeOriginalName;
                     $filePath = $this->tftpPath . '/' . $filename;
                 }
                 

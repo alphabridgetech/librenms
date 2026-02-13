@@ -99,8 +99,8 @@
                                                        name="uploads[{{ $model }}]" 
                                                        id="file_{{ $index }}"
                                                        class="form-control file-upload-input"
-                                                       accept=".bin,.img,.tar,.tar.gz,.zip,.txt">
-                                                <span class="help-block">{{ __('Allowed formats: .bin, .img, .tar, .tar.gz, .zip, .txt (Max: 100MB)') }}</span>
+                                                       accept=".bin">
+                                                <span class="help-block">{{ __('Allowed formats: .bin)') }}</span>
                                             </div>
                                             
                                             @if(isset($uploadedFiles[$model]))
