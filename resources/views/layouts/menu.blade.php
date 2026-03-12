@@ -180,6 +180,8 @@
                         <li role="presentation" class="divider"></li>
                         <li><a href="{{ url('addhost') }}"><i class="fa fa-plus fa-fw fa-lg"
                                                               aria-hidden="true"></i> {{ __('Add Device') }}</a></li>
+                        <li><a href="{{ url('addbulkhost') }}"><i class="fa fa-plus fa-fw fa-lg"
+                                                              aria-hidden="true"></i> {{ __('Add Bulk Devices') }}</a></li>
                         <li><a href="{{ url('delhost') }}"><i class="fa fa-trash fa-fw fa-lg"
                                                               aria-hidden="true"></i> {{ __('Delete Device') }}</a></li>
                     @endadmin

@@ -1,5 +1,6 @@
 <!DOCTYPE HTML>
 <html lang="{{ app()->getLocale() }}">
+
 <head>
     <meta charset="utf-8">
     <meta http-equiv="X-UA-Compatible" content="IE=edge">
@@ -7,7 +8,7 @@
     <base href="{{ LibrenmsConfig::get('base_url') }}">
     <meta http-equiv="content-type" content="text/html; charset=utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    @if(!LibrenmsConfig::get('favicon', false))
+    @if (!LibrenmsConfig::get('favicon', false))
         <link rel="apple-touch-icon" sizes="180x180" href="{{ asset('images/apple-touch-icon.png') }}">
         <link rel="icon" type="image/png" href="{{ asset('images/fabavicon-32x32.png') }}" sizes="32x32">
         <link rel="icon" type="image/png" href="{{ asset('images/abfavicon-16x16.png') }}" sizes="16x16">
@@ -43,10 +44,10 @@
     <link href="{{ asset('css/query-builder.default.min.css') }}" rel="stylesheet">
     <link href="{{ asset(LibrenmsConfig::get('stylesheet', 'css/styles.css')) }}?ver=25052501" rel="stylesheet">
     <link href="{{ asset('css/tw_dark.css?ver=31072025') }}" rel="stylesheet">
-    @if(!in_array(session('applied_site_style', 'light'), ['light', 'dark']))
-    <link href="{{ asset('css/' . session('applied_site_style') . '.css?ver=732417643') }}" rel="stylesheet">
+    @if (!in_array(session('applied_site_style', 'light'), ['light', 'dark']))
+        <link href="{{ asset('css/' . session('applied_site_style') . '.css?ver=732417643') }}" rel="stylesheet">
     @endif
-    @foreach(LibrenmsConfig::get('webui.custom_css', []) as $custom_css)
+    @foreach (LibrenmsConfig::get('webui.custom_css', []) as $custom_css)
         <link href="{{ $custom_css }}" rel="stylesheet">
     @endforeach
     @yield('css')
@@ -96,40 +97,48 @@
         });
     </script>
     @auth
-        @if(session('preferences.timezone_static') == null || ! session('preferences.timezone_static'))
-        <script>
-            var tz = window.Intl.DateTimeFormat().resolvedOptions().timeZone;
-            if(tz !== '{{ session('preferences.timezone') }}') {
-                updateTimezone(tz, false);
-            }
-        </script>
+        @if (session('preferences.timezone_static') == null || !session('preferences.timezone_static'))
+            <script>
+                var tz = window.Intl.DateTimeFormat().resolvedOptions().timeZone;
+                if (tz !== '{{ session('preferences.timezone') }}') {
+                    updateTimezone(tz, false);
+                }
+            </script>
         @endif
         <script src="{{ asset('js/register-service-worker.js') }}" defer></script>
     @endauth
     @yield('javascript')
 </head>
+
 <body>
-@if(Auth::check())
-    <script>
-        // only update resolution if it doesn't match what is stored in the session
-        if (document.documentElement.clientWidth !== {{ (int) session('screen_width') }} || document.documentElement.clientHeight !== {{ (int) session('screen_height') }}) {
-            updateResolution(false);
-        }
-    </script>
-@endif
+    @if (Auth::check())
+        <script>
+            // only update resolution if it doesn't match what is stored in the session
+            if (document.documentElement.clientWidth !== {{ (int) session('screen_width') }} || document.documentElement
+                .clientHeight !== {{ (int) session('screen_height') }}) {
+                updateResolution(false);
+            }
+        </script>
+    @endif
 
-@if(Request::get('bare') == 'yes')
-    <style>body { padding-top: 0 !important; padding-bottom: 0 !important; }</style>
-@elseif($show_menu)
-    @include('layouts.menu')
-@endif
+    @if (Request::get('bare') == 'yes')
+        <style>
+            body {
+                padding-top: 0 !important;
+                padding-bottom: 0 !important;
+            }
+        </style>
+    @elseif($show_menu)
+        @include('layouts.menu')
+    @endif
 
-@yield('content')
+    @yield('content')
 
-@yield('scripts')
+    @yield('scripts')
 
-<x-toast />
+    <x-toast />
 
-@stack('scripts')
+    @stack('scripts')
 </body>
+
 </html>
