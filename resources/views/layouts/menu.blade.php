@@ -546,6 +546,8 @@
 
 
 
+
+
 {{-- Alerts --}}
                 <li class="dropdown">
                     <a href="#" class="dropdown-toggle" data-hover="dropdown" data-toggle="dropdown"><i
@@ -575,7 +577,11 @@
                     </ul>
                 </li>
 
-                       
+               <li>
+<a id="soundToggle">
+<span class="tw:md:hidden tw:lg:inline-block">{{ __('🔊 ON') }}</span>
+</a>
+</li>        
 
 
                 @includeIf('menu.custom')

@@ -6,6 +6,7 @@ use App\Facades\LibrenmsConfig;
 use App\Models\Alert;
 use App\Models\Eventlog;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\DB;
 use LibreNMS\Enum\Severity;
 
 class AlertController extends Controller
@@ -54,5 +55,61 @@ class AlertController extends Controller
             'message' => 'Alert has not been acknowledged.',
             'status' => 'error',
         ]);
+    }
+
+    public function getAlerts(Request $request): \Illuminate\Http\JsonResponse
+    {
+        $where = "devices.disabled = 0 and alerts.rule_id > 0 and alerts.state != 0 and alerts.state!=2";
+
+        $query = DB::table('alerts')
+            ->leftJoin('devices', 'alerts.device_id', '=', 'devices.device_id')
+            ->leftJoin('locations', 'devices.location_id', '=', 'locations.id')
+            ->rightJoin('alert_rules', 'alerts.rule_id', '=', 'alert_rules.id')
+            ->whereRaw($where);
+
+        // // filter by device
+        // if ($request->device_id) {
+        //     $query->where('alerts.device_id', $request->device_id);
+        // }
+
+        // // filter by rule
+        // if ($request->rule_id) {
+        //     $query->where('alerts.rule_id', $request->rule_id);
+        // }
+
+        // // filter by state
+        // if ($request->state !== null) {
+        //     $query->where('alerts.state', $request->state);
+        // }
+
+        // // filter severity
+        // if ($request->min_severity) {
+        //     $query->where('alert_rules.severity', '>=', $request->min_severity);
+        // }
+
+        // dd($query->toSql(), $query->getBindings());
+
+        $alerts = $query->select(
+            'alerts.id',
+            'alerts.state',
+            'alerts.timestamp',
+            'alerts.device_id',
+            'devices.hostname',
+            'devices.sysName',
+            'locations.location',
+            'alert_rules.name as rule_name',
+            'alert_rules.severity',
+            'alert_rules.builder'
+        )
+            ->orderBy('alerts.timestamp', 'DESC')
+            ->limit(3)
+            ->get();
+
+        return response()->json([
+            'total' => $alerts->count(),
+            'alerts' => $alerts
+        ]);
+
+
     }
 }

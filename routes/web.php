@@ -323,6 +323,8 @@ Route::middleware(['auth'])->group(function () {
 
     // Ajax routes
     Route::prefix('ajax')->group(function () {
+        //alert
+        Route::get('/alerts-api', [AlertController::class, 'getAlerts']);
         // page ajax controllers
         Route::resource('location', LocationController::class)->only('update', 'destroy');
         Route::resource('pollergroup', PollerGroupController::class)->only('destroy');
