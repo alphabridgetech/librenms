@@ -299,6 +299,8 @@
 
         function showAlertNotification(type, message,url) {
 
+            if (!soundEnabled) return;
+
             playAlertSound(type);
 
             toastr.options = {
