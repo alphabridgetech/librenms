@@ -43,5 +43,9 @@ var eventlog_grid = $("#eventlog").bootgrid({
     url: "' . url('/ajax/table/eventlog') . '"
 });
 
+setInterval(function () {
+    $("#eventlog").bootgrid("reload");
+}, 10000);
+
 </script>
 ';
