@@ -5,7 +5,7 @@
             <tr>
                 <th data-column-id="datetime" data-order="desc">{{ __('Timestamp') }}</th>
                 <th data-column-id="type">{{ __('Type') }}</th>
-                <th data-column-id="device_id">{{ __('Hostname') }}</th>
+                <th data-column-id="device_id">{{ __('Hostnames') }}</th>
                 <th data-column-id="message">{{ __('Message') }}</th>
                 <th data-column-id="username">{{ __('User') }}</th>
             </tr>
@@ -14,28 +14,34 @@
     </div>
 </div>
 <script>
-    $(function () {
-        var grid = $("#eventlog-{{ $id }}").bootgrid({
-            ajax: true,
-            rowCount: [50, 100, 250, -1],
-            navigation: ! {{ $hidenavigation }},
-            post: function ()
-            {
-                return {
-                    device: "{{ $device }}",
-                    device_group: "{{ $device_group }}",
-                    eventtype: "{{ $eventtype }}"
-                };
-            },
-            url: "{{ url('/ajax/table/eventlog') }}"
-        });
-
-        $('#eventlog_container-{{ $id }}').on('refresh', function (event) {
-            grid.bootgrid('reload');
-        });
-        $('#eventlog_container-{{ $id }}').on('destroy', function (event) {
-            grid.bootgrid('destroy');
-            delete grid;
-        });
+$(function () {
+    var grid = $("#eventlog-{{ $id }}").bootgrid({
+        ajax: true,
+        rowCount: [50, 100, 250, -1],
+        navigation: ! {{ $hidenavigation }},
+        post: function ()
+        {
+            return {
+                device: "{{ $device }}",
+                device_group: "{{ $device_group }}",
+                eventtype: "{{ $eventtype }}"
+            };
+        },
+        url: "{{ url('/ajax/table/eventlog') }}"
     });
+
+    // 🔥 AUTO REFRESH EVERY 5 SECONDS
+    setInterval(function () {
+        grid.bootgrid('reload');
+    }, 5000);
+
+    $('#eventlog_container-{{ $id }}').on('refresh', function () {
+        grid.bootgrid('reload');
+    });
+
+    $('#eventlog_container-{{ $id }}').on('destroy', function () {
+        grid.bootgrid('destroy');
+        delete grid;
+    });
+});
 </script>
