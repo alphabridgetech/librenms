@@ -1,5 +1,5 @@
 count: 22
-current_time: '2026-01-12 18:24:00'
+current_time: '2026-04-08 15:11:13'
 interfaces:
 -   duplex: auto
     name: g0/1
@@ -7,54 +7,54 @@ interfaces:
     status: down
     type: Giga-TX
     vlan: Trunk(1)
--   duplex: auto
+-   duplex: full
     name: g0/2
-    speed: auto
-    status: down
+    speed: 100Mb
+    status: up
     type: Giga-TX
-    vlan: '1'
+    vlan: '200'
 -   duplex: auto
     name: g0/3
     speed: auto
     status: down
     type: Giga-TX
     vlan: Trunk(1)
--   duplex: auto
+-   duplex: full
     name: g0/4
-    speed: auto
-    status: down
+    speed: 1000Mb
+    status: up
     type: Giga-TX
-    vlan: '200'
+    vlan: '111'
 -   duplex: auto
     name: g0/5
     speed: auto
     status: down
     type: Giga-TX
-    vlan: '200'
--   duplex: full
+    vlan: '1'
+-   duplex: auto
     name: g0/6
-    speed: 1000Mb
-    status: up
+    speed: auto
+    status: down
     type: Giga-TX
-    vlan: Trunk(1)
+    vlan: '1'
 -   duplex: auto
     name: g0/7
     speed: auto
     status: down
     type: Giga-TX
-    vlan: '200'
+    vlan: '1'
 -   duplex: auto
     name: g0/8
     speed: auto
     status: down
     type: Giga-TX
-    vlan: Trunk(1)
+    vlan: '1'
 -   duplex: auto
     name: g0/9
     speed: auto
     status: down
     type: Giga-TX
-    vlan: '200'
+    vlan: '1'
 -   duplex: auto
     name: g0/10
     speed: auto
@@ -67,71 +67,71 @@ interfaces:
     status: down
     type: Giga-TX
     vlan: Trunk(1)
--   duplex: auto
+-   duplex: full
     name: g0/12
-    speed: auto
-    status: down
+    speed: 1000Mb
+    status: up
     type: Giga-TX
-    vlan: Trunk(1)
+    vlan: '200'
 -   duplex: auto
     name: g0/13
     speed: auto
     status: down
     type: Giga-TX
-    vlan: '200'
+    vlan: '1'
 -   duplex: auto
     name: g0/14
     speed: auto
     status: down
     type: Giga-TX
-    vlan: Trunk(1)
+    vlan: '1'
 -   duplex: auto
     name: g0/15
     speed: auto
     status: down
     type: Giga-TX
-    vlan: Trunk(1)
+    vlan: '1'
 -   duplex: auto
     name: g0/16
     speed: auto
     status: down
     type: Giga-TX
-    vlan: '200'
--   duplex: full
+    vlan: '1'
+-   duplex: auto
     name: g0/17
-    speed: 100Mb
-    status: up
+    speed: auto
+    status: down
     type: Giga-TX
-    vlan: '200'
+    vlan: '1'
 -   duplex: auto
     name: g0/18
     speed: auto
     status: down
     type: Giga-TX
-    vlan: '200'
+    vlan: '1'
 -   duplex: auto
     name: g0/19
     speed: auto
     status: down
     type: Giga-TX
-    vlan: '200'
+    vlan: '1'
 -   duplex: auto
     name: g0/20
     speed: auto
     status: down
     type: Giga-TX
-    vlan: '200'
+    vlan: '1'
 -   duplex: auto
     name: g0/21
     speed: auto
     status: down
     type: Giga-TX
-    vlan: '200'
--   duplex: full
-    name: g0/22
-    speed: 100Mb
-    status: up
-    type: Giga-TX
     vlan: Trunk(1)
+-   duplex: auto
+    name: g0/22
+    speed: auto
+    status: down
+    type: Giga-TX
+    vlan: '1'
 ip: 192.168.200.244
 status: success

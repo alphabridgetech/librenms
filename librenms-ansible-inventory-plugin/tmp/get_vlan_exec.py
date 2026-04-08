@@ -7,7 +7,7 @@ import sys
 
 HOST = "192.168.200.244"
 USER = "admin"
-PASSWORD = "Alpha@123#"
+PASSWORD = "admin"
 
 def read_until_prompt(shell, prompt_regex, timeout=10):
     buf = ""

@@ -103,6 +103,9 @@ function loadFromCookies() {
 }
 
 function loadSystemInfo() {
+    console.log('====================================');
+    
+    console.log('====================================');
 
     let ip = getCookie(ck("device_ip")) || "{{ $device->hostname }}";
     let apiToken = getCookie(ck("api_token")) || "{{ $data['api_token'] }}";

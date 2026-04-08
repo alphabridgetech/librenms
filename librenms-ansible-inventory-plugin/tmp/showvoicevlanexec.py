@@ -6,7 +6,7 @@ import re
 
 HOST = "192.168.200.244"
 USER = "admin"
-PASSWORD = "Alpha@123#"
+PASSWORD = "admin"
 OUTPUT_FILE = "/opt/librenms/librenms-ansible-inventory-plugin/output/192.168.200.244_voicevlanshow.yml"
 
 def read_all(chan, timeout=5):

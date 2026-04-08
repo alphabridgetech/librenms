@@ -6,9 +6,9 @@ import traceback
 
 HOST = "192.168.200.244"
 USER = "admin"
-PASSWORD = "Alpha@123#"
-VLAN_ID = "1432"
-VLAN_NAME = "testing"
+PASSWORD = "admin"
+VLAN_ID = "5"
+VLAN_NAME = "VLAN0005"
 
 CONNECT_TIMEOUT = 15
 POLL_INTERVAL = 0.2

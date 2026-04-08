@@ -1,0 +1,63 @@
+- name: Set TRUNK VLAN via SSH
+  hosts: all
+  gather_facts: no
+
+  tasks:
+
+    - name: Copy Python script
+      ansible.builtin.copy:
+        dest: "/opt/librenms/librenms-ansible-inventory-plugin/tmp/set_trunk_vlan_exec.py"
+        mode: '0755'
+        content: |
+          import paramiko
+          import time
+
+          HOST = "{{ ansible_host }}"
+          USER = "{{ ansible_user }}"
+          PASSWORD = "{{ ansible_password }}"
+          VLAN_LIST = "{{ vlan_ids }}"
+          INTERFACE = "{{ interface }}"
+
+          try:
+              ssh = paramiko.SSHClient()
+              ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+              ssh.connect(HOST, username=USER, password=PASSWORD, look_for_keys=False, allow_agent=False)
+
+              shell = ssh.invoke_shell()
+              time.sleep(1)
+
+              def send_cmd(cmd, delay=1):
+                  shell.send(cmd + "\n")
+                  time.sleep(delay)
+
+              send_cmd("enable")
+              send_cmd(PASSWORD)
+              send_cmd("config")
+
+              # Interface config
+              send_cmd(f"interface {INTERFACE}")
+              send_cmd("switchport mode trunk")
+
+              # Allow VLANs
+              send_cmd(f"switchport trunk vlan-allowed {VLAN_LIST}")
+
+              send_cmd("end")
+              send_cmd("write memory", 2)
+
+              print("SUCCESS")
+
+              ssh.close()
+
+          except Exception as e:
+              print("ERROR:", e)
+
+    - name: Run script
+      ansible.builtin.command: >
+        /opt/librenms/librenms-ansible-inventory-plugin/bin/python3
+        /opt/librenms/librenms-ansible-inventory-plugin/tmp/set_trunk_vlan_exec.py
+      register: output
+      changed_when: true
+
+    - name: Debug
+      ansible.builtin.debug:
+        var: output.stdout

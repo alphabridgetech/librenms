@@ -59,6 +59,7 @@ class KunalApiController
 
     // Run Ansible
     $ansibleOutput = $this->runAnsible($playbook, $hosts);
+    
 
     // Correct YAML file
     $yamlFile = "{$this->pluginPath}/output/{$hostname}_devicedetails.yml";
@@ -245,6 +246,55 @@ public function getmtu($hostname)
 
         return $this->success([
             "message" => "Hostname changed successfully",
+            "raw"     => $output
+        ]);
+    }
+
+    #------------------------------------------------------------
+    #                     vlan configure
+    #------------------------------------------------------------
+    public function vlanconfigure(Request $request, $hostname)
+    {
+        $data = $request->validate([
+            'vlan_id' => 'required|integer',
+            'interface' => 'required|string',
+        ]);
+
+        $playbook = "{$this->pluginPath}/playbooks/vlanconfigure.yml";
+        $hosts = "{$this->pluginPath}/hosts/{$hostname}.yml";
+
+        $output = $this->runAnsible($playbook, $hosts, [
+            "vlan_id"   => $data['vlan_id'],
+            "interface" => $data['interface'],
+        ]);
+
+        return $this->success([
+            "message" => "VLAN configured successfully",
+            "raw"     => $output
+        ]);
+    }
+
+    #------------------------------------------------------------
+    #                     vlan configure trunk
+    #------------------------------------------------------------
+
+    public function vlanconfiguretrunk(Request $request, $hostname)
+    {
+        $data = $request->validate([
+            'vlan_ids' => 'required|string',
+            'interface' => 'required|string',
+        ]);
+
+        $playbook = "{$this->pluginPath}/playbooks/vlanconfiguretrunk.yml";
+        $hosts = "{$this->pluginPath}/hosts/{$hostname}.yml";
+
+        $output = $this->runAnsible($playbook, $hosts, [
+            "vlan_ids"  => $data['vlan_ids'],
+            "interface" => $data['interface'],
+        ]);
+
+        return $this->success([
+            "message" => "Trunk VLANs configured successfully",
             "raw"     => $output
         ]);
     }

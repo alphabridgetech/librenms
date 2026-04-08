@@ -1,4 +1,2 @@
 ip: 192.168.200.244
 mac_addresses:
-    - mac: "0800.27ea.e2f8"
-      mask: "ffff.ffff.ffff"

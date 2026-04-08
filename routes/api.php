@@ -79,7 +79,10 @@ Route::prefix('v0')->group(function () {
         Route::get('voicevlanshow/{hostname}', [App\Api\Controllers\KunalApiController::class, 'voicevlanshow'])->name('voicevlanshow');
         Route::post('voicevlan/batch/{hostname}', [App\Api\Controllers\KunalApiController::class, 'voicevlandelete'])->name('voicevlandelete');
         Route::post('tftpupload/{hostname}', [App\Api\Controllers\KunalApiController::class, 'tftpupload'])->name('tftpupload');
-        Route::post('tftpexport/{hostname}', [App\Api\Controllers\KunalApiController::class, 'tftpexport'])->name('tftpexport');        
+        Route::post('tftpexport/{hostname}', [App\Api\Controllers\KunalApiController::class, 'tftpexport'])->name('tftpexport'); 
+        //for vlan configure
+        Route::post('vlan/configure/{hostname}', [App\Api\Controllers\KunalApiController::class, 'vlanconfigure'])->name('configure.vlan');       
+        Route::post('vlan/configure-trunk/{hostname}', [App\Api\Controllers\KunalApiController::class, 'vlanconfiguretrunk'])->name('vlan.configure.trunk');       
    
 
 
