@@ -3,7 +3,7 @@ import time
 import json
 from datetime import datetime
 
-HOST = "192.168.200.244"
+HOST = "192.168.200.245"
 USER = "admin"
 PASSWORD = "admin"
 

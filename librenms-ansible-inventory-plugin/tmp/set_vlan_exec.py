@@ -1,11 +1,11 @@
 import paramiko
 import time
 
-HOST = "192.168.200.244"
+HOST = "192.168.200.245"
 USER = "admin"
 PASSWORD = "admin"
-VLAN_ID = "4"
-INTERFACE = "g0/1"
+VLAN_ID = "444"
+INTERFACE = "g0/5"
 
 try:
     ssh = paramiko.SSHClient()

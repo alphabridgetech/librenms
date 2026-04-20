@@ -1,15 +1,15 @@
 ---
-- name: Upload file to device via TFTP
+- name: Upload file via TFTP and reboot device
   hosts: alphabridge_devices
   gather_facts: no
 
   vars:
-    script_path: "/opt/librenms/librenms-ansible-inventory-plugin/tmp/tftpupload_exec.py"
+    script_path: "/opt/librenms/librenms-ansible-inventory-plugin/tmp/tftp_upload_reboot.py"
     venv_python: "/opt/librenms/librenms-ansible-inventory-plugin/bin/python3"
 
   tasks:
 
-    - name: Create TFTP upload Python script
+    - name: Create TFTP upload + reboot Python script
       ansible.builtin.copy:
         dest: "{{ script_path }}"
         mode: "0755"
@@ -26,7 +26,8 @@
           SOURCE_FILE = "{{ filename }}"
           DEST_FILE = "{{ destination_file }}"
 
-          def read(shell):
+          def read(shell, wait=1):
+              time.sleep(wait)
               out = ""
               while shell.recv_ready():
                   out += shell.recv(65535).decode(errors="ignore")
@@ -48,7 +49,7 @@
               time.sleep(2)
               output = read(shell)
 
-              # ENTER ENABLE MODE ONLY IF REQUIRED
+              # ENTER ENABLE MODE IF REQUIRED
               if output.strip().endswith(">"):
                   shell.send("enable\n")
                   time.sleep(1)
@@ -61,6 +62,8 @@
                   print(output)
                   sys.exit(1)
 
+              print("=== STARTING TFTP UPLOAD ===")
+
               # COPY FROM TFTP TO FLASH
               shell.send(f"copy tftp:{SOURCE_FILE} flash: {TFTP_SERVER}\n")
               time.sleep(2)
@@ -69,38 +72,61 @@
               if "Destination file name" in output:
                   shell.send(DEST_FILE + "\n")
 
-              # READ FULL TRANSFER (long-running)
+              # WAIT FOR TRANSFER
               end_time = time.time() + 180
+              success = False
+
               while time.time() < end_time:
-                  time.sleep(1)
-                  chunk = read(shell)
+                  chunk = read(shell, 1)
                   if chunk:
                       output += chunk
 
                   if "successfully receive" in output.lower():
-                      print(output)
-                      print("SUCCESS")
-                      sys.exit(0)
+                      print("TFTP UPLOAD SUCCESS")
+                      success = True
+                      break
 
                   if "error" in output.lower():
                       print(output)
                       sys.exit(1)
 
-              print("FAILED: timeout waiting for TFTP upload")
+              if not success:
+                  print("FAILED: timeout waiting for TFTP upload")
+                  print(output)
+                  sys.exit(1)
+
+              # SMALL DELAY BEFORE REBOOT
+              time.sleep(2)
+
+              print("=== STARTING REBOOT ===")
+
+              # REBOOT COMMAND
+              shell.send("reboot\n")
+              time.sleep(2)
+              output += read(shell)
+
+              # HANDLE CONFIRMATION
+              if any(x in output.lower() for x in ["(y/n)", "yes/no", "[y/n]", "confirm"]):
+                  shell.send("y\n")
+                  time.sleep(2)
+                  output += read(shell)
+
+              print("SUCCESS: Upload + Reboot completed")
               print(output)
-              sys.exit(1)
+
+              sys.exit(0)
 
           except Exception as e:
               print("ERROR:", e)
               sys.exit(1)
 
-    - name: Execute TFTP upload script
+    - name: Execute script
       ansible.builtin.command:
         cmd: "{{ venv_python }} {{ script_path }}"
-      register: tftp_output
+      register: final_output
       changed_when: true
-      failed_when: tftp_output.rc != 0
+      failed_when: final_output.rc != 0
 
-    - name: Show TFTP upload result
+    - name: Show result
       ansible.builtin.debug:
-        var: tftp_output.stdout
+        var: final_output.stdout

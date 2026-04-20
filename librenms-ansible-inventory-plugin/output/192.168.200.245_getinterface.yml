@@ -1,24 +1,24 @@
-count: 15
-current_time: '2025-12-23 17:48:59'
+count: 17
+current_time: '2026-04-20 12:55:21'
 interfaces:
--   duplex: full(A)
-    name: g0/1
-    speed: 1000Mb(A)
-    status: up
-    type: Giga-TX
-    vlan: '200'
 -   duplex: auto
-    name: g0/2
+    name: g0/1
     speed: auto
     status: down
     type: Giga-TX
-    vlan: '1'
+    vlan: Trunk(1)
+-   duplex: full(A)
+    name: g0/2
+    speed: 1000Mb(A)
+    status: up
+    type: Giga-TX
+    vlan: Trunk(1)
 -   duplex: auto
     name: g0/3
     speed: auto
     status: down
     type: Giga-TX
-    vlan: '1'
+    vlan: Trunk(1)
 -   duplex: auto
     name: g0/4
     speed: auto
@@ -53,7 +53,7 @@ interfaces:
     name: tg0/1
     speed: 10000Mb
     status: down
-    type: 10G-BASE-DAC
+    type: 10Giga-FX
     vlan: '1'
 -   duplex: full
     name: tg0/2
@@ -80,7 +80,19 @@ interfaces:
     type: null
     vlan: null
 -   duplex: null
+    name: v100
+    speed: null
+    status: up
+    type: null
+    vlan: null
+-   duplex: null
     name: v200
+    speed: null
+    status: up
+    type: null
+    vlan: null
+-   duplex: null
+    name: v300
     speed: null
     status: up
     type: null
