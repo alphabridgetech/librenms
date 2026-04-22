@@ -83,7 +83,7 @@ Route::prefix('v0')->group(function () {
         //for vlan configure
         Route::post('vlan/configure/{hostname}', [App\Api\Controllers\KunalApiController::class, 'vlanconfigure'])->name('configure.vlan');       
         Route::post('vlan/configure-trunk/{hostname}', [App\Api\Controllers\KunalApiController::class, 'vlanconfiguretrunk'])->name('vlan.configure.trunk');       
-   
+                Route::post('network/interface/config/{hostname}', [App\Api\Controllers\KunalApiController::class, 'network_interface_config'])->name('network.interface.config');  
 
 
 

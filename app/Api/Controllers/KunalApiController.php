@@ -300,6 +300,36 @@ public function getmtu($hostname)
     }
 
     #------------------------------------------------------------
+    #                       NETWORK INTERFACE CONFIG (QinQ)
+    #------------------------------------------------------------
+
+    public function network_interface_config(Request $request, $hostname)
+    {
+        $data = $request->validate([
+            'interfaces' => 'required|array|min:1',
+        ]);
+
+        $interfaces = $data['interfaces'];
+
+        $configJson = json_encode([
+            'hostname' => $hostname,
+            'interfaces' => $interfaces
+        ], JSON_UNESCAPED_SLASHES);
+
+        $playbook = "{$this->pluginPath}/playbooks/network_interface_config.yml";
+        $hosts = "{$this->pluginPath}/hosts/{$hostname}.yml";
+
+        $cmd = "source {$this->venv} && ansible-playbook -i {$hosts} {$playbook} --extra-vars 'config_json={$configJson}' 2>&1";
+        $output = shell_exec($cmd);
+
+        return $this->success([
+            "message" => "Network interface(s) configured successfully",
+            "configured" => count($interfaces),
+            "raw" => $output
+        ]);
+    }
+
+    #------------------------------------------------------------
     #                     CHANGE MTU
     #------------------------------------------------------------
     public function changemtu(Request $request, $hostname)
