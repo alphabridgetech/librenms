@@ -1,12 +1,12 @@
 count: 17
-current_time: '2026-04-20 12:55:21'
+current_time: '2026-04-20 14:26:52'
 interfaces:
 -   duplex: auto
     name: g0/1
     speed: auto
     status: down
     type: Giga-TX
-    vlan: Trunk(1)
+    vlan: Trunk(321)
 -   duplex: full(A)
     name: g0/2
     speed: 1000Mb(A)

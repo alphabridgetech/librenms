@@ -13,6 +13,10 @@ vlans:
     - tg0/3
     - tg0/4
     status: Static
+-   id: '2'
+    name: VLAN0002
+    ports: []
+    status: Static
 -   id: '100'
     name: VLAN0100
     ports:
@@ -31,4 +35,12 @@ vlans:
     - g0/1
     - g0/2
     - g0/3
+    status: Static
+-   id: '321'
+    name: VLAN0321
+    ports: []
+    status: Static
+-   id: '500'
+    name: VLAN0500
+    ports: []
     status: Static

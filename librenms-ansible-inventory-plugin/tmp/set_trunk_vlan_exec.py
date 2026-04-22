@@ -4,7 +4,7 @@ import time
 HOST = "192.168.200.245"
 USER = "admin"
 PASSWORD = "admin"
-VLAN_LIST = "1234,676,900-912"
+VLAN_LIST = "444"
 INTERFACE = "g0/5"
 
 try:

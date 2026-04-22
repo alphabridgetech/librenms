@@ -4,11 +4,11 @@ import time
 import sys
 import traceback
 
-HOST = "192.168.200.244"
+HOST = "192.168.200.245"
 USER = "admin"
-PASSWORD = "Alpha@123#"
-VLAN_ADD = ""
-VLAN_DELETE = "142"
+PASSWORD = "admin"
+VLAN_ADD = "500"
+VLAN_DELETE = ""
 
 CONNECT_TIMEOUT = 15
 PROMPT_TIMEOUT = 10
