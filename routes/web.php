@@ -194,6 +194,9 @@ Route::middleware(['auth'])->group(function () {
 
     //added by kunal for system software bulk upload
     Route::resource('syssoftbulk', SystemBulkUploadController::class);
+    Route::get('addhost/ip', [SystemBulkUploadController::class, 'addHostIp'])->name('addhost.ip');
+    Route::post('addhost/ip/save', [SystemBulkUploadController::class, 'addHostIpsave'])->name('addhost.ip.save');
+
     // Add to routes/web.php for testing
     Route::get('/system/bulk-upload', [SystemBulkUploadController::class, 'index'])->name('system.bulk.upload');
     Route::post('/system/bulk-upload/process', [SystemBulkUploadController::class, 'process'])->name('system.bulk.upload.process');

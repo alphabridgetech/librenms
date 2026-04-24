@@ -1,0 +1,28 @@
+ 
+
+
+
+
+
+
+
+
+                 Welcome to ABTPL AS200/12/XTS Ethernet Switch
+
+
+
+
+
+AS210T_CPE>enable
+AS210T_CPE#config
+AS210T_CPE_config#hostname kunal
+kunal_config#end
+end
+^
+Unknown command
+kunal_config#write all
+Saving current configuration...
+OK!
+Now saving current ifindex to flash memory...
+OK!
+kunal_config#
