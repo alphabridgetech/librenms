@@ -210,14 +210,14 @@ class SystemBulkUploadController extends Controller
                 $output = $this->runAnsible($playbook, $inventoryFile, $extraVars);
                 //dd($output); // Debug output
                 // Add to LibreNMS
-                $librenmsResult = $this->addDeviceToLibreNMS(trim($ip), $snmpCommunity);
+                //$librenmsResult = $this->addDeviceToLibreNMS(trim($ip), $snmpCommunity);
 
                 $results[] = [
                     'ip' => $ip,
                     'hostname' => $hostname,
                     'status' => 'success',
                     'ansible_output' => $output,
-                    'librenms' => $librenmsResult
+                    // 'librenms' => $librenmsResult
                 ];
 
                 $successCount++;

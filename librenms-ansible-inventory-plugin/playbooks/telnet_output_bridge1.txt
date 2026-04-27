@@ -13,9 +13,9 @@
 
 
 
-AS210T_CPE>enable
-AS210T_CPE#config
-AS210T_CPE_config#hostname kunal
+kunal>enable
+kunal#config
+kunal_config#hostname kunal
 kunal_config#end
 end
 ^

@@ -359,7 +359,7 @@
                     return false;
                 }
                 
-                if (!confirm(`Are you sure you want to process ${validIPs.length} device(s)?\n\nValid IPs: ${validIPs.join(', ')}\n\nThis will:\n1. Create inventory for each device\n2. Upload startup-config via TFTP\n3. Add devices to LibreNMS`)) {
+                if (!confirm(`Are you sure you want to process ${validIPs.length} device(s)?\n\nValid IPs: ${validIPs.join(', ')}\n`)) {
                     return false;
                 }
                 
