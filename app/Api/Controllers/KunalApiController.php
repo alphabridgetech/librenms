@@ -300,6 +300,34 @@ public function getmtu($hostname)
     }
 
     #------------------------------------------------------------
+    #                     NTP
+    #------------------------------------------------------------
+    public function ntp(Request $request, $hostname)
+    {
+
+    $playbook = "{$this->pluginPath}/playbooks/ntp.yml";
+    $hosts = "{$this->pluginPath}/hosts/{$hostname}.yml";
+
+    $output = $this->runAnsible($playbook, $hosts);
+
+    $yamlFile = "{$this->pluginPath}/output/{$hostname}_ntp.yml";
+    if (!file_exists($yamlFile)) {
+        return $this->error("NTP output file not found", $output);
+    }
+    $data = yaml_parse_file($yamlFile);
+    if (empty($data['ntp'])) {
+        return $this->error("NTP data not found in YAML", $data);
+    }
+
+    return $this->success([
+        "ip"   => $data['ip'] ?? $hostname,
+        "ntp" => $data['ntp'],
+        "raw"  => $data
+    ]);
+    }
+
+
+    #------------------------------------------------------------
     #                       NETWORK INTERFACE CONFIG (QinQ)
     #------------------------------------------------------------
 

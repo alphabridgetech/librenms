@@ -1,0 +1,151 @@
+---
+- name: Run "show ntp" on network device via SSH
+  hosts: alphabridge_devices
+  gather_facts: no
+
+  vars:
+    script_path: "/opt/librenms/librenms-ansible-inventory-plugin/tmp/get_ntp_exec.py"
+    output_path: "/opt/librenms/librenms-ansible-inventory-plugin/output/{{ ansible_host }}_ntp.yml"
+    venv_python: "/opt/librenms/librenms-ansible-inventory-plugin/bin/python3"
+
+  tasks:
+
+    - name: Ensure tmp directory exists
+      ansible.builtin.file:
+        path: "/opt/librenms/librenms-ansible-inventory-plugin/tmp"
+        state: directory
+        mode: '0755'
+
+    - name: Ensure output directory exists
+      ansible.builtin.file:
+        path: "/opt/librenms/librenms-ansible-inventory-plugin/output"
+        state: directory
+        mode: '0755'
+
+    - name: Create Python SSH script for NTP
+      ansible.builtin.copy:
+        dest: "{{ script_path }}"
+        mode: '0755'
+        content: |
+          #!/usr/bin/env python3
+          import paramiko
+          import time
+          import re
+          import json
+
+          HOST = "{{ ansible_host }}"
+          USER = "{{ ansible_user }}"
+          PASSWORD = "{{ ansible_password }}"
+
+          def read_until_prompt(shell, prompt_regex, timeout=10):
+              buf = ""
+              end_time = time.time() + timeout
+              while time.time() < end_time:
+                  if shell.recv_ready():
+                      buf += shell.recv(65535).decode(errors='ignore')
+                      if re.search(prompt_regex, buf):
+                          return buf
+                      end_time = time.time() + 0.5
+                  else:
+                      time.sleep(0.1)
+              return buf
+
+          ansi_re = re.compile(r'\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])')
+
+          try:
+              ssh = paramiko.SSHClient()
+              ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+              ssh.connect(HOST, username=USER, password=PASSWORD,
+                          look_for_keys=False, allow_agent=False, timeout=10)
+
+              shell = ssh.invoke_shell()
+              time.sleep(0.5)
+
+              prompt = r'[#>]\s*$'
+              read_until_prompt(shell, prompt, timeout=3)
+
+              shell.send("enable\n")
+              time.sleep(0.3)
+              shell.send(PASSWORD + "\n")
+              time.sleep(0.5)
+              read_until_prompt(shell, prompt, timeout=2)
+
+              shell.send("terminal length 0\n")
+              time.sleep(0.2)
+
+              shell.send("no page\n")
+              time.sleep(0.2)
+
+              shell.send("show ntp\n")
+              time.sleep(0.5)
+
+              full_output = ""
+              deadline = time.time() + 20
+
+              while time.time() < deadline:
+                  if shell.recv_ready():
+                      chunk = shell.recv(65535).decode(errors='ignore')
+                      full_output += chunk
+                      if re.search(prompt, full_output):
+                          break
+                  else:
+                      time.sleep(0.2)
+
+              shell.close()
+              ssh.close()
+
+              cleaned = ansi_re.sub('', full_output)
+
+              data = {}
+
+              patterns = {
+                  "timezone": r'Time-zone:\s*(.*)',
+                  "current_time": r'Current time:\s*(.*)',
+                  "status": r'Clock Status:\s*(.*)',
+                  "stratum": r'Clock Stratum:\s*(.*)',
+                  "leap_indicator": r'Leap Indicator:\s*(.*)',
+                  "reference_id": r'Reference ID:\s*(.*)',
+                  "jitter": r'Clock Jitter:\s*(.*)',
+                  "precision": r'Clock Precision:\s*(.*)',
+                  "offset": r'Clock Offset:\s*(.*)',
+                  "root_delay": r'Root Delay:\s*(.*)',
+                  "root_dispersion": r'Root Dispersion:\s*(.*)',
+                  "packets_sent": r'Packets Sent:\s*(\d+)',
+                  "packets_received": r'Packets Received:\s*(\d+)',
+                  "reference_time": r'Reference Time:\s*(.*)',
+                  "last_update": r'Last Update Time:\s*(.*)',
+              }
+
+              for key, pattern in patterns.items():
+                  match = re.search(pattern, cleaned)
+                  if match:
+                      data[key] = match.group(1).strip()
+
+              print(json.dumps({
+                  "ip": HOST,
+                  "ntp": data
+              }))
+
+          except Exception as e:
+              print(json.dumps({"error": str(e)}))
+
+    - name: Run NTP script
+      ansible.builtin.command: >
+        {{ venv_python }} {{ script_path }}
+      register: ntp_raw
+      changed_when: false
+      failed_when: false
+
+    - name: Debug raw output (optional)
+      ansible.builtin.debug:
+        var: ntp_raw.stdout
+
+    - name: Save NTP output to YAML
+      ansible.builtin.copy:
+        dest: "{{ output_path }}"
+        content: |
+          {{ ntp_raw.stdout | from_json | to_nice_yaml }}
+
+    - name: Show saved file path
+      ansible.builtin.debug:
+        msg: "Saved NTP data to {{ output_path }}"
