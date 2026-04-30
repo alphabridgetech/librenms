@@ -89,6 +89,24 @@ class EditDeviceController
 
         $device->parents()->sync($request->get('parent_id', [])); // TODO avoid loops!
 
+
+        
+
+        if($device->ssh_user && $device->ssh_pass) {
+           //create  yaml file for ansible inventory plugin
+           $basePath = "/opt/librenms"; 
+           $file = $basePath . "/librenms-ansible-inventory-plugin/hosts/" . $device->hostname . ".yml";
+              $yamlContent = $this->generateInventoryYaml($device->hostname, $device->ip, $device->ssh_user, $device->ssh_pass, $device->community);
+           file_put_contents($file, $yamlContent);
+
+        } else {
+            // If SSH credentials are removed, delete the corresponding YAML file
+            $basePath = "/opt/librenms"; 
+            $file = $basePath . "/librenms-ansible-inventory-plugin/hosts/" . $device->hostname . ".yml";
+            if (file_exists($file)) {
+                unlink($file);
+            }
+        }
         // handle sysLocation update
         if ($device->override_sysLocation) {
             $device->setLocation($request->get('sysLocation'), true, true);
@@ -127,4 +145,27 @@ class EditDeviceController
 
         return response()->redirectToRoute('device', ['device' => $device->device_id, 'edit']);
     }
+
+    private function generateInventoryYaml($hostname, $ip, $username, $password, $community)
+    {
+        return <<<YAML
+    all:
+      children:
+        alphabridge_devices:
+          hosts:
+            bridge1:
+              ansible_host: {$ip}
+              ansible_user: {$username}
+              ansible_password: {$password}
+              ansible_connection: local
+              ansible_python_interpreter: /usr/bin/python3
+              os: switchv1alphabridge
+              snmpver: v2c
+              community: {$community}
+    
+    YAML;
+    }
+
+
+ 
 }

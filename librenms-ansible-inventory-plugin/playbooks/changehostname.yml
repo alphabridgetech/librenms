@@ -1,62 +1,71 @@
-- name: Set hostname via SSH
+- name: Set hostname via SSH (Optimized)
   hosts: all
   gather_facts: no
 
+  vars:
+    script_path: "/opt/librenms/librenms-ansible-inventory-plugin/tmp/set_hostname_exec.py"
+
   tasks:
 
-    - name: Copy Python script
+    - name: Copy optimized Python script
       ansible.builtin.copy:
-        dest: "/opt/librenms/librenms-ansible-inventory-plugin/tmp/set_hostname_exec.py"
+        dest: "{{ script_path }}"
         mode: '0755'
         content: |
           import paramiko
           import time
-          import sys
 
           HOST = "{{ ansible_host }}"
           USER = "{{ ansible_user }}"
           PASSWORD = "{{ ansible_password }}"
           NEW_HOSTNAME = "{{ new_hostname }}"
 
+          def send_cmd(shell, cmd, wait=0.5):
+              shell.send(cmd + "\n")
+              time.sleep(wait)
+
+              output = ""
+              while shell.recv_ready():
+                  output += shell.recv(65535).decode('utf-8')
+              return output
+
           try:
               ssh = paramiko.SSHClient()
               ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
-              ssh.connect(HOST, username=USER, password=PASSWORD, look_for_keys=False, allow_agent=False)
+
+              ssh.connect(
+                  HOST,
+                  username=USER,
+                  password=PASSWORD,
+                  look_for_keys=False,
+                  allow_agent=False,
+                  timeout=5
+              )
 
               shell = ssh.invoke_shell()
-              time.sleep(1)
+              time.sleep(0.5)
 
-              shell.send("enable\n")
-              time.sleep(1)
-              shell.send(PASSWORD + "\n")
-              time.sleep(1)
-
-              shell.send("config\n")
-              time.sleep(1)
-
-              shell.send(f"hostname {NEW_HOSTNAME}\n")
-              time.sleep(1)
-
-              shell.send("end\n")
-              time.sleep(1)
-
-              shell.send("write memory\n")
-              time.sleep(2)
+              # Fast execution sequence
+              send_cmd(shell, "enable", 0.3)
+              send_cmd(shell, PASSWORD, 0.3)
+              send_cmd(shell, "config", 0.3)
+              send_cmd(shell, f"hostname {NEW_HOSTNAME}", 0.3)
+              send_cmd(shell, "end", 0.3)
+              send_cmd(shell, "write memory", 1)
 
               print("SUCCESS")
 
               ssh.close()
 
           except Exception as e:
-              print("ERROR:", e)
+              print("ERROR:", str(e))
 
     - name: Run script
       ansible.builtin.command: >
-        /opt/librenms/librenms-ansible-inventory-plugin/bin/python3
-        /opt/librenms/librenms-ansible-inventory-plugin/tmp/set_hostname_exec.py
+        /opt/librenms/librenms-ansible-inventory-plugin/bin/python3 {{ script_path }}
       register: output
       changed_when: true
 
-    - name: Debug
+    - name: Show output
       ansible.builtin.debug:
-        var: output.stdout
+        msg: "{{ output.stdout }}"

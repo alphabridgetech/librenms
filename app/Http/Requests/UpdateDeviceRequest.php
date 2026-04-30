@@ -35,6 +35,8 @@ class UpdateDeviceRequest extends FormRequest
             'disable_notify' => 'nullable|boolean',
             'ignore' => 'nullable|boolean',
             'ignore_status' => 'nullable|boolean',
+            'ssh_user' => 'nullable|string',
+            'ssh_pass' => 'nullable|string',
         ];
     }
 

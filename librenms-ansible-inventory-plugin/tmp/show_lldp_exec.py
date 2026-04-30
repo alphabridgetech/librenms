@@ -6,7 +6,7 @@ import sys
 
 HOST = "192.168.200.245"
 USER = "admin"
-PASSWORD = "admin"
+PASSWORD = "admin@123#"
 OUTPUT_FILE = "/opt/librenms/librenms-ansible-inventory-plugin/output/192.168.200.245_getlldp.yml"
 
 def read_channel(chan, wait=1):

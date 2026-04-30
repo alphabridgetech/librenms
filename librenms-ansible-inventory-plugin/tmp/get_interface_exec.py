@@ -5,7 +5,7 @@ from datetime import datetime
 
 HOST = "192.168.200.245"
 USER = "admin"
-PASSWORD = "admin"
+PASSWORD = "admin@123#"
 
 try:
     ssh = paramiko.SSHClient()

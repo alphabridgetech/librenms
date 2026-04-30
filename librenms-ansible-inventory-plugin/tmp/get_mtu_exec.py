@@ -4,49 +4,51 @@ import re
 
 HOST = "192.168.200.245"
 USER = "admin"
-PASSWORD = "admin"
+PASSWORD = "admin@123#"
+
+def send_cmd(shell, cmd, wait=0.3):
+    shell.send(cmd + "\n")
+    time.sleep(wait)
+
+    output = ""
+    end_time = time.time() + 3
+
+    while time.time() < end_time:
+        if shell.recv_ready():
+            output += shell.recv(65535).decode(errors="ignore")
+        else:
+            time.sleep(0.1)
+    return output
 
 try:
     ssh = paramiko.SSHClient()
     ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+
     ssh.connect(
         hostname=HOST,
         username=USER,
         password=PASSWORD,
-        port=22,
         look_for_keys=False,
         allow_agent=False,
-        timeout=10
+        timeout=5
     )
 
     shell = ssh.invoke_shell()
-    time.sleep(2)
+    time.sleep(0.5)
 
+    # Clear buffer
     if shell.recv_ready():
         shell.recv(65535)
 
-    shell.send("enable\n")
-    time.sleep(1)
-    shell.send(PASSWORD + "\n")
-    time.sleep(1)
+    send_cmd(shell, "enable", 0.2)
+    send_cmd(shell, PASSWORD, 0.2)
 
-    if shell.recv_ready():
-        shell.recv(65535)
-
-    shell.send("show system mtu\n")
-    time.sleep(2)
-
-    output = ""
-    while shell.recv_ready():
-        output += shell.recv(65535).decode(errors="ignore")
+    output = send_cmd(shell, "show system mtu", 0.5)
 
     ssh.close()
 
     mtu = None
     for line in output.splitlines():
-        line = line.strip()
-
-        # Match: System MTU Jumbo size is 1900 bytes
         match = re.search(r'System MTU Jumbo size is (\d+)', line)
         if match:
             mtu = match.group(1)
@@ -57,5 +59,5 @@ try:
     else:
         print("ERROR")
 
-except Exception as e:
+except Exception:
     print("ERROR")

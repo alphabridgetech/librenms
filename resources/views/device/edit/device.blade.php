@@ -67,6 +67,20 @@
             </div>
 
             <div class="form-group">
+                <label for="ssh_user" class="col-sm-2 control-label">SSH User</label>
+                <div class="col-sm-6">
+                    <input id="ssh_user" name="ssh_user" class="form-control" value="{{ old('ssh_user', $device->ssh_user) }}"></input>
+                </div>
+            </div>
+
+            <div class="form-group">
+                <label for="ssh_user" class="col-sm-2 control-label">SSH Password</label>
+                <div class="col-sm-6">
+                    <input type="password" id="ssh_pass" name="ssh_pass" class="form-control" value="{{ old('ssh_pass', $device->ssh_pass) }}"></input>
+                </div>
+            </div>
+
+            <div class="form-group">
                 <label for="type" class="col-sm-2 control-label">{{ __('device.edit.type') }}</label>
                 <div class="col-sm-6">
                     <select id="type" name="type" class="form-control">
@@ -197,6 +211,7 @@
                     />
                 </div>
             </div>
+            
             <div class="row">
                 <div class="col-md-1 col-md-offset-2">
                     <button type="submit" name="Submit"  class="btn btn-default"><i class="fa fa-check"></i> {{ __('device.edit.save') }}</button>

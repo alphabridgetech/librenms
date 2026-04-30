@@ -57,7 +57,7 @@
                   shell.recv(65535)
 
               shell.send("show version\n")
-              time.sleep(3)
+              time.sleep(1)
 
               output = ""
               while shell.recv_ready():

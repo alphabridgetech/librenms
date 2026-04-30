@@ -1,24 +1,24 @@
 count: 17
-current_time: '2026-04-20 14:26:52'
+current_time: '2026-04-30 13:12:43'
 interfaces:
 -   duplex: auto
     name: g0/1
     speed: auto
     status: down
     type: Giga-TX
-    vlan: Trunk(321)
--   duplex: full(A)
+    vlan: '1'
+-   duplex: auto
     name: g0/2
-    speed: 1000Mb(A)
-    status: up
+    speed: auto
+    status: down
     type: Giga-TX
-    vlan: Trunk(1)
+    vlan: '1'
 -   duplex: auto
     name: g0/3
     speed: auto
     status: down
     type: Giga-TX
-    vlan: Trunk(1)
+    vlan: '1'
 -   duplex: auto
     name: g0/4
     speed: auto
@@ -48,19 +48,19 @@ interfaces:
     speed: auto
     status: down
     type: Giga-TX
-    vlan: '1'
--   duplex: full
+    vlan: Trunk(1)
+-   duplex: Trunk(1)
     name: tg0/1
-    speed: 10000Mb
-    status: down
-    type: 10Giga-FX
-    vlan: '1'
--   duplex: full
+    speed: auto
+    status: uplink
+    type: 1000Mb
+    vlan: down
+-   duplex: full(A)
     name: tg0/2
-    speed: 10000Mb
-    status: down
-    type: 10Giga-FX
-    vlan: '1'
+    speed: 1000Mb
+    status: up
+    type: 1000BASE-LX(SM)
+    vlan: Trunk(1)
 -   duplex: full
     name: tg0/3
     speed: 10000Mb
@@ -80,19 +80,13 @@ interfaces:
     type: null
     vlan: null
 -   duplex: null
-    name: v100
-    speed: null
-    status: up
-    type: null
-    vlan: null
--   duplex: null
     name: v200
     speed: null
     status: up
     type: null
     vlan: null
 -   duplex: null
-    name: v300
+    name: v4000
     speed: null
     status: up
     type: null
@@ -103,5 +97,11 @@ interfaces:
     status: up
     type: null
     vlan: null
+-   duplex: null
+    name: p1
+    speed: null
+    status: down
+    type: null
+    vlan: Trunk(1)
 ip: 192.168.200.245
 status: success
