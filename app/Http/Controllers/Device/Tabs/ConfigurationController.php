@@ -131,6 +131,7 @@ class ConfigurationController implements DeviceTab
             ],
             'tftpServer' => $tftpServer,
             'tftp_files' => $tftpFiles,
+            'interfaces' => $device->ports()->pluck('ifName')->toArray(),
             'api_token' => $this->getUserLibreNMSToken(),
             'dropdownLinks' => $this->pageLinks($request),
             'perPage' => $this->settings['perPage'],
@@ -337,6 +338,7 @@ class ConfigurationController implements DeviceTab
         if ($device->macs()->exists()) {
             $tabs[] = ['name' => __('Startup-Config'), 'url' => 'startupconfig'];
             $tabs[] = ['name' => __('Ntp'), 'url' => 'ntp'];
+            $tabs[] = ['name' => __('Day 1'), 'url' => 'dayfirst'];
             $tabs[] = ['name' => __('Reboot'), 'url' => 'reboot'];
         }
 

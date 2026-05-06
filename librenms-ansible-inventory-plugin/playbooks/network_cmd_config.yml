@@ -1,0 +1,110 @@
+---
+- name: Set network config using cmd day 1 via SSH
+  hosts: all
+  gather_facts: no
+
+  vars:
+    script_path: "/opt/librenms/librenms-ansible-inventory-plugin/tmp/dayfirst_exec.py"
+    venv_python: "/opt/librenms/librenms-ansible-inventory-plugin/bin/python3"
+
+  tasks:
+
+    - name: Print CLI Commands (Ansible)
+      ansible.builtin.debug:
+        var: cli_commands
+
+    - name: Copy Python script
+      ansible.builtin.copy:
+        dest: "{{ script_path }}"
+        mode: '0755'
+        content: |
+          import paramiko
+          import time
+          import re
+          import json
+          import sys
+
+          HOST = "{{ ansible_host }}"
+          USER = "{{ ansible_user }}"
+          PASSWORD = "{{ ansible_password }}"
+
+          raw = '{{ cli_commands }}'
+
+          try:
+              parsed = json.loads(raw)
+              if isinstance(parsed, list):
+                  COMMANDS = parsed
+              else:
+                  COMMANDS = [parsed]
+          except:
+              COMMANDS = raw.split("\n")
+
+          print("COMMANDS TO EXECUTE:")
+          for c in COMMANDS:
+              print("> " + c)
+
+          def read_until_prompt(shell, timeout=10):
+              buf = ""
+              end_time = time.time() + timeout
+              prompt = r'[>#]\s*$'
+
+              while time.time() < end_time:
+                  if shell.recv_ready():
+                      chunk = shell.recv(65535).decode(errors='ignore')
+                      buf += chunk
+                      if re.search(prompt, buf):
+                          return buf
+                  else:
+                      time.sleep(0.2)
+              return buf
+
+          try:
+              ssh = paramiko.SSHClient()
+              ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+              ssh.connect(HOST, username=USER, password=PASSWORD,
+                          look_for_keys=False, allow_agent=False, timeout=10)
+
+              shell = ssh.invoke_shell()
+              time.sleep(1)
+
+              output = read_until_prompt(shell)
+
+              shell.send("enable\n")
+              time.sleep(0.5)
+
+              shell.send("config\n")
+              output += read_until_prompt(shell)
+
+              for command in COMMANDS:
+                  cmd = command.strip()
+                  if cmd:
+                      shell.send(cmd + "\n")
+                      output += read_until_prompt(shell)
+
+              shell.send("end\n")
+              output += read_until_prompt(shell)
+
+              shell.send("write all\n")
+              output += read_until_prompt(shell, timeout=15)
+
+              print("SUCCESS")
+              print(output)
+              sys.stdout.flush()
+
+              shell.close()
+              ssh.close()
+
+          except Exception as e:
+              print("ERROR:", str(e))
+              sys.stdout.flush()
+
+    - name: Run script
+      ansible.builtin.command: >
+        {{ venv_python }} {{ script_path }}
+      register: output
+      changed_when: true
+      failed_when: false
+
+    - name: Debug output
+      ansible.builtin.debug:
+        msg: "{{ output.stdout }}"

@@ -48,6 +48,23 @@ class KunalApiController
         return shell_exec($cmd);
     }
 
+    private function runAnsibleJson(string $playbook, string $hosts, array $extraVars = []): string
+    {
+        $extraVarsString = "";
+
+        if (!empty($extraVars)) {
+            foreach ($extraVars as $key => $value) {
+                if (is_array($value)) {
+                    $value = json_encode($value);
+                }
+                $extraVarsString .= " --extra-vars '{$key}={$value}'";
+            }
+        }
+
+        $cmd = "source {$this->venv} && ansible-playbook -i {$hosts} {$playbook}{$extraVarsString} 2>&1";
+        return shell_exec($cmd);
+    }
+
     #------------------------------------------------------------
     #                       SYSTEM INFO
     #------------------------------------------------------------
@@ -358,6 +375,46 @@ public function getmtu($hostname)
     }
 
     #------------------------------------------------------------
+    #                     NETWORK CMD CONFIG
+    #------------------------------------------------------------
+    public function network_cmd_config(Request $request, $hostname)
+    {
+        
+        $data = $request->validate([
+            'config' => 'required|min:1',
+        ]);
+
+        $config = $data['config'];
+        //$cliCommandsJson = json_encode($config);
+        // Convert string to array line by line
+        $commands = preg_split('/\r\n|\r|\n/', $config);
+
+        // Trim each line and remove empty ones
+        $commands = array_values(array_filter(array_map('trim', $commands)));
+
+        
+        
+        // print_r($commands); // Debug commands
+        // die;
+        
+        $playbook = "{$this->pluginPath}/playbooks/network_cmd_config.yml";
+        $hosts = "{$this->pluginPath}/hosts/{$hostname}.yml";
+
+
+        // $cmd = "source {$this->venv} && ansible-playbook -i {$hosts} {$playbook}  --extra-vars 'cli_commands={$cliCommandsJson}' 2>&1";
+        // $output = shell_exec($cmd);
+
+        $output = $this->runAnsibleJson($playbook, $hosts, [
+            "cli_commands" => $commands
+        ]);
+
+        return $this->success([
+            "message" => "Network config executed successfully",
+            "raw"     => $output
+        ]);
+    }
+
+    #------------------------------------------------------------
     #                     CHANGE MTU
     #------------------------------------------------------------
     public function changemtu(Request $request, $hostname)
@@ -375,6 +432,8 @@ public function getmtu($hostname)
             "raw"     => $output
         ]);
     }
+
+    
 
     #------------------------------------------------------------
     #                       GET LLDP

@@ -1,1 +1,17 @@
-error: '[Errno None] Unable to connect to port 22 on 192.168.200.245'
+ip: 192.168.200.245
+ntp:
+    current_time: '2026-05-04 15:48:22'
+    jitter: '0.000000'
+    last_update: '1970-01-01 00:00:00'
+    leap_indicator: '3'
+    offset: 0.000 ms
+    packets_received: '0'
+    packets_sent: '70'
+    precision: '-17'
+    reference_id: INIT
+    reference_time: '1970-01-01 00:00:00'
+    root_delay: 0.000 ms
+    root_dispersion: 6422.775 ms
+    status: unsynchronized
+    stratum: '16'
+    timezone: GMT+5:30, tz

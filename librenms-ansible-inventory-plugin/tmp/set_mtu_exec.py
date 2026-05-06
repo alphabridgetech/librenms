@@ -3,7 +3,7 @@ import time
 import sys
 
 HOST = "192.168.200.245"
-USER = "admin"
+USER = "admins"
 PASSWORD = "admin@123#"
 NEW_MTU = "9215"
 

@@ -4,9 +4,9 @@ import sys
 
 HOST = "192.168.200.245"
 USER = "admin"
-PASSWORD = "admin"
+PASSWORD = "admin@123#"
 
-TFTP_SERVER = "192.168.200.73"
+TFTP_SERVER = "192.168.200.151"
 FILENAME = "startup-config"
 DEST_FILE = "192.168.200.245_startup-config"
 

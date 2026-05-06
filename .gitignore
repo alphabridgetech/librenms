@@ -19,6 +19,8 @@ config.php
 html/css/custom/*
 html/images/custom/*
 html/images/custommap/*
+librenms-ansible-inventory-plugin/hosts/*
+librenms-ansible-inventory-plugin/tmp/*
 includes/custom/*
 junk
 nbproject
