@@ -1205,16 +1205,63 @@ function get_port_transceiver(Illuminate\Http\Request $request)
     });
 }
 
+// function get_port_info(Illuminate\Http\Request $request)
+// {
+//     $port_id = $request->route('portid');
+
+//     return check_port_permission($port_id, null, function ($port_id) {
+//         $with = request()->input('with');
+//         $allowed = ['vlans', 'device'];
+//         $port = Port::where('port_id', $port_id)
+//                     ->when(in_array($with, $allowed), fn ($q) => $q->with($with))
+//                     ->get();
+
+//         return api_success($port, 'port');
+//     });
+// }
+
 function get_port_info(Illuminate\Http\Request $request)
 {
     $port_id = $request->route('portid');
+    $with = $request->input('with');
+    $allowed = ['vlans', 'device'];
 
-    return check_port_permission($port_id, null, function ($port_id) {
-        $with = request()->input('with');
-        $allowed = ['vlans', 'device'];
+    if ($port_id === 'all') {
+
+        $ports = Port::query()
+            ->with(['device:device_id,hostname'])
+            ->when(in_array($with, $allowed), fn ($q) => $q->with($with))
+            ->get()
+            ->map(function ($port) {
+
+                return array_merge(
+                    [
+                        'hostname' => $port->device->hostname ?? null,
+                        'device'   => $port->device,
+                    ],
+                    $port->toArray()
+                );
+            });
+
+        return api_success($ports, 'ports');
+    }
+
+    return check_port_permission($port_id, null, function ($port_id) use ($with, $allowed) {
+
         $port = Port::where('port_id', $port_id)
-                    ->when(in_array($with, $allowed), fn ($q) => $q->with($with))
-                    ->get();
+            ->with(['device:device_id,hostname'])
+            ->when(in_array($with, $allowed), fn ($q) => $q->with($with))
+            ->get()
+            ->map(function ($port) {
+
+                return array_merge(
+                    [
+                        'hostname' => $port->device->hostname ?? null,
+                        'device'   => $port->device,
+                    ],
+                    $port->toArray()
+                );
+            });
 
         return api_success($port, 'port');
     });

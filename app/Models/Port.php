@@ -13,6 +13,7 @@ use Illuminate\Database\Eloquent\Relations\MorphMany;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Str;
 use LibreNMS\Util\Rewrite;
+use App\Models\Device;
 use Permissions;
 
 class Port extends DeviceRelatedModel
@@ -58,6 +59,12 @@ class Port extends DeviceRelatedModel
 
             \Rrd::purge($port->device?->hostname, \Rrd::portName($port->port_id)); // purge all port rrd files
         });
+    }
+
+    //added by kunal verma for getting all ports 
+    public function devicename()
+    {
+        return $this->belongsTo(Device::class, 'device_id', 'device_id');
     }
 
     // ---- Helper Functions ----
