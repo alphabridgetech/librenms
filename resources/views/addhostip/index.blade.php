@@ -1,12 +1,12 @@
 @extends('layouts.librenmsv1')
 
-@section('title', __('Add Device by IP'))
+@section('title', __('Push configuration to devices by IP'))
 
 @section('content')
     <div class="container-fluid">
         <x-panel>
             <x-slot name="title">
-                <i class="fa fa-plus fa-fw fa-lg"></i> {{ __('Add Device by IP') }}
+                <i class="fa fa-plus fa-fw fa-lg"></i> {{ __('Push Configuration to Devices by IP') }}
             </x-slot>
 
             @if (session('status'))
