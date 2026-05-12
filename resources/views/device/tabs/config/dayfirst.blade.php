@@ -85,6 +85,23 @@
             width: auto;
         }
     }
+
+    .interface-data {
+        margin-top: 15px;
+        padding: 10px;
+        background: #f0f0f0;
+        border-radius: 4px;
+        border-left: 3px solid #5cb85c;
+    }
+
+    .interface-data pre {
+        background: #2d2d2d;
+        color: #f0f0f0;
+        padding: 10px;
+        border-radius: 4px;
+        overflow-x: auto;
+        margin-top: 10px;
+    }
 </style>
 
 
@@ -178,16 +195,20 @@ const interfacesData = Array.isArray(rawInterfaces) ? rawInterfaces : (typeof ra
                 <div class="form-group">
                     <label class="col-xs-12 col-sm-3 control-label">Interface Name</label>
                     <div class="col-xs-12 col-sm-6">
-                        <select class="form-control" id="interface_name" onchange="updatePreview()">
+                        <select class="form-control" id="interface_name" onchange="onInterfaceSelect(this, '${ifaceId}')">
                             <option value="">Select Interface...</option>
                             ${interfacesData.map(iface => `<option value="${iface}">${iface}</option>`).join('')}
                         </select>
                     </div>
                     <div class="clearfix"></div>
                 </div>
+                <div id="interfaceData_${ifaceId}" class="interface-data" style="display:none;">
+                    <strong>Interface Details:</strong>
+                    <pre id="interfaceDataContent_${ifaceId}"></pre>
+                </div>
 
                 <div class="form-group">
-                    <label class="col-xs-12 col-sm-3 control-label">Description</label>
+                    <label class="col-xs-12 col-sm-3 control-label mt-2">Description</label>
                     <div class="col-xs-12 col-sm-6">
                         <input type="text" class="form-control" placeholder="Description" oninput="updatePreview()">
                     </div>
@@ -196,7 +217,7 @@ const interfacesData = Array.isArray(rawInterfaces) ? rawInterfaces : (typeof ra
 
                 <div class="form-group">
                     <div class="col-xs-12 col-sm-offset-3 col-sm-6">
-                        <label><input type="checkbox" onchange="updatePreview()"> Disable Spanning Tree</label>
+                        <label><input type="checkbox" id="stp_disable_${ifaceId}" onchange="updatePreview()"> Disable Spanning Tree</label>
                     </div>
                     <div class="clearfix"></div>
                 </div>
@@ -276,25 +297,28 @@ const interfacesData = Array.isArray(rawInterfaces) ? rawInterfaces : (typeof ra
                 </div>
                 <div class="form-group">
                     <div class="col-xs-12 col-sm-offset-3 col-sm-9">
-                        <label><input type="checkbox" id="lldp_${ifaceId}" onchange="updatePreview()"> Enable LLDP</label>
+                        <label><input type="checkbox" id="lldpenable_${ifaceId}" onchange="updatePreview()"> Enable LLDP</label>
                     </div>
                     <div class="clearfix"></div>
                 </div>
                 <div class="form-group">
                     <div class="col-xs-12 col-sm-offset-3 col-sm-9">
-                        <label><input type="checkbox" id="stp_${ifaceId}" onchange="updatePreview()"> Enable STP</label>
+                        <label><input type="checkbox" id="stpenable_${ifaceId}" onchange="updatePreview()"> Enable STP</label>
                     </div>
                     <div class="clearfix"></div>
                 </div>
                 <div class="form-group">
                     <div class="col-xs-12 col-sm-offset-3 col-sm-9">
-                        <label><input type="checkbox" id="l2tp_${ifaceId}" onchange="updatePreview()"> Enable L2TP Tunneling</label>
+                        <label><input type="checkbox" id="lacp_${ifaceId}" onchange="updatePreview()"> Enable LACP</label>
                     </div>
                     <div class="clearfix"></div>
                 </div>
 
                 <hr>
                 <h5>RATE LIMITING (OPTIONAL)</h5>
+                <p class="text-muted col-xs-12 col-sm-offset-3 col-sm-9" style="margin:5px 0 10px 0; font-size:11px;">
+                    <i class="fa fa-info-circle"></i> 1 unit = 64kbps. Example: 200 units = 64 * 200 = 12800 kbps = 12.8Mbps
+                </p>
                 <div class="form-group">
                     <div class="col-xs-12 col-sm-offset-3 col-sm-9">
                         <label><input type="checkbox" id="ratelimit_${ifaceId}" onchange="toggleRateLimitSettings('${ifaceId}')"> Enable Rate Limiting</label>
@@ -303,16 +327,16 @@ const interfacesData = Array.isArray(rawInterfaces) ? rawInterfaces : (typeof ra
                 </div>
                 <div id="rateLimitSettings_${ifaceId}" style="display:none;">
                     <div class="form-group">
-                        <label class="col-xs-12 col-sm-3 control-label">Ingress Rate (input)</label>
+                        <label class="col-xs-12 col-sm-3 control-label">Ingress Rate (units)</label>
                         <div class="col-xs-12 col-sm-6">
-                            <input type="text" class="form-control" placeholder="Ingress e.g., 100Mbps" oninput="updatePreview()">
+                            <input type="text" id="ingress_rate_${ifaceId}" class="form-control" placeholder="e.g., 200 (200×64kbps=12.8Mbps)" oninput="updatePreview()">
                         </div>
                         <div class="clearfix"></div>
                     </div>
                     <div class="form-group">
-                        <label class="col-xs-12 col-sm-3 control-label">Egress Rate (output)</label>
+                        <label class="col-xs-12 col-sm-3 control-label">Egress Rate (units)</label>
                         <div class="col-xs-12 col-sm-6">
-                            <input type="text" class="form-control" placeholder="Egress e.g., 100Mbps" oninput="updatePreview()">
+                            <input type="text" id="egress_rate_${ifaceId}" class="form-control" placeholder="e.g., 200 (200×64kbps=12.8Mbps)" oninput="updatePreview()">
                         </div>
                         <div class="clearfix"></div>
                     </div>
@@ -322,7 +346,7 @@ const interfacesData = Array.isArray(rawInterfaces) ? rawInterfaces : (typeof ra
                 <h5>LACP / AGGREGATION (OPTIONAL)</h5>
                 <div class="form-group">
                     <div class="col-xs-12 col-sm-offset-3 col-sm-9">
-                        <label><input type="checkbox" id="lacp_${ifaceId}" onchange="toggleLacpSettings('${ifaceId}')"> Enable Aggregation (LACP)</label>
+                        <label><input type="checkbox" id="lacpaggre_${ifaceId}" onchange="toggleLacpSettings('${ifaceId}')"> Enable Aggregation (LACP)</label>
                     </div>
                     <div class="clearfix"></div>
                 </div>
@@ -353,7 +377,8 @@ const interfacesData = Array.isArray(rawInterfaces) ? rawInterfaces : (typeof ra
                 <div id="lldpTxSettings_${ifaceId}" style="display:none;">
                     <div class="form-group">
                         <div class="col-xs-12 col-sm-offset-3 col-sm-9 col-sm-offset-4">
-                            <label><input type="checkbox" id="lldp_tx_enable_${ifaceId}" checked onchange="updatePreview()"> Enable TX</label>
+                            <label class="radio-inline"><input type="radio" name="lldp_tx_mode_${ifaceId}" value="enable" checked onchange="updatePreview()"> Enable</label>
+                            <label class="radio-inline"><input type="radio" name="lldp_tx_mode_${ifaceId}" value="disable" onchange="updatePreview()"> Disable</label>
                         </div>
                         <div class="clearfix"></div>
                     </div>
@@ -367,7 +392,8 @@ const interfacesData = Array.isArray(rawInterfaces) ? rawInterfaces : (typeof ra
                 <div id="lldpRxSettings_${ifaceId}" style="display:none;">
                     <div class="form-group">
                         <div class="col-xs-12 col-sm-offset-3 col-sm-9 col-sm-offset-4">
-                            <label><input type="checkbox" id="lldp_rx_enable_${ifaceId}" checked onchange="updatePreview()"> Enable RX</label>
+                            <label class="radio-inline"><input type="radio" name="lldp_rx_mode_${ifaceId}" value="enable" checked onchange="updatePreview()"> Enable</label>
+                            <label class="radio-inline"><input type="radio" name="lldp_rx_mode_${ifaceId}" value="disable" onchange="updatePreview()"> Disable</label>
                         </div>
                         <div class="clearfix"></div>
                     </div>
@@ -410,7 +436,7 @@ const interfacesData = Array.isArray(rawInterfaces) ? rawInterfaces : (typeof ra
     }
 
     function toggleLacpSettings(ifaceId) {
-        const checkbox = document.getElementById('lacp_' + ifaceId);
+        const checkbox = document.getElementById('lacpaggre_' + ifaceId);
         document.getElementById('lacpSettings_' + ifaceId).style.display = checkbox.checked ? 'block' : 'none';
         updatePreview();
     }
@@ -452,10 +478,7 @@ const interfacesData = Array.isArray(rawInterfaces) ? rawInterfaces : (typeof ra
                     <div class="clearfix"></div>
                 </div>
                 <div class="form-group">
-                    <label class="col-xs-12 col-sm-3 control-label">COS</label>
-                    <div class="col-xs-12 col-sm-3">
-                        <input type="text" class="form-control" placeholder="COS" oninput="updatePreview()">
-                    </div>
+                    
                     <div class="col-xs-12 col-sm-3">
                         <button type="button" class="btn btn-xs btn-danger" onclick="deleteRule('rule_${ifaceId}_${ruleCount}')">
                             <i class="fa fa-trash"></i> Delete Rule
@@ -474,6 +497,42 @@ const interfacesData = Array.isArray(rawInterfaces) ? rawInterfaces : (typeof ra
         updatePreview();
     }
 
+    const deviceIp = "{{ $device->hostname }}";
+    const apiToken = "{{ $data['api_token'] }}";
+
+    function onInterfaceSelect(selectEl, ifaceId) {
+        const interfaceName = selectEl.value;
+        const dataContainer = document.getElementById('interfaceData_' + ifaceId);
+        const dataContent = document.getElementById('interfaceDataContent_' + ifaceId);
+
+        if (!interfaceName) {
+            dataContainer.style.display = 'none';
+            return;
+        }
+
+        dataContainer.style.display = 'block';
+        dataContent.textContent = 'Loading...';
+
+        fetch(`/api/v0/network/interface/show/${deviceIp}`, {
+            method: "POST",
+            headers: {
+                "Authorization": "Bearer " + apiToken,
+                "Content-Type": "application/json",
+                "Accept": "application/json"
+            },
+            body: JSON.stringify({ interface: interfaceName })
+        })
+        .then(res => res.json())
+        .then(data => {
+            dataContent.textContent = JSON.stringify(data, null, 2);
+        })
+        .catch(err => {
+            dataContent.textContent = 'Error: ' + err;
+        });
+
+        updatePreview();
+    }
+
     function updatePreview() {
         previewConfig();
     }
@@ -489,29 +548,39 @@ const interfacesData = Array.isArray(rawInterfaces) ? rawInterfaces : (typeof ra
             const name = nameSelect ? nameSelect.value : 'GigabitEthernet0/X';
             const descInput = iface.querySelector('input[placeholder="Description"]');
             const desc = descInput ? descInput.value : '';
+            const desablespanning = iface.querySelector('input[type="checkbox"][id*="stp_disable_"]');
+
 
             config += `interface ${name}\n`;
             if (desc) config += ` description ${desc}\n`;
 
-            const cdpCheck = iface.querySelector('input[type="checkbox"][id*="cdp_"]');
-            const stpCheck = iface.querySelector('input[type="checkbox"][id*="stp_"]');
-            const l2tpCheck = iface.querySelector('input[type="checkbox"][id*="l2tp_"]');
+            if (desablespanning && desablespanning.checked) config += ` no spanning-tree\n`;
 
-            if (cdpCheck && cdpCheck.checked) config += ` cdp enable\n`;
-            if (stpCheck && stpCheck.checked) config += ` no spanning-tree\n`;
-            if (l2tpCheck && l2tpCheck.checked) config += ` l2tp tunnel enable\n`;
+            const cdpCheck = iface.querySelector('input[type="checkbox"][id*="cdp_"]');
+            const stpCheck = iface.querySelector('input[type="checkbox"][id*="stpenable_"]');
+            const lldpCheck = iface.querySelector('input[type="checkbox"][id*="lldpenable_"]');
+            const lacpCheckenable = iface.querySelector('input[type="checkbox"][id*="lacp_"]');
+
+            if (cdpCheck && cdpCheck.checked) config += ` l2protocol-tunnel cdp\n`;
+            if (stpCheck && stpCheck.checked) config += ` l2protocol-tunnel stp\n`;
+            if (lldpCheck && lldpCheck.checked) config += ` l2protocol-tunnel lldp\n`;
+            if (lacpCheckenable && lacpCheckenable.checked) config += ` l2protocol-tunnel lacp\n`;
 
             const lldpTxCheck = iface.querySelector('input[type="checkbox"][id*="lldp_tx_"]');
             const lldpRxCheck = iface.querySelector('input[type="checkbox"][id*="lldp_rx_"]');
 
-            if (lldpTxCheck && lldpTxCheck.checked) {
-                const txEnableCheck = iface.querySelector('input[type="checkbox"][id*="lldp_tx_enable_"]');
-                config += txEnableCheck && txEnableCheck.checked ? ` lldp transmit\n` : ` \n`;
-            }
-            if (lldpRxCheck && lldpRxCheck.checked) {
-                const rxEnableCheck = iface.querySelector('input[type="checkbox"][id*="lldp_rx_enable_"]');
-                config += rxEnableCheck && rxEnableCheck.checked ? ` lldp receive\n` : ` \n`;
-            }
+                if (lldpTxCheck && lldpTxCheck.checked) {
+                    const txMode = iface.querySelector(`input[name="lldp_tx_mode_${iface.id}"]:checked`);
+                    if (txMode) {
+                        config += txMode.value === 'enable' ? ` lldp transmit\n` : ` no lldp transmit\n`;
+                    }
+                }
+                if (lldpRxCheck && lldpRxCheck.checked) {
+                    const rxMode = iface.querySelector(`input[name="lldp_rx_mode_${iface.id}"]:checked`);
+                    if (rxMode) {
+                        config += rxMode.value === 'enable' ? ` lldp receive\n` : ` no lldp receive\n`;
+                    }
+                }
 
             const mode = iface.querySelector('input[type="radio"]:checked');
             if (mode) {
@@ -546,31 +615,35 @@ const interfacesData = Array.isArray(rawInterfaces) ? rawInterfaces : (typeof ra
                     rules.forEach(rule => {
                         const fromVlanInput = rule.querySelector('input[placeholder="From VLAN"]');
                         const toVlanInput = rule.querySelector('input[placeholder="To VLAN"]');
-                        const cosInput = rule.querySelector('input[placeholder="COS"]');
                         const fromVlan = fromVlanInput ? fromVlanInput.value : '';
                         const toVlan = toVlanInput ? toVlanInput.value : '';
-                        const cos = cosInput ? cosInput.value : '';
                         if (fromVlan && toVlan) {
                             let ruleStr = ` switchport dot1q-translating-tunnel mode QinQ translate ${fromVlan} ${toVlan}`;
-                            if (cos) ruleStr += ` ${cos}`;
                             config += ruleStr + `\n`;
                         }
                     });
                 }
             }
 
-            const rateLimitCheck = iface.querySelector('input[type="checkbox"][id*="ratelimit_"]');
+            const rateLimitCheck = document.getElementById('ratelimit_' + iface.id);
             if (rateLimitCheck && rateLimitCheck.checked) {
-                const rateLimitDiv = iface.querySelector('#rateLimitSettings_' + iface.id);
-                const ingressInput = rateLimitDiv ? rateLimitDiv.querySelector('input[placeholder*="Ingress"]') : null;
-                const egressInput = rateLimitDiv ? rateLimitDiv.querySelector('input[placeholder*="Egress"]') : null;
-                const ingress = ingressInput ? ingressInput.value : '';
-                const egress = egressInput ? egressInput.value : '';
-                if (ingress) config += ` switchport rate-limit ${ingress} ingress\n`;
-                if (egress) config += ` switchport rate-limit ${egress} egress\n`;
+                const ingressInput = document.getElementById('ingress_rate_' + iface.id);
+                const egressInput = document.getElementById('egress_rate_' + iface.id);
+                if (ingressInput && ingressInput.value) {
+                    const ingressKbps = parseInt(ingressInput.value) * 64;
+                    if (!isNaN(ingressKbps) && ingressKbps > 0) {
+                        config += ` switchport rate-limit ${ingressKbps} ingress\n`;
+                    }
+                }
+                if (egressInput && egressInput.value) {
+                    const egressKbps = parseInt(egressInput.value) * 64;
+                    if (!isNaN(egressKbps) && egressKbps > 0) {
+                        config += ` switchport rate-limit ${egressKbps} egress\n`;
+                    }
+                }
             }
 
-            const lacpCheck = iface.querySelector('input[type="checkbox"][id*="lacp_"]');
+            const lacpCheck = iface.querySelector('input[type="checkbox"][id*="lacpaggre_"]');
             if (lacpCheck && lacpCheck.checked) {
                 const groupIdInput = iface.querySelector('#lacpSettings_' + iface.id + ' input[placeholder="Group ID"]');
                 const groupId = groupIdInput ? groupIdInput.value : '';

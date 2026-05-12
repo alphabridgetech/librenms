@@ -89,6 +89,9 @@ Route::prefix('v0')->group(function () {
         //config save
         Route::post('network/cmd/config/{hostname}', [App\Api\Controllers\KunalApiController::class, 'network_cmd_config'])->name('network.cmd.config'); 
 
+        //particular interface show cmd
+        Route::post('network/interface/show/{hostname}', [App\Api\Controllers\KunalApiController::class, 'network_interface_show'])->name('network.interface.show');
+
 
 
 

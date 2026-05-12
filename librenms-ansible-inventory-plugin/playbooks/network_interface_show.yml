@@ -1,0 +1,141 @@
+- name: Get FULL Interface Config via SSH
+  hosts: alphabridge_devices
+  gather_facts: no
+
+  vars:
+    script_path: "/opt/librenms/librenms-ansible-inventory-plugin/tmp/get_intf_full.py"
+    output_path: "/opt/librenms/librenms-ansible-inventory-plugin/output/{{ ansible_host }}_network_interface_show.yml"
+    venv_python: "/opt/librenms/librenms-ansible-inventory-plugin/bin/python3"
+
+  tasks:
+
+    - name: Ensure tmp directory exists
+      ansible.builtin.file:
+        path: "/opt/librenms/librenms-ansible-inventory-plugin/tmp"
+        state: directory
+        mode: '0755'
+
+    - name: Ensure output directory exists
+      ansible.builtin.file:
+        path: "/opt/librenms/librenms-ansible-inventory-plugin/output"
+        state: directory
+        mode: '0755'
+
+    - name: Show interface input
+      ansible.builtin.debug:
+        msg: "Interface: {{ interface }}"
+
+    - name: Create Python SSH script (FULL CLEAN OUTPUT)
+      ansible.builtin.copy:
+        dest: "{{ script_path }}"
+        mode: '0755'
+        content: |
+          #!/usr/bin/env python3
+          import paramiko
+          import time
+          import re
+          import json
+
+          HOST = "{{ ansible_host }}"
+          USER = "{{ ansible_user }}"
+          PASSWORD = "{{ ansible_password }}"
+          INTERFACE = "{{ interface }}"
+
+          def read_until_prompt(shell, prompt_regex, timeout=10):
+              buf = ""
+              end_time = time.time() + timeout
+              while time.time() < end_time:
+                  if shell.recv_ready():
+                      buf += shell.recv(65535).decode(errors='ignore')
+                      if re.search(prompt_regex, buf):
+                          return buf
+                      end_time = time.time() + 0.5
+                  else:
+                      time.sleep(0.1)
+              return buf
+
+          ansi_re = re.compile(r'\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])')
+
+          try:
+              ssh = paramiko.SSHClient()
+              ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+              ssh.connect(HOST, username=USER, password=PASSWORD,
+                          look_for_keys=False, allow_agent=False, timeout=10)
+
+              shell = ssh.invoke_shell()
+              time.sleep(0.5)
+
+              prompt = r'[#>]\s*$'
+              read_until_prompt(shell, prompt, timeout=3)
+
+              shell.send("enable\n")
+              time.sleep(0.3)
+              shell.send(PASSWORD + "\n")
+              time.sleep(0.5)
+              read_until_prompt(shell, prompt, timeout=2)
+
+              # 👉 Run command
+              cmd = f"show running-config interface {INTERFACE}"
+              shell.send(cmd + "\n")
+              time.sleep(1)
+
+              full_output = ""
+              deadline = time.time() + 20
+
+              while time.time() < deadline:
+                  if shell.recv_ready():
+                      chunk = shell.recv(65535).decode(errors='ignore')
+                      full_output += chunk
+                      if re.search(prompt, full_output):
+                          break
+                  else:
+                      time.sleep(0.2)
+
+              shell.close()
+              ssh.close()
+
+              # 👉 Clean ANSI
+              cleaned = ansi_re.sub('', full_output)
+
+              # 👉 Remove command echo + prompt
+              lines = cleaned.splitlines()
+              filtered = []
+
+              for line in lines:
+                  if line.strip().startswith("show running-config"):
+                      continue
+                  if re.search(prompt, line):
+                      continue
+                  filtered.append(line)
+
+              final_output = "\n".join(filtered).strip()
+
+              print(json.dumps({
+                  "ip": HOST,
+                  "interface": INTERFACE,
+                  "config": final_output
+              }))
+
+          except Exception as e:
+              print(json.dumps({"error": str(e)}))
+
+    - name: Run Interface script
+      ansible.builtin.command: >
+        {{ venv_python }} {{ script_path }}
+      register: intf_raw
+      changed_when: false
+      failed_when: false
+
+    - name: Debug raw output
+      ansible.builtin.debug:
+        var: intf_raw.stdout
+
+    - name: Save FULL output to YAML
+      ansible.builtin.copy:
+        dest: "{{ output_path }}"
+        content: |
+          {{ intf_raw.stdout | from_json | to_nice_yaml }}
+
+    - name: Show saved file path
+      ansible.builtin.debug:
+        msg: "Saved FULL Interface config to {{ output_path }}"

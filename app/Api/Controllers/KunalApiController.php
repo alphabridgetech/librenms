@@ -65,6 +65,21 @@ class KunalApiController
         return shell_exec($cmd);
     }
 
+    private function runAnsiblejs(string $playbook, string $hosts, array $extraVars = []): string
+    {
+        $extraVarsString = "";
+
+        if (!empty($extraVars)) {
+            // ✅ Convert to JSON (BEST PRACTICE)
+            $json = json_encode($extraVars);
+            $extraVarsString = " --extra-vars '" . $json . "'";
+        }
+
+        $cmd = "source {$this->venv} && ansible-playbook -i {$hosts} {$playbook}{$extraVarsString} 2>&1";
+
+        return shell_exec($cmd);
+    }
+
     #------------------------------------------------------------
     #                       SYSTEM INFO
     #------------------------------------------------------------
@@ -411,6 +426,45 @@ public function getmtu($hostname)
         return $this->success([
             "message" => "Network config executed successfully",
             "raw"     => $output
+        ]);
+    }
+
+    #------------------------------------------------------------
+    #                     NETWORK INTERFACE SHOW
+    #------------------------------------------------------------
+    public function network_interface_show(Request $request, $hostname)
+    {
+        $new = $request->validate([
+            'interface' => 'required'
+        ])['interface'];
+
+        $playbook = "{$this->pluginPath}/playbooks/network_interface_show.yml";
+        $hosts = "{$this->pluginPath}/hosts/{$hostname}.yml";
+
+        
+        $output = $this->runAnsiblejs($playbook, $hosts, [
+            "interface" => $new
+        ]);
+
+       
+
+        $yamlFile = "{$this->pluginPath}/output/{$hostname}_network_interface_show.yml";
+
+        if (!file_exists($yamlFile)) {
+            return $this->error("Interface show output file not found", $output);
+        }
+
+        $data = yaml_parse_file($yamlFile);
+
+        // ✅ FIX: Check correct key
+        if (empty($data['config'])) {
+            return $this->error("Interface config not found in YAML", $data);
+        }
+
+        return $this->success([
+            "ip" => $data['ip'] ?? $hostname,
+            "interface" => $data['interface'] ?? null,
+            "config" => explode("\n", $data['config']), // 👈 split lines
         ]);
     }
 

@@ -1220,11 +1220,227 @@ function get_port_transceiver(Illuminate\Http\Request $request)
 //     });
 // }
 
-function get_port_info(Illuminate\Http\Request $request)
-{
-    $port_id = $request->route('portid');
-    $with = $request->input('with');
-    $allowed = ['vlans', 'device'];
+// function get_port_info(Illuminate\Http\Request $request)
+// {
+//     $port_id = $request->route('portid');
+//     $with = $request->input('with');
+//     $allowed = ['vlans', 'device'];
+
+//     if ($port_id === 'all') {
+
+//         $ports = Port::query()
+//             ->with(['device:device_id,hostname'])
+//             ->when(in_array($with, $allowed), fn ($q) => $q->with($with))
+//             ->get()
+//             ->map(function ($port) {
+
+//                 return array_merge(
+//                     [
+//                         'hostname' => $port->device->hostname ?? null,
+//                         'device'   => $port->device,
+//                     ],
+//                     $port->toArray()
+//                 );
+//             });
+
+//         return api_success($ports, 'ports');
+//     }
+
+//     return check_port_permission($port_id, null, function ($port_id) use ($with, $allowed) {
+
+//         $port = Port::where('port_id', $port_id)
+//             ->with(['device:device_id,hostname'])
+//             ->when(in_array($with, $allowed), fn ($q) => $q->with($with))
+//             ->get()
+//             ->map(function ($port) {
+
+//                 return array_merge(
+//                     [
+//                         'hostname' => $port->device->hostname ?? null,
+//                         'device'   => $port->device,
+//                     ],
+//                     $port->toArray()
+//                 );
+//             });
+
+//         return api_success($port, 'port');
+//     });
+// }
+
+     function get_port_info(Illuminate\Http\Request $request)
+    {
+        $port_id = $request->route('portid');
+        $with = $request->input('with');
+        $allowed = ['vlans', 'device'];
+
+        // Common formatter
+        $formatPort = function ($port) {
+
+        /*
+        |--------------------------------------------------------------------------
+        | Base Response
+        |--------------------------------------------------------------------------
+        */
+
+        $data = array_merge(
+            [
+                'hostname' => $port->device->hostname ?? null,
+                'device'   => $port->device,
+            ],
+            $port->toArray()
+        );
+
+        /*
+        |--------------------------------------------------------------------------
+        | Get Main SFP Sensor Using entPhysicalIndex
+        |--------------------------------------------------------------------------
+        */
+
+        $sensor = DB::table('sensors')
+            ->where('device_id', $port->device_id)
+
+            // exact port mapping
+            ->where('entPhysicalIndex', $port->ifIndex)
+
+            ->where('group', 'LIKE', 'Transceiver:%')
+
+            ->whereIn('sensor_class', [
+                'dbm',
+                'temperature',
+                'voltage',
+                'current'
+            ])
+
+            ->first();
+
+        /*
+        |--------------------------------------------------------------------------
+        | No SFP Connected
+        |--------------------------------------------------------------------------
+        */
+
+        if (!$sensor) {
+            return $data;
+        }
+
+        /*
+        |--------------------------------------------------------------------------
+        | Extract Vendor / Model / Serial / Wavelength
+        |--------------------------------------------------------------------------
+        */
+
+        $group = $sensor->group ?? '';
+
+        preg_match('/Vendor:\s*([^\s]+)/i', $group, $vendor);
+        preg_match('/PN:\s*([^\s]+)/i', $group, $model);
+        preg_match('/S\/N:\s*([^\s]+)/i', $group, $serial);
+        preg_match('/(\d+nm)/i', $group, $wave);
+
+        /*
+        |--------------------------------------------------------------------------
+        | RX Power
+        |--------------------------------------------------------------------------
+        */
+
+        $rx = DB::table('sensors')
+            ->where('device_id', $port->device_id)
+            ->where('entPhysicalIndex', $port->ifIndex)
+            ->where('sensor_class', 'dbm')
+            ->where('sensor_descr', 'LIKE', '%rxPower%')
+            ->value('sensor_current');
+
+        /*
+        |--------------------------------------------------------------------------
+        | TX Power
+        |--------------------------------------------------------------------------
+        */
+
+        $tx = DB::table('sensors')
+            ->where('device_id', $port->device_id)
+            ->where('entPhysicalIndex', $port->ifIndex)
+            ->where('sensor_class', 'dbm')
+            ->where('sensor_descr', 'LIKE', '%txPower%')
+            ->value('sensor_current');
+
+        /*
+        |--------------------------------------------------------------------------
+        | Temperature
+        |--------------------------------------------------------------------------
+        */
+
+        $temp = DB::table('sensors')
+            ->where('device_id', $port->device_id)
+            ->where('entPhysicalIndex', $port->ifIndex)
+            ->where('sensor_class', 'temperature')
+            ->value('sensor_current');
+
+        /*
+        |--------------------------------------------------------------------------
+        | Voltage
+        |--------------------------------------------------------------------------
+        */
+
+        $voltage = DB::table('sensors')
+            ->where('device_id', $port->device_id)
+            ->where('entPhysicalIndex', $port->ifIndex)
+            ->where('sensor_class', 'voltage')
+            ->value('sensor_current');
+
+        /*
+        |--------------------------------------------------------------------------
+        | Current
+        |--------------------------------------------------------------------------
+        */
+
+        $current = DB::table('sensors')
+            ->where('device_id', $port->device_id)
+            ->where('entPhysicalIndex', $port->ifIndex)
+            ->where('sensor_class', 'current')
+            ->value('sensor_current');
+
+        /*
+        |--------------------------------------------------------------------------
+        | LOS Status
+        |--------------------------------------------------------------------------
+        */
+
+        $los = DB::table('sensors')
+            ->where('device_id', $port->device_id)
+            ->where('entPhysicalIndex', $port->ifIndex)
+            ->where('sensor_class', 'state')
+            ->where('sensor_descr', 'LIKE', '%LOS%')
+            ->value('sensor_current');
+
+        /*
+        |--------------------------------------------------------------------------
+        | Final SFP Object
+        |--------------------------------------------------------------------------
+        */
+
+        $data['sfp'] = [
+            'connected'   => true,
+            'vendor'      => $vendor[1] ?? null,
+            'model'       => $model[1] ?? null,
+            'serial'      => $serial[1] ?? null,
+            'wavelength'  => $wave[1] ?? null,
+            'rx_power'    => $rx,
+            'tx_power'    => $tx,
+            'temperature' => $temp,
+            'voltage'     => $voltage,
+            'current'     => $current,
+            'los_status'  => $los,
+        ];
+
+        return $data;
+    };
+
+
+
+    /*
+    |--------------------------------------------------------------------------
+    | ALL PORTS
+    |--------------------------------------------------------------------------
+    */
 
     if ($port_id === 'all') {
 
@@ -1232,38 +1448,29 @@ function get_port_info(Illuminate\Http\Request $request)
             ->with(['device:device_id,hostname'])
             ->when(in_array($with, $allowed), fn ($q) => $q->with($with))
             ->get()
-            ->map(function ($port) {
-
-                return array_merge(
-                    [
-                        'hostname' => $port->device->hostname ?? null,
-                        'device'   => $port->device,
-                    ],
-                    $port->toArray()
-                );
-            });
+            ->map($formatPort);
 
         return api_success($ports, 'ports');
     }
 
-    return check_port_permission($port_id, null, function ($port_id) use ($with, $allowed) {
+    /*
+    |--------------------------------------------------------------------------
+    | SINGLE PORT
+    |--------------------------------------------------------------------------
+    */
+
+    return check_port_permission($port_id, null, function ($port_id) use ($with, $allowed, $formatPort) {
 
         $port = Port::where('port_id', $port_id)
             ->with(['device:device_id,hostname'])
             ->when(in_array($with, $allowed), fn ($q) => $q->with($with))
-            ->get()
-            ->map(function ($port) {
+            ->first();
 
-                return array_merge(
-                    [
-                        'hostname' => $port->device->hostname ?? null,
-                        'device'   => $port->device,
-                    ],
-                    $port->toArray()
-                );
-            });
+        if (!$port) {
+            return api_error(404, 'Port not found');
+        }
 
-        return api_success($port, 'port');
+        return api_success($formatPort($port), 'port');
     });
 }
 
@@ -1359,17 +1566,22 @@ function search_ports(Illuminate\Http\Request $request): JsonResponse
 /**
  * @throws \LibreNMS\Exceptions\ApiException
  */
-function get_all_ports(Illuminate\Http\Request $request): JsonResponse
-{
-    $columns = validate_column_list($request->get('columns'), 'ports', ['port_id', 'ifName']);
+    function get_all_ports(Illuminate\Http\Request $request): JsonResponse
+    {
+        
+        $columns = validate_column_list($request->get('columns'), 'ports', ['port_id', 'ifName']);
 
-    $ports = Port::hasAccess(Auth::user())
-        ->select($columns)
-        ->isNotDeleted()
-        ->get();
+        // 👉 add hostname manually
+        $columns[] = 'devices.hostname';
 
-    return api_success($ports, 'ports');
-}
+        $ports = Port::hasAccess(Auth::user())
+            ->select($columns)
+            ->leftJoin('devices', 'ports.device_id', '=', 'devices.device_id')
+            ->isNotDeleted()
+            ->get();
+
+        return api_success($ports, 'ports');
+    }
 
 function get_port_stack(Illuminate\Http\Request $request)
 {
