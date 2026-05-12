@@ -39,6 +39,8 @@
                     <li>{{ __('Each line will be validated in real-time') }}</li>
                     <li>{{ __('Lines starting with # will be ignored as comments') }}</li>
                     <li>{{ __('Upload the startup-config file for the devices') }}</li>
+                    <li>{{ __('Kindly verify the correctness of the startup-config file before uploading') }}</li>
+                    <li>{{ __('After uploading, there is no rollback provision, so please proceed carefully') }}</li>
                 </ul>
             </div>
 

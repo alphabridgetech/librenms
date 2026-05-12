@@ -2,13 +2,13 @@ import paramiko
 import time
 import sys
 
-HOST = "192.168.200.245"
+HOST = "192.168.200.241"
 USER = "admin"
 PASSWORD = "admin@123#"
 
 TFTP_SERVER = "192.168.200.151"
-FILENAME = "startup-config"
-DEST_FILE = "192.168.200.245_startup-config"
+FILENAME = "switch.bin"
+DEST_FILE = "192.168.200.241_switch.bin"
 
 def read(shell, wait=1):
     time.sleep(wait)

@@ -181,7 +181,7 @@
                         <li><a href="{{ url('addhost') }}"><i class="fa fa-plus fa-fw fa-lg"
                                                               aria-hidden="true"></i> {{ __('Add Device') }}</a></li>
                         <li><a href="{{ route('addhost.ip') }}"><i class="fa fa-plus fa-fw fa-lg "
-                                                              aria-hidden="true"></i> {{ __('Add Device Using IP') }}</a></li>
+                                                              aria-hidden="true"></i> {{ __('Push Configuration') }}</a></li>
                         <li><a href="{{ url('addbulkhost') }}"><i class="fa fa-plus fa-fw fa-lg"
                                                               aria-hidden="true"></i> {{ __('Add Bulk Devices') }}</a></li>
                         <li><a href="{{ url('delhost') }}"><i class="fa fa-trash fa-fw fa-lg"

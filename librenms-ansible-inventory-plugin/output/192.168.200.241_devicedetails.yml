@@ -12,7 +12,7 @@ show_version: |
             Base ethernet MAC Address: c8:6b:bc:a0:d0:f3
             snmp info:
             vend_ID:58158   product_ID:311   system_ID:1.3.6.1.4.1.58158.1.311.0
-            AS210T_CPE uptime is 2:22:58:44, The current time: 2000-1-4 4:28:43
+            AS210T_CPE uptime is 13:21:34:30, The current time: 2000-1-15 3:4:30
             14 times of reboot catched, last 4 times reboot history recorded:
             No. 1: System is rebooted by command at 2000-1-1 0:44:18, uptime 0:00:44:18
             No. 2: System is rebooted by command at 2000-1-1 3:14:2, uptime 0:03:14:02
