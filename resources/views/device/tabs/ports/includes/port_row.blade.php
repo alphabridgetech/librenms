@@ -184,9 +184,9 @@
                 $los = DB::table('sensors')->where('device_id', $port->device_id)->where('entPhysicalIndex', $port->ifIndex)->where('sensor_class', 'state')->where('sensor_descr', 'LIKE', '%LOS%')->value('sensor_current');
             @endphp
             <x-popup>
-                <span class="tw:font-medium tw:text-xs">{{ $vendor[1] ?? '' }} {{ $model[1] ?? '' }}</span>
+                <span class="tw:font-medium tw:text-base">{{ $vendor[1] ?? '' }} {{ $model[1] ?? '' }}</span>
                 <x-slot name="body">
-                    <div class="tw:text-xs tw:leading-tight tw:whitespace-nowrap">
+                    <div class="tw:text-base tw:leading-snug tw:whitespace-nowrap">
                         <div>SN: {{ $serial[1] ?? '-' }}</div>
                         @if($wave[1] ?? false)<div>{{ $wave[1] }}</div>@endif
                         @if($rx !== null)<div>RX: {{ number_format((float)$rx, 2) }} dBm</div>@endif
@@ -194,7 +194,7 @@
                         @if($temp !== null)<div>T: {{ number_format((float)$temp, 1) }}&deg;C</div>@endif
                         @if($voltage !== null)<div>V: {{ number_format((float)$voltage, 2) }}V</div>@endif
                         @if($bias !== null)<div>I: {{ number_format((float)$bias, 2) }}mA</div>@endif
-                        
+                        @if($los !== null)<div class="tw:font-bold {{ $los ? 'tw:text-red-600' : 'tw:text-green-600' }}">LOS: {{ $los ? 'ALARM' : 'Normal' }}</div>@endif
                     </div>
                 </x-slot>
             </x-popup>
