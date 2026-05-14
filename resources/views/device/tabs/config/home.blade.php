@@ -108,12 +108,15 @@ function loadSystemInfo() {
     console.log('====================================');
 
     let ip = getCookie(ck("device_ip")) || "{{ $device->hostname }}";
-    let apiToken = getCookie(ck("api_token")) || "{{ $data['api_token'] }}";
+    let apiToken = "{{ $data['api_token'] }}";
+    let apiUrl = `/api/v0/systeminfo/${ip}`;
+
 
     setCookie(ck("device_ip"), ip);
     setCookie(ck("api_token"), apiToken);
+    
 
-    fetch(`/api/v0/system_info/${ip}`, {
+    fetch(apiUrl, {
         method: "GET",
         headers: {
             "Authorization": "Bearer " + apiToken,

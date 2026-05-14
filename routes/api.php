@@ -61,7 +61,7 @@ Route::prefix('v0')->group(function () {
 
         //kunal api add for configuration changes
         Route::post('testapi', [App\Api\Controllers\KunalApiController::class, 'testFunction'])->name('testFunction');
-        Route::get('system_info/{hostname}', [App\Api\Controllers\KunalApiController::class, 'systeminfo'])->name('systeminfo');
+        Route::get('systeminfo/{hostname}', [App\Api\Controllers\KunalApiController::class, 'systeminfo'])->name('systeminfo');
         Route::get('gethostname/{hostname}', [App\Api\Controllers\KunalApiController::class, 'gethostname'])->name('gethostname');
         Route::post('changehostname/{hostname}', [App\Api\Controllers\KunalApiController::class, 'changehostname']);
         Route::get('getvlan/{hostname}', [App\Api\Controllers\KunalApiController::class, 'getvlan'])->name('getvlan');
