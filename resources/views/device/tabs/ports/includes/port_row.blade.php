@@ -194,7 +194,7 @@
                         @if($temp !== null)<div>T: {{ number_format((float)$temp, 1) }}&deg;C</div>@endif
                         @if($voltage !== null)<div>V: {{ number_format((float)$voltage, 2) }}V</div>@endif
                         @if($bias !== null)<div>I: {{ number_format((float)$bias, 2) }}mA</div>@endif
-                        @if($los !== null)<div class="tw:font-bold {{ $los ? 'tw:text-red-600' : 'tw:text-green-600' }}">LOS: {{ $los ? 'ALARM' : 'Normal' }}</div>@endif
+                    
                     </div>
                 </x-slot>
             </x-popup>
