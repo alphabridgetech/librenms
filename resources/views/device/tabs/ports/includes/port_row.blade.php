@@ -160,4 +160,44 @@
             @endforeach
         </x-expandable>
     </td>
+    <td width="100" @if($collapsing)class="tw:hidden tw:md:table-cell"@endif>
+        @php
+            $sfpSensor = DB::table('sensors')
+                ->where('device_id', $port->device_id)
+                ->where('entPhysicalIndex', $port->ifIndex)
+                ->where('group', 'LIKE', 'Transceiver:%')
+                ->whereIn('sensor_class', ['dbm', 'temperature', 'voltage', 'current'])
+                ->first();
+        @endphp
+        @if($sfpSensor)
+            @php
+                $group = $sfpSensor->group;
+                preg_match('/Vendor:\s*([^\s]+)/i', $group, $vendor);
+                preg_match('/PN:\s*([^\s]+)/i', $group, $model);
+                preg_match('/S\/N:\s*([^\s]+)/i', $group, $serial);
+                preg_match('/(\d+nm)/i', $group, $wave);
+                $rx = DB::table('sensors')->where('device_id', $port->device_id)->where('entPhysicalIndex', $port->ifIndex)->where('sensor_class', 'dbm')->where('sensor_descr', 'LIKE', '%rxPower%')->value('sensor_current');
+                $tx = DB::table('sensors')->where('device_id', $port->device_id)->where('entPhysicalIndex', $port->ifIndex)->where('sensor_class', 'dbm')->where('sensor_descr', 'LIKE', '%txPower%')->value('sensor_current');
+                $temp = DB::table('sensors')->where('device_id', $port->device_id)->where('entPhysicalIndex', $port->ifIndex)->where('sensor_class', 'temperature')->value('sensor_current');
+                $voltage = DB::table('sensors')->where('device_id', $port->device_id)->where('entPhysicalIndex', $port->ifIndex)->where('sensor_class', 'voltage')->value('sensor_current');
+                $bias = DB::table('sensors')->where('device_id', $port->device_id)->where('entPhysicalIndex', $port->ifIndex)->where('sensor_class', 'current')->value('sensor_current');
+                $los = DB::table('sensors')->where('device_id', $port->device_id)->where('entPhysicalIndex', $port->ifIndex)->where('sensor_class', 'state')->where('sensor_descr', 'LIKE', '%LOS%')->value('sensor_current');
+            @endphp
+            <x-popup>
+                <span class="tw:font-medium tw:text-xs">{{ $vendor[1] ?? '' }} {{ $model[1] ?? '' }}</span>
+                <x-slot name="body">
+                    <div class="tw:text-xs tw:leading-tight tw:whitespace-nowrap">
+                        <div>SN: {{ $serial[1] ?? '-' }}</div>
+                        @if($wave[1] ?? false)<div>{{ $wave[1] }}</div>@endif
+                        @if($rx !== null)<div>RX: {{ number_format((float)$rx, 2) }} dBm</div>@endif
+                        @if($tx !== null)<div>TX: {{ number_format((float)$tx, 2) }} dBm</div>@endif
+                        @if($temp !== null)<div>T: {{ number_format((float)$temp, 1) }}&deg;C</div>@endif
+                        @if($voltage !== null)<div>V: {{ number_format((float)$voltage, 2) }}V</div>@endif
+                        @if($bias !== null)<div>I: {{ number_format((float)$bias, 2) }}mA</div>@endif
+                        
+                    </div>
+                </x-slot>
+            </x-popup>
+        @endif
+    </td>
 </tr>

@@ -9,7 +9,8 @@
             <th width="75"><a href="{{ $request->fullUrlWithQuery(['sort' => 'speed', 'order' => $data['sort'] == 'speed' ? $data['next_order'] : 'desc']) }} ">{{ __('Speed') }}</a></th>
             <th width="100" class="tw:hidden tw:sm:table-cell"><a href="{{ $request->fullUrlWithQuery(['sort' => 'media', 'order' => $data['sort'] == 'media' ? $data['next_order'] : 'asc']) }} ">{{ __('Media') }}</a></th>
             <th width="100"><a href="{{ $request->fullUrlWithQuery(['sort' => 'mac', 'order' => $data['sort'] == 'mac' ? $data['next_order'] : 'asc']) }} ">{{ __('MAC Address') }}</a></th>
-            <th width="375" class="tw:hidden tw:md:table-cell"></th>
+            <th width="100" class="tw:hidden tw:md:table-cell">Neighbors </th>
+            <th width="100"><a href="{{ $request->fullUrlWithQuery(['sort' => 'sfp', 'order' => $data['sort'] == 'sfp' ? $data['next_order'] : 'asc']) }} " style="text-align: center;">{{ __('SFP') }}</a></th>
         </tr>
         </thead>
         @foreach($data['ports'] as $port)

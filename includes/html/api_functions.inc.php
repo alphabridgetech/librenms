@@ -1420,7 +1420,7 @@ function get_port_transceiver(Illuminate\Http\Request $request)
         $data['sfp'] = [
             'connected'   => true,
             'vendor'      => $vendor[1] ?? null,
-            'model'       => $model[1] ?? null,
+            'part-number' => $model[1] ?? null,
             'serial'      => $serial[1] ?? null,
             'wavelength'  => $wave[1] ?? null,
             'rx_power'    => $rx,
