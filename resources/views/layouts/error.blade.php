@@ -3,6 +3,7 @@
 <head>
     <meta charset="UTF-8" />
     <meta name="robots" content="noindex,nofollow" />
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap@4.6.2/dist/css/bootstrap.min.css">
     <style>            body { background-color: #F9F9F9; color: #222; font: 14px/1.4 Helvetica, Arial, sans-serif; margin: 0; padding-bottom: 45px; }
 
         a { cursor: pointer; text-decoration: none; }
@@ -60,7 +61,7 @@
         <div class="exception-message-wrapper">
             <h1 class="break-long-words exception-message">@yield('title')</h1>
             <div class="exception-illustration hidden-xs-down">
-                <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64"><path d="M35.758 22.094l6.148 6.148-2.42 2.459-6.147-6.148zm11.245-11.226l6.149 6.148-2.44 2.46-6.148-6.148zm-.396 22.094l6.188 6.148-2.44 2.46-6.346-6.149zm11.245-11.225L64 27.885l-2.42 2.459-6.148-6.148zm-24.335-4.562l6.188-6.148 2.44 2.44-6.149 6.148zm10.868 10.868l6.149-6.148 2.459 2.42-6.148 6.148zm10.849 10.869l6.148-6.188 2.46 2.44-6.347 6.147zM22.272 28.46l6.148-6.148 2.46 2.42-6.149 6.147zm10.849 10.848l6.187-6.148 2.42 2.42-6.148 6.148zm10.868 10.869l6.148-6.188 2.46 2.44-6.189 6.346z" fill="#fff"></path><path d="M13.288 44.544l6.188 6.148-2.42 2.46-6.188-6.188zM24.533 33.32l6.148 6.148-2.42 2.44-6.148-6.149zm-.337 22.093l6.148 6.149L27.904 64l-6.148-6.148zM35.4 44.187l6.148 6.148-2.42 2.44-6.147-6.148zM2.44 33.676l6.149 6.148-2.44 2.42L0 36.095zM13.685 22.45l6.148 6.148-2.44 2.44-6.148-6.149zM24.89 11.225l6.148 6.148-2.38 2.46-6.148-6.148zM36.095 0l6.188 6.148-2.44 2.44-6.346-6.149zM22.67 6.346L28.817.198l2.44 2.42-6.149 6.148zM11.424 17.592l6.148-6.149 2.459 2.44-6.148 6.148zM.198 28.837l6.148-6.148 2.44 2.38-6.148 6.187zm10.829 10.828l6.148-6.148 2.46 2.44-6.149 6.148zm10.868 10.869l6.148-6.149 2.44 2.42-6.148 6.148zm10.829 10.868l6.188-6.148 2.44 2.38-6.149 6.188z" fill="#db202e"></path></svg>
+                <img src="{{ asset('images/telequill_loginpage.svg') }}" alt="" width="200" height="70" />
             </div>
         </div>
     </div>
@@ -72,12 +73,13 @@
     </div>
 
     <hr class="separator"/>
-    <p>{{ __("Check your log for more details.") }} ({{ isset($log_file) ? $log_file : 'librenms.log' }})</p>
+    <p>{{ __("Check your log for more details.") }} ({{ isset($log_file) ? $log_file : 'Telequill.log' }})</p>
 
-    <p>{{ __("If you need additional help, you can find how to get help at") }} <a target="_blank" href="https://docs.librenms.org/Support">https://docs.librenms.org/Support</a>.</p>
+    <p>{{ __("If you need additional help, you can find how to get help at") }} <a target="_blank" href="https://support.alphabridge.tech/">https://support.alphabridge.tech/</a>.</p>
 
     @if(! empty(Flare::sentReports()->all()))
         <p>{{ __("Please include this Error-ID when reporting problems:") }} <b>{{ Flare::sentReports()->latestUuid() }}</b></p>
+        <h1>here show licence details </h1>
     @endif
 </div>
 </body>

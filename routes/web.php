@@ -55,6 +55,8 @@ use App\Http\Controllers\MibsUploadController;
 use App\Http\Controllers\ChatBotController;
 use App\Http\Controllers\TftpDownloadController;
 use App\Http\Controllers\SystemBulkUploadController;
+use App\Http\Controllers\LicenceController;
+use App\Services\LicenseVerifier;
 
 /*
 |--------------------------------------------------------------------------
@@ -73,6 +75,9 @@ Route::get(
     [TftpDownloadController::class, 'download']
 )->name('tftp.download');
 
+Route::post('/license/upload', [LicenceController::class, 'licenceUpload'])->name('license.upload');
+Route::post('/license/upload-key', [LicenceController::class, 'uploadPublicKey'])->name('license.upload-key');
+
 // Auth
 AuthFacade::routes(['register' => false, 'reset' => false, 'verify' => false]);
 
@@ -88,7 +93,21 @@ Route::get('graph/{path?}', GraphController::class)
     ->middleware(['web', AuthenticateGraph::class])->name('graph');
 
 // WebUI
-Route::middleware(['auth'])->group(function () {
+Route::middleware(['auth', 'license'])->group(function () {
+
+    Route::get('/license', function () {
+        $verifier = new LicenseVerifier();
+        $result = $verifier->verify();
+        $license = $result['license'];
+        return view('licence.licence', [
+            'product' => $license['product'] ?? 'Unknown',
+            'expiry' => $license['expiry'] ?? 'N/A',
+            'maxUsers' => $license['max_users'] ?? 'Unlimited',
+            'domain' => $license['domain'] ?? 'N/A',
+            'licenseKey' => $license['license_key'] ?? 'N/A',
+        ]);
+    });
+
     Route::get('/submenu1-1', [VLANController::class, 'showSubmenu']);
 
     // Optional: If you want AJAX-based loading:
@@ -106,9 +125,9 @@ Route::middleware(['auth'])->group(function () {
 
 
 
-//     Route::get('/tabs/vlan-batch', function () {
-// return "vgcbvgc";
-//     });
+    //     Route::get('/tabs/vlan-batch', function () {
+    // return "vgcbvgc";
+    //     });
 
 
     Route::get('tabs/vlan-batch', [VLANController::class, 'vlanBatchTab'])->name('vlan-batch-page');
