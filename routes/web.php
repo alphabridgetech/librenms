@@ -106,7 +106,7 @@ Route::middleware(['auth', 'license'])->group(function () {
             'domain' => $license['domain'] ?? 'N/A',
             'licenseKey' => $license['license_key'] ?? 'N/A',
         ]);
-    });
+    })->name('license.smenu');
 
     Route::get('/submenu1-1', [VLANController::class, 'showSubmenu']);
 

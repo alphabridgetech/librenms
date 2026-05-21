@@ -686,6 +686,11 @@
                         <li><a href="{{ url('about') }}"><i class="fa-solid fa-circle-info fa-fw fa-lg"
                                                             aria-hidden="true"></i> {{ __('About :project_name', ['project_name' => $project_name]) }}
                             </a></li>
+
+                        <li role="presentation" class="divider" id="countdown_timer_divider" style="display: none"></li>
+                        <li><a href="{{ url('/license') }}"><i class="fa-solid fa-circle-info fa-fw fa-lg"
+                                                            aria-hidden="true"></i> {{ __(' license :project_name', ['project_name' => $project_name]) }}
+                            </a></li>
                     </ul>
                 </li>
             </ul>

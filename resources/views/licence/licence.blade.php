@@ -42,7 +42,43 @@
                     </div>
                 </div>
             </div>
-           
+            
+        </div>
+
+        <div class="row" style="margin-top: 15px;">
+            <div class="col-md-6">
+                <div class="panel panel-info">
+                    <div class="panel-heading">
+                        <h5 class="panel-title">Upgrade License File</h5>
+                    </div>
+                    <div class="panel-body">
+                        <form action="{{ route('license.upload') }}" method="POST" enctype="multipart/form-data">
+                            @csrf
+                            <div class="form-group">
+                                <input type="file" name="license_file" class="form-control-file" required>
+                            </div>
+                            <button type="submit" class="btn btn-primary">Upload License</button>
+                        </form>
+                    </div>
+                </div>
+            </div>
+
+            <div class="col-md-6">
+                <div class="panel panel-info">
+                    <div class="panel-heading">
+                        <h5 class="panel-title">Upgrade Public Key</h5>
+                    </div>
+                    <div class="panel-body">
+                        <form action="{{ route('license.upload-key') }}" method="POST" enctype="multipart/form-data">
+                            @csrf
+                            <div class="form-group">
+                                <input type="file" name="public_key" class="form-control-file" required>
+                            </div>
+                            <button type="submit" class="btn btn-success">Upload Public Key</button>
+                        </form>
+                    </div>
+                </div>
+            </div>
         </div>
 
         <div class="row" style="margin-top: 15px;">

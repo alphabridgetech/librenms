@@ -1,0 +1,7 @@
+how ii restart PHP script '/opt/librenms/app/Http/Middleware/CheckLicense.php' is protected by SourceGuardian and requires a SourceGuardian loader 'ixed.8.3.lin' to be installed. 
+1) Click here to download the required 'ixed.8.3.lin' loader from the SourceGuardian site 
+2) Install the loader to /usr/lib/php83/modules 
+3) Edit /etc/php83/php.ini and add 'extension=ixed.8.3.lin' directive 
+4) Restart the web server
+
+docker cp /home/kunal/Downloads/ixed.8.3.lin librenms:/usr/lib/php83/modules
