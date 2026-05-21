@@ -81,6 +81,46 @@
             </div>
         </div>
 
+        @if ($licenseFileInfo)
+        <div class="row" style="margin-top: 15px;">
+            <div class="col-md-12">
+                <div class="panel panel-default">
+                    <div class="panel-heading">
+                        <h5 class="panel-title">Current License File</h5>
+                    </div>
+                    <div class="panel-body">
+                        <table class="table table-striped">
+                            <tr>
+                                <th>Filename:</th>
+                                <td>{{ $licenseFileInfo['filename'] }}</td>
+                            </tr>
+                            <tr>
+                                <th>Size:</th>
+                                <td>{{ number_format($licenseFileInfo['size']) }} bytes</td>
+                            </tr>
+                            <tr>
+                                <th>Last Modified:</th>
+                                <td>{{ $licenseFileInfo['last_modified'] }}</td>
+                            </tr>
+                        </table>
+
+                        @if ($licenseFileContent && isset($licenseFileContent['data']))
+                        <h5>License Data</h5>
+                        <table class="table table-striped">
+                            @foreach ($licenseFileContent['data'] as $key => $value)
+                            <tr>
+                                <th>{{ ucwords(str_replace('_', ' ', $key)) }}:</th>
+                                <td>{{ $value ?? 'N/A' }}</td>
+                            </tr>
+                            @endforeach
+                        </table>
+                        @endif
+                    </div>
+                </div>
+            </div>
+        </div>
+        @endif
+
         <div class="row" style="margin-top: 15px;">
             <div class="col-md-12">
                 <a href="/" class="btn btn-default">Back to Home</a>

@@ -99,12 +99,28 @@ Route::middleware(['auth', 'license'])->group(function () {
         $verifier = new LicenseVerifier();
         $result = $verifier->verify();
         $license = $result['license'];
+
+        $licenseFilePath = base_path('license.key');
+        $licenseFileInfo = null;
+        $licenseFileContent = null;
+        if (file_exists($licenseFilePath)) {
+            $licenseFileInfo = [
+                'filename' => 'license.key',
+                'path' => $licenseFilePath,
+                'size' => filesize($licenseFilePath),
+                'last_modified' => date('Y-m-d H:i:s', filemtime($licenseFilePath)),
+            ];
+            $licenseFileContent = json_decode(file_get_contents($licenseFilePath), true);
+        }
+
         return view('licence.licence', [
             'product' => $license['product'] ?? 'Unknown',
             'expiry' => $license['expiry'] ?? 'N/A',
             'maxUsers' => $license['max_users'] ?? 'Unlimited',
             'domain' => $license['domain'] ?? 'N/A',
             'licenseKey' => $license['license_key'] ?? 'N/A',
+            'licenseFileInfo' => $licenseFileInfo,
+            'licenseFileContent' => $licenseFileContent,
         ]);
     })->name('license.smenu');
 
