@@ -203,6 +203,7 @@ class KunalApiController
 
     public function cngportstatus(Request $request, $hostname)
 {
+    
     $validated = $request->validate([
         'interface'  => 'required|string',
         'status' => 'required|string'
@@ -213,7 +214,7 @@ class KunalApiController
 
     $output = $this->runAnsible($playbook, $hosts, [
         "interface"  => $validated['interface'],
-        "status" => $validated['portstatus']
+        "status" => $validated['status']
     ]);
 
     return $this->success([
