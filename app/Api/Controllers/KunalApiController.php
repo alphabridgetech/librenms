@@ -205,7 +205,7 @@ class KunalApiController
 {
     $validated = $request->validate([
         'interface'  => 'required|string',
-        'portstatus' => 'required|string'
+        'status' => 'required|string'
     ]);
 
     $playbook = "{$this->pluginPath}/playbooks/cngportstatus.yml";
@@ -213,7 +213,7 @@ class KunalApiController
 
     $output = $this->runAnsible($playbook, $hosts, [
         "interface"  => $validated['interface'],
-        "portstatus" => $validated['portstatus']
+        "status" => $validated['portstatus']
     ]);
 
     return $this->success([

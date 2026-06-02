@@ -1,3 +1,4 @@
+---
 - name: Change interface port status via SSH
   hosts: all
   gather_facts: no
@@ -7,7 +8,7 @@
     - name: Copy Python script
       ansible.builtin.copy:
         dest: "/opt/librenms/librenms-ansible-inventory-plugin/tmp/change_port_status_exec.py"
-        mode: '0755'
+        mode: "0755"
         content: |
           import paramiko
           import time
@@ -17,56 +18,85 @@
           USER = "{{ ansible_user }}"
           PASSWORD = "{{ ansible_password }}"
           INTERFACE = "{{ interface }}"
-          STATUS = "{{ status }}"
+          STATUS = "{{ status }}".strip().lower()
 
           try:
               ssh = paramiko.SSHClient()
               ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
-              ssh.connect(HOST, username=USER, password=PASSWORD, look_for_keys=False, allow_agent=False)
+
+              ssh.connect(
+                  HOST,
+                  username=USER,
+                  password=PASSWORD,
+                  look_for_keys=False,
+                  allow_agent=False,
+                  timeout=15
+              )
 
               shell = ssh.invoke_shell()
               time.sleep(1)
 
+              # Clear initial banner output
+              if shell.recv_ready():
+                  shell.recv(65535)
+
               shell.send("enable\n")
               time.sleep(1)
+
               shell.send(PASSWORD + "\n")
               time.sleep(1)
 
               shell.send("config\n")
               time.sleep(1)
 
-
               shell.send(f"interface {INTERFACE}\n")
               time.sleep(1)
 
-              if STATUS.lower() == "enable":
-                  shell.send(f"no shutdown\n")
-              else if STATUS.lower() == "disable":
-                  shell.send(f"shutdown\n")
+              if STATUS == "enable":
+                  shell.send("no shutdown\n")
+              elif STATUS == "disable":
+                  shell.send("shutdown\n")
               else:
-                  shell.send(f"shutdown\n")
+                  raise Exception(
+                      f"Invalid status '{STATUS}'. Use enable or disable."
+                  )
+
               time.sleep(1)
 
               shell.send("!\n")
               time.sleep(1)
 
               shell.send("write all\n")
-              time.sleep(2)
+              time.sleep(3)
+
+              output = ""
+
+              while shell.recv_ready():
+                  output += shell.recv(65535).decode(
+                      "utf-8",
+                      errors="ignore"
+                  )
+                  time.sleep(0.5)
 
               print("SUCCESS")
+              print(output)
 
               ssh.close()
+              sys.exit(0)
 
           except Exception as e:
-              print("ERROR:", e)
+              print(f"ERROR: {str(e)}")
+              sys.exit(1)
 
-    - name: Run script
-      ansible.builtin.command: >
-        /opt/librenms/librenms-ansible-inventory-plugin/bin/python3
-        /opt/librenms/librenms-ansible-inventory-plugin/tmp/change_port_status_exec.py
+    - name: Execute Python script
+      ansible.builtin.command:
+        cmd: >
+          /opt/librenms/librenms-ansible-inventory-plugin/bin/python3
+          /opt/librenms/librenms-ansible-inventory-plugin/tmp/change_port_status_exec.py
       register: output
       changed_when: true
+      failed_when: output.rc != 0
 
-    - name: Debug
+    - name: Show command output
       ansible.builtin.debug:
-        var: output.stdout
+        msg: "{{ output.stdout }}"

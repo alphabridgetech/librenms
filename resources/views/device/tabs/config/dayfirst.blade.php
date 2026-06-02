@@ -205,9 +205,16 @@ const interfacesData = Array.isArray(rawInterfaces) ? rawInterfaces : (typeof ra
                 <div id="interfaceData_${ifaceId}" class="interface-data" style="display:none;">
                     <strong>Interface Details:</strong>
                     <pre id="interfaceDataContent_${ifaceId}"></pre>
-                    <button type="button" class="btn btn-xs btn-danger" style="margin-top:8px;" onclick="interfaceReset('${ifaceId}')">
-                        <i class="fa fa-refresh"></i> RESET INTERFACE
-                    </button>
+                    <div style="margin-top:8px; display:flex; align-items:center; gap:5px; flex-wrap:wrap;">
+                        <button type="button" class="btn btn-xs btn-danger" onclick="interfaceReset('${ifaceId}')">
+                            <i class="fa fa-refresh"></i> RESET INTERFACE
+                        </button>
+                        <select class="form-control" style="width:auto; display:inline-block;" onchange="changePortStatus('${ifaceId}', this)">
+                            <option value="">Port Status...</option>
+                            <option value="enable">Enable</option>
+                            <option value="disable">Disable</option>
+                        </select>
+                    </div>
                 </div>
 
                 <div class="form-group">
@@ -578,6 +585,53 @@ const interfacesData = Array.isArray(rawInterfaces) ? rawInterfaces : (typeof ra
             btn.disabled = false;
             btn.innerHTML = '<i class="fa fa-refresh"></i> RESET INTERFACE';
             alert('Error: ' + err);
+        });
+    }
+
+    function changePortStatus(ifaceId, selectEl) {
+        const status = selectEl.value;
+        if (!status) return;
+
+        const card = document.getElementById(ifaceId);
+        const interfaceSelect = card ? card.querySelector('select[id="interface_name"]') : null;
+        const interfaceName = interfaceSelect ? interfaceSelect.value : '';
+
+        if (!interfaceName) {
+            alert('Please select an interface first.');
+            selectEl.value = '';
+            return;
+        }
+
+        if (!confirm('Are you sure you want to ' + status + ' port ' + interfaceName + '?')) {
+            selectEl.value = '';
+            return;
+        }
+
+        selectEl.disabled = true;
+
+        fetch(`/api/v0/cngportstatus/${deviceIp}`, {
+            method: "POST",
+            headers: {
+                "Authorization": "Bearer " + apiToken,
+                "Content-Type": "application/json",
+                "Accept": "application/json"
+            },
+            body: JSON.stringify({ interface: interfaceName, status: status })
+        })
+        .then(res => res.json())
+        .then(res => {
+            selectEl.disabled = false;
+            if (res.status === "success") {
+                alert('Port ' + status + ' successfully!');
+            } else {
+                alert('Failed to ' + status + ' port: ' + (res.message || 'Unknown error'));
+            }
+            selectEl.value = '';
+        })
+        .catch(err => {
+            selectEl.disabled = false;
+            alert('Error: ' + err);
+            selectEl.value = '';
         });
     }
 
