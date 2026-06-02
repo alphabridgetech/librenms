@@ -205,6 +205,9 @@ const interfacesData = Array.isArray(rawInterfaces) ? rawInterfaces : (typeof ra
                 <div id="interfaceData_${ifaceId}" class="interface-data" style="display:none;">
                     <strong>Interface Details:</strong>
                     <pre id="interfaceDataContent_${ifaceId}"></pre>
+                    <button type="button" class="btn btn-xs btn-danger" style="margin-top:8px;" onclick="interfaceReset('${ifaceId}')">
+                        <i class="fa fa-refresh"></i> RESET INTERFACE
+                    </button>
                 </div>
 
                 <div class="form-group">
@@ -531,6 +534,51 @@ const interfacesData = Array.isArray(rawInterfaces) ? rawInterfaces : (typeof ra
         });
 
         updatePreview();
+    }
+
+    function interfaceReset(ifaceId) {
+        const card = document.getElementById(ifaceId);
+        const selectEl = card ? card.querySelector('select') : null;
+        const interfaceName = selectEl ? selectEl.value : '';
+
+        if (!interfaceName) {
+            alert('Please select an interface first.');
+            return;
+        }
+
+        if (!confirm('Are you sure you want to reset interface ' + interfaceName + '?')) {
+            return;
+        }
+
+        const btn = event.target;
+        btn.disabled = true;
+        btn.innerHTML = '<span class="spinner-border"></span> RESETTING...';
+
+        fetch(`/api/v0/interface/reset/${deviceIp}`, {
+            method: "POST",
+            headers: {
+                "Authorization": "Bearer " + apiToken,
+                "Content-Type": "application/json",
+                "Accept": "application/json"
+            },
+            body: JSON.stringify({ interface: interfaceName })
+        })
+        .then(res => res.json())
+        .then(res => {
+            btn.disabled = false;
+            btn.innerHTML = '<i class="fa fa-refresh"></i> RESET INTERFACE';
+
+            if (res.status === "success") {
+                alert('Interface reset successfully!');
+            } else {
+                alert('Failed to reset interface: ' + (res.message || 'Unknown error'));
+            }
+        })
+        .catch(err => {
+            btn.disabled = false;
+            btn.innerHTML = '<i class="fa fa-refresh"></i> RESET INTERFACE';
+            alert('Error: ' + err);
+        });
     }
 
     function updatePreview() {

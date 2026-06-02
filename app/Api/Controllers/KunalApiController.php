@@ -178,6 +178,50 @@ class KunalApiController
 }
 
 
+    public function interfacereset(Request $request, $hostname)
+    {
+        $new = $request->validate([
+            'interface' => 'required|string'
+        ])['interface'];
+
+        $playbook = "{$this->pluginPath}/playbooks/interfacereset.yml";
+        $hosts = "{$this->pluginPath}/hosts/{$hostname}.yml";
+
+        $output = $this->runAnsible($playbook, $hosts, [
+            "interface" => $new
+        ]);
+
+        return $this->success([
+            "message" => "Interface reset successfully",
+            "raw"     => $output
+        ]);
+    }   
+
+    #------------------------------------------------------------
+    #                       CHANGE PORT STATUS
+    #------------------------------------------------------------
+
+    public function cngportstatus(Request $request, $hostname)
+{
+    $validated = $request->validate([
+        'interface'  => 'required|string',
+        'portstatus' => 'required|string'
+    ]);
+
+    $playbook = "{$this->pluginPath}/playbooks/cngportstatus.yml";
+    $hosts    = "{$this->pluginPath}/hosts/{$hostname}.yml";
+
+    $output = $this->runAnsible($playbook, $hosts, [
+        "interface"  => $validated['interface'],
+        "portstatus" => $validated['portstatus']
+    ]);
+
+    return $this->success([
+        "message" => "Port status changed successfully",
+        "raw"     => $output
+    ]);
+}
+
     #------------------------------------------------------------
     #                       GET HOSTNAME
     #------------------------------------------------------------

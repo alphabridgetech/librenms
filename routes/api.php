@@ -85,6 +85,8 @@ Route::prefix('v0')->group(function () {
         Route::post('vlan/configure-trunk/{hostname}', [App\Api\Controllers\KunalApiController::class, 'vlanconfiguretrunk'])->name('vlan.configure.trunk');       
         Route::post('network/interface/config/{hostname}', [App\Api\Controllers\KunalApiController::class, 'network_interface_config'])->name('network.interface.config');  
         Route::get('ntp/{hostname}', [App\Api\Controllers\KunalApiController::class, 'ntp'])->name('ntp');
+        Route::post('interface/reset/{hostname}', [App\Api\Controllers\KunalApiController::class, 'interfacereset'])->name('interfacereset');
+        Route::post('cngportstatus/{hostname}', [App\Api\Controllers\KunalApiController::class, 'cngportstatus'])->name('cngportstatus');
 
         //config save
         Route::post('network/cmd/config/{hostname}', [App\Api\Controllers\KunalApiController::class, 'network_cmd_config'])->name('network.cmd.config'); 

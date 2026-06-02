@@ -3,9 +3,9 @@ import time
 import json
 from datetime import datetime
 
-HOST = "192.168.200.245"
+HOST = "192.168.200.244"
 USER = "admin"
-PASSWORD = "admin@123#"
+PASSWORD = "admin"
 
 try:
     ssh = paramiko.SSHClient()
