@@ -23,7 +23,7 @@
         @endif
 
         <div class="row">
-            <div class="col-md-8 col-md-offset-2">
+            <div class="col-md-6">
                 <div class="panel panel-default">
                     <div class="panel-heading">
                         <h5 class="panel-title">Run Manual Backup</h5>
@@ -40,14 +40,43 @@
                                     <option value="external">External Hard Drive (/mnt/external/)</option>
                                     <option value="network">Network Drive (/mnt/network/)</option>
                                 </select>
-                                <span class="help-block">
-                                    <strong>Note:</strong> External and Network destinations must be correctly mounted in the Docker container.
-                                </span>
                             </div>
                             
                             <div class="form-group">
-                                <button type="submit" class="btn btn-primary btn-lg btn-block">
+                                <button type="submit" class="btn btn-primary btn-block">
                                     <i class="fa fa-play fa-fw"></i> Start Manual Backup
+                                </button>
+                            </div>
+                        </form>
+                    </div>
+                </div>
+            </div>
+
+            <div class="col-md-6">
+                <div class="panel panel-info">
+                    <div class="panel-heading">
+                        <h5 class="panel-title">Upload & Restore Backup</h5>
+                    </div>
+                    <div class="panel-body">
+                        <p>Upload a <code>.sql</code> backup file from your computer.</p>
+
+                        <form action="{{ route('backup.upload') }}" method="POST" enctype="multipart/form-data">
+                            @csrf
+                            <div class="form-group">
+                                <label for="backup_file">Select SQL File:</label>
+                                <input type="file" name="backup_file" id="backup_file" class="form-control" accept=".sql" required>
+                            </div>
+
+                            <div class="checkbox">
+                                <label>
+                                    <input type="checkbox" name="restore_immediately" value="1"> 
+                                    <strong>Restore immediately after upload?</strong>
+                                </label>
+                            </div>
+
+                            <div class="form-group">
+                                <button type="submit" class="btn btn-info btn-block" onclick="return document.querySelector('input[name=restore_immediately]').checked ? confirm('WARNING: You have selected to restore immediately. This will overwrite your current database. Proceed?') : true;">
+                                    <i class="fa fa-upload fa-fw"></i> Upload Backup
                                 </button>
                             </div>
                         </form>

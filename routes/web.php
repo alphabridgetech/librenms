@@ -246,6 +246,7 @@ Route::middleware(['auth', 'license'])->group(function () {
     // Backup routes
     Route::get('/backup', [BackupController::class, 'index'])->name('backup.index')->middleware('can:admin');
     Route::post('/backup/run', [BackupController::class, 'store'])->name('backup.run')->middleware('can:admin');
+    Route::post('/backup/upload', [BackupController::class, 'upload'])->name('backup.upload')->middleware('can:admin');
     Route::get('/backup/download/{filename}', [BackupController::class, 'download'])->name('backup.download')->middleware('can:admin');
     Route::delete('/backup/delete/{filename}', [BackupController::class, 'destroy'])->name('backup.delete')->middleware('can:admin');
     Route::post('/backup/restore/{filename}', [BackupController::class, 'restore'])->name('backup.restore')->middleware('can:admin');

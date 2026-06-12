@@ -75,15 +75,11 @@
           </p>
 
           <h3>{{ __('Contributors') }}</h3>
+          <b>Kunal verma</b> <br>
+          <b>Tigore sai patela</b>
 
          
-          <h3>{{ __('Acknowledgements') }}</h3>
-
-          <b>Bruno Pramont</b> Collectd code.<br />
-          <b>Dennis de Houx</b> Application monitors for PowerDNS, Shoutcast, NTPD (Client, Server).<br />
-          <b>Erik Bosrup</b> Overlib Library.<br />
-          <b>Jonathan De Graeve</b> SNMP code improvements.<br />
-          <b>Observium</b> Codebase for fork.<br />
+          
 
       </div>
       <div class="col-md-6">
@@ -175,21 +171,27 @@
 
         <h3>{{ __('License') }}</h3>
         <pre>
-Copyright (C) 2013-{{ date('Y') }} {{ $project_name }} Contributors
-Copyright (C) 2006-2012 Adam Armstrong
+copyright © 2026 Telequill Technologies. 
+All Rights Reserved.
 
-This program is free software: you can redistribute it and/or modify
-it under the terms of the GNU General Public License as published by
-the Free Software Foundation, either version 3 of the License, or
-(at your option) any later version.
+This software and its associated documentation are proprietary 
+and confidential. Unauthorized copying, distribution, modification,
+reverse engineering, or use of this software, in whole or in part,
+is strictly prohibited without prior written permission from Telequill 
+Technologies.
 
-This program is distributed in the hope that it will be useful,
-but WITHOUT ANY WARRANTY; without even the implied warranty of
-MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-GNU General Public License for more details.
+This software is licensed, not sold. Use of this software is subject
+to the terms and conditions of the applicable commercial license 
+agreement. A valid paid license is required for installation, access, 
+and continued use.
 
-You should have received a copy of the GNU General Public License
-along with this program.  If not, see <a target="_blank" href="https://www.gnu.org/licenses/">https://www.gnu.org/licenses/</a>.</pre>
+THE SOFTWARE IS PROVIDED "AS IS" WITHOUT WARRANTY OF ANY KIND, EXCEPT
+AS EXPRESSLY PROVIDED IN THE APPLICABLE LICENSE AGREEMENT. IN NO 
+EVENT SHALL TELEQUILL TECHNOLOGIES BE LIABLE FOR ANY INDIRECT, 
+INCIDENTAL, SPECIAL, OR CONSEQUENTIAL DAMAGES ARISING
+OUT OF THE USE OR INABILITY TO USE THIS SOFTWARE.
+
+<a target="_blank" href="https://www.alphabridge.tech/">https://www.alphabridge.tech/</a>.</pre>
 
         </div>
     </div>

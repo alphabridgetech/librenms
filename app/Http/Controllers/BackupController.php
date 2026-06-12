@@ -184,6 +184,51 @@ class BackupController extends Controller
     }
 
     /**
+     * Upload a backup file.
+     *
+     * @param  \Illuminate\Http\Request  $request
+     * @return \Illuminate\Http\RedirectResponse
+     */
+    public function upload(Request $request)
+    {
+        $request->validate([
+            'backup_file' => 'required|file', // Adjust max size if needed
+        ]);
+
+        $file = $request->file('backup_file');
+        $filename = $file->getClientOriginalName();
+
+        // Ensure it's a .sql file
+        if ($file->getClientOriginalExtension() !== 'sql') {
+            return redirect()->route('backup.index')->with('error', __('Only .sql files are allowed.'));
+        }
+
+        try {
+            $path = $file->storeAs('backups', $filename);
+            
+            try {
+                BackupLog::create([
+                    'user_id' => Auth::id(),
+                    'action' => 'upload',
+                    'filename' => $filename,
+                    'status' => 'success',
+                ]);
+            } catch (\Exception $e) {
+                Log::warning("Could not log backup upload: " . $e->getMessage());
+            }
+
+            if ($request->has('restore_immediately')) {
+                return $this->restore($filename);
+            }
+
+            return redirect()->route('backup.index')->with('success', __('Backup file uploaded successfully.'));
+        } catch (\Exception $e) {
+            Log::error("Backup upload error: " . $e->getMessage());
+            return redirect()->route('backup.index')->with('error', __('An error occurred while uploading: ') . $e->getMessage());
+        }
+    }
+
+    /**
      * Restore a specific backup file.
      *
      * @param  string  $filename
