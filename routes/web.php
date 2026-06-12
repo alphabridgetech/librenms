@@ -53,6 +53,7 @@ use App\Http\Controllers\Device\Tabs\alphabridgeController;
 use App\Http\Controllers\VLANController;
 use App\Http\Controllers\MibsUploadController;
 use App\Http\Controllers\ChatBotController;
+use App\Http\Controllers\BackupController;
 use App\Http\Controllers\TftpDownloadController;
 use App\Http\Controllers\SystemBulkUploadController;
 use App\Http\Controllers\LicenceController;
@@ -241,6 +242,13 @@ Route::middleware(['auth', 'license'])->group(function () {
     Route::resource('chatbot', ChatBotController::class);
     Route::post('chatbot/messages', [ChatBotController::class, 'message'])
     ->name('chatbot.message');
+
+    // Backup routes
+    Route::get('/backup', [BackupController::class, 'index'])->name('backup.index')->middleware('can:admin');
+    Route::post('/backup/run', [BackupController::class, 'store'])->name('backup.run')->middleware('can:admin');
+    Route::get('/backup/download/{filename}', [BackupController::class, 'download'])->name('backup.download')->middleware('can:admin');
+    Route::delete('/backup/delete/{filename}', [BackupController::class, 'destroy'])->name('backup.delete')->middleware('can:admin');
+    Route::post('/backup/restore/{filename}', [BackupController::class, 'restore'])->name('backup.restore')->middleware('can:admin');
 
     Route::get('about', [AboutController::class, 'index'])->name('about');
     Route::delete('reporting', [AboutController::class, 'clearReportingData'])->name('reporting.clear');

@@ -5,9 +5,9 @@ all:
         bridge1:
           ansible_host: 192.168.200.245
           ansible_user: admin
-          ansible_password: admin@123#
+          ansible_password: admin
           ansible_connection: local
           ansible_python_interpreter: /usr/bin/python3
           os: switchv1alphabridge
           snmpver: v2c
-          community: punelab
+          community: public

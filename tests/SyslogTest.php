@@ -174,8 +174,8 @@ final class SyslogTest extends TestCase
             ['device_id' => 1, 'program' => 'POSTFIX/SMTP', 'msg' => '5C62E329EF: to=<admin@example.com>, relay=mail.example.com[127.0.0.1]:25, delay=0.11, delays=0.04/0.01/0/0.06, dsn=2.0.0, status=sent (250 2.0.0 Ok: queued as 5362E6A670E)']
         );
         $this->checkSyslog(
-            '1.1.1.1||mail||info||info||16||2016-02-28 00:23:34||D7256400EF: from=<librenms@librenms.example.com>, size=882, nrcpt=1 (queue active)||postfix/qmgr',
-            ['device_id' => 1, 'program' => 'POSTFIX/QMGR', 'msg' => 'D7256400EF: from=<librenms@librenms.example.com>, size=882, nrcpt=1 (queue active)']
+            '1.1.1.1||mail||info||info||16||2016-02-28 00:23:34||D7256400EF: from=<telequill@telequill.example.com>, size=882, nrcpt=1 (queue active)||postfix/qmgr',
+            ['device_id' => 1, 'program' => 'POSTFIX/QMGR', 'msg' => 'D7256400EF: from=<telequill@telequill.example.com>, size=882, nrcpt=1 (queue active)']
         );
 
         // ---- No program ----

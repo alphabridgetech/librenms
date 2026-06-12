@@ -545,10 +545,13 @@
     </a>
 </li>
 
-
-
-
-
+{{-- Backup --}}
+<li>
+    <a href="{{ url('backup') }}">
+        <i class="fa fa-database fa-fw fa-lg fa-nav-icons" aria-hidden="true"></i> 
+        <span class="tw:md:hidden tw:lg:inline-block">{{ __('Backup') }}</span>
+    </a>
+</li>
 
 {{-- Alerts --}}
                 <li class="dropdown">
