@@ -76,7 +76,7 @@
 
           <h3>{{ __('Contributors') }}</h3>
           <b>Kunal verma</b> <br>
-          <b>Tigore sai patela</b>
+          <b>Tagore pattela</b>
 
          
           
