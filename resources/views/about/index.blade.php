@@ -75,8 +75,9 @@
           </p>
 
           <h3>{{ __('Contributors') }}</h3>
-          <b>Kunal verma</b> <br>
-          <b>Tagore pattela</b>
+          <b>1.Rajiv Mittal</b><br>
+          <b>2.Kunal verma</b> <br>
+          <b>3.Tagore pattela</b>
 
          
           
