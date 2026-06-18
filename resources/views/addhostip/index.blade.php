@@ -508,6 +508,17 @@
                 // Show loading spinner
                 $('#submitBtn').prop('disabled', true);
                 $('#loadingSpinner').show();
+
+                // Show processing alert
+                $('.alert-success, .alert-warning, .alert-info').remove();
+                const processingHtml = `
+                    <div class="alert alert-info" id="processingAlert">
+                        <i class="fa fa-spinner fa-spin fa-fw"></i> 
+                        <strong>Processing...</strong> {{ __('Please wait while we configure your devices. This may take a few minutes.') }}
+                    </div>
+                `;
+                $('.panel:first').before(processingHtml);
+                $('html, body').animate({ scrollTop: 0 }, 'fast');
                 
                 // Create FormData object for file upload
                 const formData = new FormData(this);
@@ -523,6 +534,10 @@
                     processData: false,
                     contentType: false,
                     success: function(response) {
+                        // Clear any existing alerts
+                        $('.alert-success, .alert-warning').remove();
+                        $('#processingAlert').remove();
+
                         if (response.success) {
                             // Show success message
                             const successHtml = `
@@ -532,25 +547,37 @@
                                     </button>
                                     <i class="fa fa-check-circle fa-fw"></i> 
                                     <strong>Success!</strong> ${response.message}
-                                    ${response.results ? '<pre class="mt-2">' + JSON.stringify(response.results, null, 2) + '</pre>' : ''}
+                                    ${response.results ? '<pre class="mt-2" style="max-height: 200px; overflow-y: auto;">' + JSON.stringify(response.results, null, 2) + '</pre>' : ''}
                                 </div>
                             `;
                             $('.panel:first').before(successHtml);
                             
-                            // Reset form
+                            // Reset form only on full success
                             $('#hostname').val('');
                             $('#config_file').val('');
                             $('#ipValidationPreview').hide();
                             $('#configPreview').hide();
                             validIPs = [];
-                            
-                            // Scroll to top
-                            $('html, body').animate({ scrollTop: 0 }, 'slow');
                         } else {
-                            alert('Error: ' + response.message);
+                            // Show warning message for partial or full failure
+                            const warningHtml = `
+                                <div class="alert alert-warning alert-dismissible fade in" role="alert">
+                                    <button type="button" class="close" data-dismiss="alert" aria-label="Close">
+                                        <span aria-hidden="true">&times;</span>
+                                    </button>
+                                    <i class="fa fa-exclamation-triangle fa-fw"></i> 
+                                    <strong>Warning!</strong> ${response.message}
+                                    ${response.results ? '<pre class="mt-2" style="max-height: 400px; overflow-y: auto;">' + JSON.stringify(response.results, null, 2) + '</pre>' : ''}
+                                </div>
+                            `;
+                            $('.panel:first').before(warningHtml);
                         }
+                        
+                        // Scroll to top
+                        $('html, body').animate({ scrollTop: 0 }, 'slow');
                     },
                     error: function(xhr) {
+                        $('#processingAlert').remove();
                         let errorMsg = 'An error occurred while processing devices';
                         if (xhr.responseJSON && xhr.responseJSON.message) {
                             errorMsg = xhr.responseJSON.message;

@@ -16,13 +16,10 @@
 Switch>enable
 Switch#config
 Switch_config#interface g0/2
-Switch_config_g0/2#description testdemo
-Switch_config_g0/2#end
-end
-^
-Unknown command
-Switch_config_g0/2#write all
-write all
-^
-Unknown command
-Switch_config_g0/2#
+Switch_config_g0/2#description kunal_demo
+Switch_config_g0/2#exit
+Switch_config#exit
+Switch#write
+Saving current configuration...
+OK!
+Switch#

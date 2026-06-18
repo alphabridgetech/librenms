@@ -43,7 +43,7 @@ class SystemBulkUploadController extends Controller
         }
     }
 
-    private function runAnsible(string $playbook, string $hosts, array $extraVars = []): string
+    private function runAnsible(string $playbook, string $hosts, array $extraVars = []): array
     {
         $extraVarsString = "";
 
@@ -57,7 +57,15 @@ class SystemBulkUploadController extends Controller
         }
 
         $cmd = "source {$this->venv} && ansible-playbook -i {$hosts} {$playbook}{$extraVarsString} 2>&1";
-        return shell_exec($cmd);
+        
+        $output = [];
+        $returnCode = 0;
+        exec($cmd, $output, $returnCode);
+        
+        return [
+            'output' => implode("\n", $output),
+            'exit_code' => $returnCode
+        ];
     }
 
      public function addHostIp(Request $request)
@@ -291,20 +299,36 @@ class SystemBulkUploadController extends Controller
 
             try {
                 
-                $output = $this->runAnsible($playbook, $inventoryFile, $extraVars);
-                //dd($output); // Debug output
-                // Add to LibreNMS
-                //$librenmsResult = $this->addDeviceToLibreNMS(trim($ip), $snmpCommunity);
+                $ansibleResult = $this->runAnsible($playbook, $inventoryFile, $extraVars);
+                $output = $ansibleResult['output'];
+                $exitCode = $ansibleResult['exit_code'];
 
-                $results[] = [
-                    'ip' => $ip,
-                    'hostname' => $hostname,
-                    'status' => 'success',
-                    'ansible_output' => $output,
-                    // 'librenms' => $librenmsResult
-                ];
+                // Check for failure in output even if exit code is 0 (due to playbook structure)
+                $isFailed = ($exitCode !== 0) || 
+                            (strpos($output, 'failed=1') !== false) || 
+                            (strpos($output, 'unreachable=1') !== false) ||
+                            (strpos($output, 'ERROR:') !== false) ||
+                            (strpos($output, 'Unknown command') !== false) ||
+                            (strpos($output, 'Invalid input') !== false);
 
-                $successCount++;
+                if ($isFailed) {
+                    $results[] = [
+                        'ip' => $ip,
+                        'hostname' => $hostname,
+                        'status' => 'failed',
+                        'ansible_output' => $output,
+                        'error' => 'Ansible execution failed or host unreachable'
+                    ];
+                    $failedCount++;
+                } else {
+                    $results[] = [
+                        'ip' => $ip,
+                        'hostname' => $hostname,
+                        'status' => 'success',
+                        'ansible_output' => $output,
+                    ];
+                    $successCount++;
+                }
 
             } catch (\Exception $e) {
 
@@ -323,8 +347,8 @@ class SystemBulkUploadController extends Controller
         // FINAL RESPONSE
         // -----------------------------
         return response()->json([
-            'success' => true,
-            'message' => "Success: {$successCount}, Failed: {$failedCount}",
+            'success' => ($failedCount === 0),
+            'message' => ($failedCount === 0) ? "Successfully processed {$successCount} device(s)" : "Processed with {$failedCount} failure(s). Success: {$successCount}, Failed: {$failedCount}",
             'results' => $results,
             'summary' => [
                 'total' => count($validIPs),
