@@ -74,7 +74,7 @@
                                 <select id="load_file" class="form-control">
                                     <option value="">{{ __('-- Select File --') }}</option>
                                     @foreach($uploadedFiles as $file)
-                                        <option value="{{ $file['name'] }}">{{ $file['name'] }} ({{ round($file['size'] / 1024, 2) }} KB)</option>
+                                        <option value="{{ $file['path'] }}">{{ $file['display_name'] }}</option>
                                     @endforeach
                                 </select>
                             </div>
@@ -92,6 +92,52 @@
                         <span class="help-block">{{ __('If provided, this configuration will be saved as a template for future use.') }}</span>
                     </div>
                 </div>
+
+                <hr>
+
+                <!-- Credentials Accordion -->
+                <div class="panel-group" id="accordion" role="tablist" aria-multiselectable="true">
+                    <div class="panel panel-default">
+                        <div class="panel-heading" role="tab" id="headingCredentials">
+                            <h4 class="panel-title">
+                                <a role="button" data-toggle="collapse" data-parent="#accordion" href="#collapseCredentials" aria-expanded="false" aria-controls="collapseCredentials">
+                                    <i class="fa fa-key fa-fw"></i> {{ __('Credentials Settings') }} <small>({{ __('Optional Overrides') }})</small>
+                                    <i class="fa fa-chevron-down pull-right"></i>
+                                </a>
+                            </h4>
+                        </div>
+                        <div id="collapseCredentials" class="panel-collapse collapse" role="tabpanel" aria-labelledby="headingCredentials">
+                            <div class="panel-body">
+                                <div class="alert alert-info">
+                                    <i class="fa fa-info-circle"></i> {{ __('Credentials from the database will be prioritized. If not found, these will be used as fallback.') }}
+                                </div>
+
+                                <div class="form-group">
+                                    <label for="ansible_user" class="col-sm-3 control-label">{{ __('SSH Username') }}</label>
+                                    <div class="col-sm-9">
+                                        <input type="text" name="ansible_user" id="ansible_user" class="form-control" value="admin">
+                                    </div>
+                                </div>
+
+                                <div class="form-group">
+                                    <label for="ansible_password" class="col-sm-3 control-label">{{ __('SSH Password') }}</label>
+                                    <div class="col-sm-9">
+                                        <input type="password" name="ansible_password" id="ansible_password" class="form-control" value="admin">
+                                    </div>
+                                </div>
+
+                                <div class="form-group" style="margin-bottom: 0;">
+                                    <label for="snmp_community" class="col-sm-3 control-label">{{ __('SNMP Community') }}</label>
+                                    <div class="col-sm-9">
+                                        <input type="text" name="snmp_community" id="snmp_community" class="form-control" value="public">
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <hr>
 
                 <!-- IP Addresses Input -->
                 <div class="form-group">
@@ -220,14 +266,15 @@
 
             // Handle file selection from previously uploaded files
             $('#load_file').on('change', function() {
-                const filename = $(this).val();
-                if (filename) {
+                const path = $(this).val();
+                if (path) {
                     $('#load_template').val(''); // Clear other dropdown
                     
                     // Fetch content via AJAX
                     $.ajax({
-                        url: "{{ route('addhost.ip.file-content', ['filename' => ':filename']) }}".replace(':filename', filename),
+                        url: "{{ route('addhost.ip.file-content') }}",
                         type: 'GET',
+                        data: { path: path },
                         success: function(response) {
                             if (response.success) {
                                 $('#configFileName').text(response.filename);
@@ -243,7 +290,7 @@
                                 if ($('#loaded_filename').length === 0) {
                                     $('#ipUploadForm').append('<input type="hidden" id="loaded_filename" name="loaded_filename" value="">');
                                 }
-                                $('#loaded_filename').val(response.filename);
+                                $('#loaded_filename').val(path); // Save the FULL PATH
                                 $('#loaded_template_name').remove();
                                 
                                 // Make config_file not required

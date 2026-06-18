@@ -232,7 +232,7 @@ Route::middleware(['auth', 'license'])->group(function () {
     Route::resource('syssoftbulk', SystemBulkUploadController::class);
     Route::get('addhost/ip', [SystemBulkUploadController::class, 'addHostIp'])->name('addhost.ip');
     Route::post('addhost/ip/save', [SystemBulkUploadController::class, 'addHostIpsave'])->name('addhost.ip.save');
-    Route::get('addhost/ip/file-content/{filename}', [SystemBulkUploadController::class, 'getUploadedFileContent'])->name('addhost.ip.file-content');
+    Route::get('addhost/ip/file-content', [SystemBulkUploadController::class, 'getUploadedFileContent'])->name('addhost.ip.file-content');
     // Add to routes/web.php for testing
     Route::get('/system/bulk-upload', [SystemBulkUploadController::class, 'index'])->name('system.bulk.upload');
     Route::post('/system/bulk-upload/process', [SystemBulkUploadController::class, 'process'])->name('system.bulk.upload.process');

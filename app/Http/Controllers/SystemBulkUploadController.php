@@ -93,11 +93,12 @@ class SystemBulkUploadController extends Controller
         $uploadedFiles = [];
         try {
             if (Storage::disk('local')->exists('temp/configs')) {
-                $files = Storage::disk('local')->files('temp/configs');
+                $files = Storage::disk('local')->allFiles('temp/configs');
                 foreach ($files as $file) {
                     $uploadedFiles[] = [
                         'name' => basename($file),
                         'path' => $file,
+                        'display_name' => str_replace('temp/configs/', '', $file),
                         'size' => Storage::disk('local')->size($file),
                         'time' => Storage::disk('local')->lastModified($file)
                     ];
@@ -159,7 +160,7 @@ class SystemBulkUploadController extends Controller
                     $commands = $data['commands'] ?? [];
                 }
             } elseif ($request->filled('loaded_filename')) {
-                $filePath = 'temp/configs/' . $request->loaded_filename;
+                $filePath = $request->loaded_filename; // Now it includes the full path from temp/configs
                 if (Storage::disk('local')->exists($filePath)) {
                     $fileContent = file(storage_path('app/' . $filePath), FILE_IGNORE_NEW_LINES | FILE_SKIP_EMPTY_LINES);
                     foreach ($fileContent as $line) {
@@ -173,9 +174,10 @@ class SystemBulkUploadController extends Controller
 
         if (empty($commands) && $request->hasFile('config_file')) {
             $configFile = $request->file('config_file');
+            $dateFolder = now()->format('Y-m-d');
             $filename = time() . '_' . $configFile->getClientOriginalName();
 
-            $storedPath = $configFile->storeAs('temp/configs', $filename);
+            $storedPath = $configFile->storeAs('temp/configs/' . $dateFolder, $filename);
             $fullPath = storage_path('app/' . $storedPath);
 
             if (!file_exists($fullPath)) {
@@ -228,11 +230,11 @@ class SystemBulkUploadController extends Controller
         //dd($commands); // Debug commands`   
 
         // -----------------------------
-        // STEP 3: Credentials
+        // STEP 3: Base Credentials (from Request or Default)
         // -----------------------------
-        $ansibleUser = $request->input('ansible_user', 'admin');
-        $ansiblePassword = $request->input('ansible_password', 'admin');
-        $snmpCommunity = $request->input('snmp_community', 'public');
+        $reqUser = $request->input('ansible_user');
+        $reqPass = $request->input('ansible_password');
+        $reqCommunity = $request->input('snmp_community');
 
         // -----------------------------
         // STEP 4: Inventory Path
@@ -252,14 +254,23 @@ class SystemBulkUploadController extends Controller
         $failedCount = 0;
 
         foreach ($validIPs as $ip) {
-            $hostnameip=trim($ip);
-            $hostname = 'bridge_' . str_replace('.', '_', trim($ip));
+            $hostnameip = trim($ip);
+            
+            // Hierarchical Credential Check
+            $device = Device::where('hostname', $hostnameip)->orWhere('overwrite_ip', $hostnameip)->first();
+            
+            // 1. DB -> 2. Request -> 3. Default (admin)
+            $ansibleUser = ($device && !empty($device->ssh_user)) ? $device->ssh_user : ($reqUser ?: 'admin');
+            $ansiblePassword = ($device && !empty($device->ssh_pass)) ? $device->ssh_pass : ($reqPass ?: 'admin');
+            $snmpCommunity = ($device && !empty($device->community)) ? $device->community : ($reqCommunity ?: 'public');
+
+            $hostname = 'bridge_' . str_replace('.', '_', $hostnameip);
             $inventoryFile = $inventoryDir . $hostname . ".yml";
 
             // Generate inventory
             $inventoryContent = $this->generateInventoryYaml(
                 $hostname,
-                trim($ip),
+                $hostnameip,
                 $ansibleUser,
                 $ansiblePassword,
                 $snmpCommunity
@@ -540,6 +551,7 @@ class SystemBulkUploadController extends Controller
         $extraVars = [
             'tftp_server' => $tftpServer,
             'filename' => $filename,
+            
             'destination_file' => $destination_file,
         ];
 
@@ -554,17 +566,17 @@ class SystemBulkUploadController extends Controller
     /**
      * Get content of a previously uploaded config file
      */
-    public function getUploadedFileContent($filename)
+    public function getUploadedFileContent(Request $request)
     {
-        $path = 'temp/configs/' . $filename;
+        $path = $request->query('path');
         if (Storage::disk('local')->exists($path)) {
             return response()->json([
                 'success' => true,
                 'content' => Storage::disk('local')->get($path),
-                'filename' => $filename
+                'filename' => basename($path)
             ]);
         }
-        return response()->json(['success' => false, 'message' => 'File not found'], 404);
+        return response()->json(['success' => false, 'message' => 'File not found at ' . $path], 404);
     }
 
     /**

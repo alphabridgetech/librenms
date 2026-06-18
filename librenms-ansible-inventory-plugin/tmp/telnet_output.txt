@@ -1,1 +1,25 @@
-ERROR: timed out
+ 
+
+
+
+
+
+
+
+
+                 Welcome to ABTPL AS200/12/XTS Ethernet Switch
+
+
+
+
+
+Switch>enable
+Switch#config
+Switch_config#interface g0/2
+Switch_config_g0/2#description kunal
+Switch_config_g0/2#exit
+Switch_config#exit
+Switch#write
+Saving current configuration...
+OK!
+Switch#
