@@ -47,6 +47,52 @@
             <form id="ipUploadForm" method="post" action="{{ route('addhost.ip.save') }}" enctype="multipart/form-data" class="form-horizontal" role="form">
                 @csrf
 
+                <div class="row">
+                    @if(!empty($templates))
+                    <div class="col-md-6">
+                        <!-- Load Template Dropdown -->
+                        <div class="form-group">
+                            <label for="load_template" class="col-sm-4 control-label">{{ __('Load Template') }}</label>
+                            <div class="col-sm-8">
+                                <select id="load_template" class="form-control">
+                                    <option value="">{{ __('-- Select Template --') }}</option>
+                                    @foreach($templates as $template)
+                                        <option value="{{ json_encode($template) }}">{{ $template['name'] }}</option>
+                                    @endforeach
+                                </select>
+                            </div>
+                        </div>
+                    </div>
+                    @endif
+
+                    @if(!empty($uploadedFiles))
+                    <div class="col-md-6">
+                        <!-- Previously Uploaded Files Dropdown -->
+                        <div class="form-group">
+                            <label for="load_file" class="col-sm-4 control-label">{{ __('Uploaded Files') }}</label>
+                            <div class="col-sm-8">
+                                <select id="load_file" class="form-control">
+                                    <option value="">{{ __('-- Select File --') }}</option>
+                                    @foreach($uploadedFiles as $file)
+                                        <option value="{{ $file['name'] }}">{{ $file['name'] }} ({{ round($file['size'] / 1024, 2) }} KB)</option>
+                                    @endforeach
+                                </select>
+                            </div>
+                        </div>
+                    </div>
+                    @endif
+                </div>
+                <hr>
+
+                <!-- Template Name Input -->
+                <div class="form-group">
+                    <label for="template_name" class="col-sm-3 control-label">{{ __('Template Name') }}</label>
+                    <div class="col-sm-9">
+                        <input type="text" name="template_name" id="template_name" class="form-control" placeholder="{{ __('Enter a name to save this as a template (optional)') }}">
+                        <span class="help-block">{{ __('If provided, this configuration will be saved as a template for future use.') }}</span>
+                    </div>
+                </div>
+
                 <!-- IP Addresses Input -->
                 <div class="form-group">
                     <label for="hostname" class="col-sm-3 control-label">{{ __('IP Addresses') }} <span class="text-danger">*</span></label>
@@ -130,6 +176,98 @@
     @parent
     <script type="text/javascript">
         $(document).ready(function() {
+            // Handle template selection
+            $('#load_template').on('change', function() {
+                const val = $(this).val();
+                if (val) {
+                    const template = JSON.parse(val);
+                    $('#hostname').val(template.hostname).trigger('input');
+                    $('#template_name').val(template.name);
+                    $('#load_file').val(''); // Clear other dropdown
+                    
+                    // Show commands in preview
+                    if (template.commands && template.commands.length > 0) {
+                        $('#configFileName').text(template.original_filename || 'Template Commands');
+                        $('#configFileSize').text('N/A');
+                        $('#configFileContent').text(template.commands.join('\n'));
+                        $('#configPreview').slideDown();
+                        $('#configContent').show();
+                        
+                        // Set a hidden field or flag to indicate we're using template commands
+                        if ($('#use_template_commands').length === 0) {
+                            $('#ipUploadForm').append('<input type="hidden" id="use_template_commands" name="use_template_commands" value="1">');
+                            $('#ipUploadForm').append('<input type="hidden" id="loaded_template_name" name="loaded_template_name" value="">');
+                        }
+                        $('#loaded_template_name').val(template.name);
+                        $('#loaded_filename').remove();
+                        
+                        // Make config_file not required if we have template commands
+                        $('#config_file').prop('required', false);
+                        
+                        // Re-validate IPs to enable submit button
+                        const validation = validateAndParseIPs($('#hostname').val());
+                        displayValidationResults(validation);
+                    }
+                } else {
+                    $('#hostname').val('').trigger('input');
+                    $('#template_name').val('');
+                    $('#configPreview').slideUp();
+                    $('#use_template_commands').remove();
+                    $('#loaded_template_name').remove();
+                    $('#config_file').prop('required', true);
+                }
+            });
+
+            // Handle file selection from previously uploaded files
+            $('#load_file').on('change', function() {
+                const filename = $(this).val();
+                if (filename) {
+                    $('#load_template').val(''); // Clear other dropdown
+                    
+                    // Fetch content via AJAX
+                    $.ajax({
+                        url: "{{ route('addhost.ip.file-content', ['filename' => ':filename']) }}".replace(':filename', filename),
+                        type: 'GET',
+                        success: function(response) {
+                            if (response.success) {
+                                $('#configFileName').text(response.filename);
+                                $('#configFileSize').text('N/A');
+                                $('#configFileContent').text(response.content);
+                                $('#configPreview').slideDown();
+                                $('#configContent').show();
+                                
+                                // Set a hidden field to indicate we're using a previously uploaded file
+                                if ($('#use_template_commands').length === 0) {
+                                    $('#ipUploadForm').append('<input type="hidden" id="use_template_commands" name="use_template_commands" value="1">');
+                                }
+                                if ($('#loaded_filename').length === 0) {
+                                    $('#ipUploadForm').append('<input type="hidden" id="loaded_filename" name="loaded_filename" value="">');
+                                }
+                                $('#loaded_filename').val(response.filename);
+                                $('#loaded_template_name').remove();
+                                
+                                // Make config_file not required
+                                $('#config_file').prop('required', false);
+                                
+                                // Re-validate IPs
+                                const validation = validateAndParseIPs($('#hostname').val());
+                                displayValidationResults(validation);
+                            } else {
+                                alert('Error: ' + response.message);
+                            }
+                        },
+                        error: function() {
+                            alert('An error occurred while fetching file content');
+                        }
+                    });
+                } else {
+                    $('#configPreview').slideUp();
+                    $('#use_template_commands').remove();
+                    $('#loaded_filename').remove();
+                    $('#config_file').prop('required', true);
+                }
+            });
+
             let validIPs = [];
 
             // Function to validate IP address
@@ -267,7 +405,8 @@
                 }
                 
                 // Enable/disable submit button
-                if (validation.validCount > 0 && configFile) {
+                const useTemplateCommands = $('#use_template_commands').val() === '1';
+                if (validation.validCount > 0 && (configFile || useTemplateCommands)) {
                     submitBtn.prop('disabled', false);
                     validIPs = validation.valid;
                 } else {
@@ -356,7 +495,8 @@
                     return false;
                 }
                 
-                if (!$('#config_file').val()) {
+                const useTemplateCommands = $('#use_template_commands').val() === '1';
+                if (!$('#config_file').val() && !useTemplateCommands) {
                     alert('Please select a config file to upload');
                     return false;
                 }

@@ -13,24 +13,16 @@
 
 
 
-kunal#enable
-kunal#config
-kunal_config#!
-kunal_config#interface g0/4
-kunal_config_g0/4#description customer_1
-kunal_config_g0/4#no spanning-tree
-kunal_config_g0/4#switchport mode trunk
-kunal_config_g0/4#switchport trunk vlan-allowed 2225
-kunal_config_g0/4#switchport pvid 2225
-kunal_config_g0/4#switchport dot1q-translating-tunnel mode QinQ translate 2225 1 0
-kunal_config_g0/4#!
-kunal_config#end
+Switch>enable
+Switch#config
+Switch_config#interface g0/2
+Switch_config_g0/2#description testdemo
+Switch_config_g0/2#end
 end
 ^
 Unknown command
-kunal_config#write all
-Saving current configuration...
-OK!
-Now saving current ifindex to flash memory...
-OK!
-kunal_config#
+Switch_config_g0/2#write all
+write all
+^
+Unknown command
+Switch_config_g0/2#

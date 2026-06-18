@@ -63,7 +63,47 @@ class SystemBulkUploadController extends Controller
      public function addHostIp(Request $request)
     {
         $this->authorize('create', CustomMib::class);
-        return view('addhostip.index');
+        
+        $templates = [];
+        try {
+            if (Storage::disk('local')->exists('templates')) {
+                $files = Storage::disk('local')->files('templates');
+                foreach ($files as $file) {
+                    if (pathinfo($file, PATHINFO_EXTENSION) === 'json') {
+                        $content = Storage::disk('local')->get($file);
+                        $data = json_decode($content, true);
+                        if ($data) {
+                            $templates[] = $data;
+                        }
+                    }
+                }
+            }
+        } catch (\Exception $e) {
+            Log::error('Failed to fetch templates: ' . $e->getMessage());
+        }
+
+        $uploadedFiles = [];
+        try {
+            if (Storage::disk('local')->exists('temp/configs')) {
+                $files = Storage::disk('local')->files('temp/configs');
+                foreach ($files as $file) {
+                    $uploadedFiles[] = [
+                        'name' => basename($file),
+                        'path' => $file,
+                        'size' => Storage::disk('local')->size($file),
+                        'time' => Storage::disk('local')->lastModified($file)
+                    ];
+                }
+                // Sort by time descending
+                usort($uploadedFiles, function($a, $b) {
+                    return $b['time'] - $a['time'];
+                });
+            }
+        } catch (\Exception $e) {
+            Log::error('Failed to fetch uploaded files: ' . $e->getMessage());
+        }
+
+        return view('addhostip.index', compact('templates', 'uploadedFiles'));
     }
 
      public function addHostIpsave(Request $request)
@@ -71,7 +111,8 @@ class SystemBulkUploadController extends Controller
         // Validate request
         $request->validate([
             'hostname' => 'required|string',
-            'config_file' => 'required|file|mimes:conf,txt,cfg,bin|max:10240', // 10MB max
+            'config_file' => 'required_without:use_template_commands|file|mimes:conf,txt,cfg,bin|max:10240', // 10MB max
+            'template_name' => 'nullable|string|max:255',
         ]);
 
         // Parse IPs from textarea or JSON
@@ -96,42 +137,85 @@ class SystemBulkUploadController extends Controller
             ], 400);
         }
 
+        $commands = [];
+        
         // -----------------------------
-    // STEP 2: Store + Read Config File
-    // -----------------------------
-    $configFile = $request->file('config_file');
-    $filename = time() . '_' . $configFile->getClientOriginalName();
-
-    $storedPath = $configFile->storeAs('temp/configs', $filename);
-    $fullPath = storage_path('app/' . $storedPath);
-
-    if (!file_exists($fullPath)) {
-        return response()->json([
-            'success' => false,
-            'message' => 'Config file upload failed'
-        ], 500);
+        // STEP 2: Get Commands (File or Template)
+        // -----------------------------
+        if ($request->has('use_template_commands')) {
+            if ($request->filled('loaded_template_name')) {
+                $templateFile = 'templates/' . Str::slug($request->loaded_template_name) . '.json';
+                if (Storage::disk('local')->exists($templateFile)) {
+                    $content = Storage::disk('local')->get($templateFile);
+                    $data = json_decode($content, true);
+                    $commands = $data['commands'] ?? [];
+                }
+            } elseif ($request->filled('loaded_filename')) {
+                $filePath = 'temp/configs/' . $request->loaded_filename;
+                if (Storage::disk('local')->exists($filePath)) {
+                    $fileContent = file(storage_path('app/' . $filePath), FILE_IGNORE_NEW_LINES | FILE_SKIP_EMPTY_LINES);
+                    foreach ($fileContent as $line) {
+                        $line = trim($line);
+                        if ($line === '' || str_starts_with($line, '#')) continue;
+                        $commands[] = $line;
+                    }
+                }
+            }
         }
 
-        // Read file line by line
-        $fileContent = file($fullPath, FILE_IGNORE_NEW_LINES | FILE_SKIP_EMPTY_LINES);
+        if (empty($commands) && $request->hasFile('config_file')) {
+            $configFile = $request->file('config_file');
+            $filename = time() . '_' . $configFile->getClientOriginalName();
 
-        $commands = [];
-        foreach ($fileContent as $line) {
-            $line = trim($line);
-           //|| str_starts_with($line, '!')
-            // Skip comments
-            if ($line === '' || str_starts_with($line, '#') ) {
-                continue;
+            $storedPath = $configFile->storeAs('temp/configs', $filename);
+            $fullPath = storage_path('app/' . $storedPath);
+
+            if (!file_exists($fullPath)) {
+                return response()->json([
+                    'success' => false,
+                    'message' => 'Config file upload failed'
+                ], 500);
             }
 
-            $commands[] = $line;
+            // Read file line by line
+            $fileContent = file($fullPath, FILE_IGNORE_NEW_LINES | FILE_SKIP_EMPTY_LINES);
+
+            foreach ($fileContent as $line) {
+                $line = trim($line);
+                // Skip comments
+                if ($line === '' || str_starts_with($line, '#') ) {
+                    continue;
+                }
+                $commands[] = $line;
+            }
         }
 
         if (empty($commands)) {
             return response()->json([
                 'success' => false,
-                'message' => 'No valid commands found in config file'
+                'message' => 'No valid commands found in config file or template'
             ], 400);
+        }
+
+        // Save as template if name is provided (even if we just loaded it, we might want to save it with a new name)
+        if ($request->filled('template_name')) {
+            $templateName = $request->template_name;
+            $templateData = [
+                'name' => $templateName,
+                'hostname' => $request->hostname,
+                'commands' => $commands,
+                'original_filename' => $request->hasFile('config_file') ? $request->file('config_file')->getClientOriginalName() : ($request->loaded_filename ?? ($data['original_filename'] ?? 'Template Commands')),
+                'created_at' => now()->toDateTimeString(),
+            ];
+
+            try {
+                if (!Storage::disk('local')->exists('templates')) {
+                    Storage::disk('local')->makeDirectory('templates');
+                }
+                Storage::disk('local')->put('templates/' . Str::slug($templateName) . '.json', json_encode($templateData, JSON_PRETTY_PRINT));
+            } catch (\Exception $e) {
+                Log::error('Failed to save template: ' . $e->getMessage());
+            }
         }
         //dd($commands); // Debug commands`   
 
@@ -442,6 +526,22 @@ class SystemBulkUploadController extends Controller
     }
 
 
+
+    /**
+     * Get content of a previously uploaded config file
+     */
+    public function getUploadedFileContent($filename)
+    {
+        $path = 'temp/configs/' . $filename;
+        if (Storage::disk('local')->exists($path)) {
+            return response()->json([
+                'success' => true,
+                'content' => Storage::disk('local')->get($path),
+                'filename' => $filename
+            ]);
+        }
+        return response()->json(['success' => false, 'message' => 'File not found'], 404);
+    }
 
     /**
      * Clear uploaded files session
