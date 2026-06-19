@@ -1,18 +1,18 @@
 ip: "192.168.200.245"
 show_version: | 
   Alpha Bridge Technologies Private Limited Internetwork Operating System Software
-            AS200/12/XTS Software, Version 2.2.0F Build 156031, RELEASE SOFTWARE
+            AS200/12/XTS Software, Version 2.2.0F Build 148149, RELEASE SOFTWARE
             Copyright (c) 2021 Alpha Bridge. All rights reserved
-            Compiled: 2026-5-11 14:37:2 by SYS, Image text-base: 0x80010000
+            Compiled: 2025-11-12 15:47:32 by SYS, Image text-base: 0x80010000
             ROM: System Bootstrap, Version 0.1.1,hardware version:A
             Serial num:0020086804067, ID num:0020086804067
             System image file is "Switch.bin"
             ABTPL AS200/12/XTS
-            256M bytes of memory,16M bytes of flash
+            262144K bytes of memory,16384K bytes of flash
             Base ethernet MAC Address: c8:6b:bc:a1:23:f0
             PCB version:A
             snmp info:
             vend_ID:58158   product_ID:311   system_ID:1.3.6.1.4.1.58158.1.311.0
-            AS212XTS_LAb_test uptime is 7:18:37:35, The current time: 2000-1-8 18:44:6
+            Switch uptime is 0:03:57:01, The current time: 2000-1-1 3:57:20
             Reboot history information:
             No. 1: System is rebooted by power-on

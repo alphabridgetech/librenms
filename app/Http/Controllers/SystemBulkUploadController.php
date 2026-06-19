@@ -20,17 +20,17 @@ use URL;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Validator;
 use Illuminate\Support\Facades\Session;
+use App\Models\Port;
+use App\Http\Controllers\Traits\HandlesPushConfiguration;
 
 class SystemBulkUploadController extends Controller
 {
+    use HandlesPushConfiguration;
+
     protected $tftpPath;
-    protected $pluginPath;
-    protected $venv;
 
     public function __construct()
     {
-        $this->venv = base_path('librenms-ansible-inventory-plugin/bin/activate');
-        $this->pluginPath = base_path('librenms-ansible-inventory-plugin');
         $this->tftpPath = '/tftpboot';
 
         // Create TFTP directory if it doesn't exist
@@ -43,39 +43,15 @@ class SystemBulkUploadController extends Controller
         }
     }
 
-    private function runAnsible(string $playbook, string $hosts, array $extraVars = []): array
-    {
-        $extraVarsString = "";
-
-        if (!empty($extraVars)) {
-            foreach ($extraVars as $key => $value) {
-                if (is_array($value)) {
-                    $value = json_encode($value);
-                }
-                $extraVarsString .= " --extra-vars '{$key}={$value}'";
-            }
-        }
-
-        $cmd = "source {$this->venv} && ansible-playbook -i {$hosts} {$playbook}{$extraVarsString} 2>&1";
-        
-        $output = [];
-        $returnCode = 0;
-        exec($cmd, $output, $returnCode);
-        
-        return [
-            'output' => implode("\n", $output),
-            'exit_code' => $returnCode
-        ];
-    }
-
-     public function addHostIp(Request $request)
+    public function addHostIp(Request $request)
     {
         $this->authorize('create', CustomMib::class);
+        $devices = Device::orderBy('hostname')->get(['device_id', 'hostname', 'overwrite_ip']);
         
         $templates = [];
         try {
             if (Storage::disk('local')->exists('templates')) {
-                $files = Storage::disk('local')->files('templates');
+                $files = Storage::disk('local')->allFiles('templates');
                 foreach ($files as $file) {
                     if (pathinfo($file, PATHINFO_EXTENSION) === 'json') {
                         $content = Storage::disk('local')->get($file);
@@ -112,285 +88,19 @@ class SystemBulkUploadController extends Controller
             Log::error('Failed to fetch uploaded files: ' . $e->getMessage());
         }
 
-        return view('addhostip.index', compact('templates', 'uploadedFiles'));
+        return view('addhostip.index', compact('devices', 'templates', 'uploadedFiles'));
     }
 
-     public function addHostIpsave(Request $request)
+    public function addHostIpsave(Request $request)
     {
-        // Validate request
+        // Integrated version: Supports both manual file upload and loaded templates
         $request->validate([
             'hostname' => 'required|string',
-            'config_file' => 'required_without:use_template_commands|file|mimes:conf,txt,cfg,bin|max:10240', // 10MB max
-            'template_name' => 'nullable|string|max:255',
+            'config_file' => 'required_without:use_template_commands|file|mimes:conf,txt,cfg,bin|max:10240',
         ]);
 
-        // Parse IPs from textarea or JSON
-        $validIPs = [];
-        if ($request->filled('valid_ips')) {
-            $validIPs = json_decode($request->valid_ips, true);
-        } else {
-            // Fallback: Parse from hostname textarea
-            $lines = explode("\n", $request->hostname);
-            foreach ($lines as $line) {
-                $line = trim($line);
-                if ($line && !str_starts_with($line, '#') && filter_var($line, FILTER_VALIDATE_IP)) {
-                    $validIPs[] = $line;
-                }
-            }
-        }
-
-        if (empty($validIPs)) {
-            return response()->json([
-                'success' => false,
-                'message' => 'No valid IP addresses found'
-            ], 400);
-        }
-
-        $commands = [];
-        
-        // -----------------------------
-        // STEP 2: Get Commands (File or Template)
-        // -----------------------------
-        if ($request->has('use_template_commands')) {
-            if ($request->filled('loaded_template_name')) {
-                $templateFile = 'templates/' . Str::slug($request->loaded_template_name) . '.json';
-                if (Storage::disk('local')->exists($templateFile)) {
-                    $content = Storage::disk('local')->get($templateFile);
-                    $data = json_decode($content, true);
-                    $commands = $data['commands'] ?? [];
-                }
-            } elseif ($request->filled('loaded_filename')) {
-                $filePath = $request->loaded_filename; // Now it includes the full path from temp/configs
-                if (Storage::disk('local')->exists($filePath)) {
-                    $fileContent = file(storage_path('app/' . $filePath), FILE_IGNORE_NEW_LINES | FILE_SKIP_EMPTY_LINES);
-                    foreach ($fileContent as $line) {
-                        $line = trim($line);
-                        if ($line === '' || str_starts_with($line, '#')) continue;
-                        $commands[] = $line;
-                    }
-                }
-            }
-        }
-
-        if (empty($commands) && $request->hasFile('config_file')) {
-            $configFile = $request->file('config_file');
-            $dateFolder = now()->format('Y-m-d');
-            $filename = time() . '_' . $configFile->getClientOriginalName();
-
-            $storedPath = $configFile->storeAs('temp/configs/' . $dateFolder, $filename);
-            $fullPath = storage_path('app/' . $storedPath);
-
-            if (!file_exists($fullPath)) {
-                return response()->json([
-                    'success' => false,
-                    'message' => 'Config file upload failed'
-                ], 500);
-            }
-
-            // Read file line by line
-            $fileContent = file($fullPath, FILE_IGNORE_NEW_LINES | FILE_SKIP_EMPTY_LINES);
-
-            foreach ($fileContent as $line) {
-                $line = trim($line);
-                // Skip comments
-                if ($line === '' || str_starts_with($line, '#') ) {
-                    continue;
-                }
-                $commands[] = $line;
-            }
-        }
-
-        if (empty($commands)) {
-            return response()->json([
-                'success' => false,
-                'message' => 'No valid commands found in config file or template'
-            ], 400);
-        }
-
-        // Save as template if name is provided (even if we just loaded it, we might want to save it with a new name)
-        if ($request->filled('template_name')) {
-            $templateName = $request->template_name;
-            $templateData = [
-                'name' => $templateName,
-                'hostname' => $request->hostname,
-                'commands' => $commands,
-                'original_filename' => $request->hasFile('config_file') ? $request->file('config_file')->getClientOriginalName() : ($request->loaded_filename ?? ($data['original_filename'] ?? 'Template Commands')),
-                'created_at' => now()->toDateTimeString(),
-            ];
-
-            try {
-                if (!Storage::disk('local')->exists('templates')) {
-                    Storage::disk('local')->makeDirectory('templates');
-                }
-                Storage::disk('local')->put('templates/' . Str::slug($templateName) . '.json', json_encode($templateData, JSON_PRETTY_PRINT));
-            } catch (\Exception $e) {
-                Log::error('Failed to save template: ' . $e->getMessage());
-            }
-        }
-        //dd($commands); // Debug commands`   
-
-        // -----------------------------
-        // STEP 3: Base Credentials (from Request or Default)
-        // -----------------------------
-        $reqUser = $request->input('ansible_user');
-        $reqPass = $request->input('ansible_password');
-        $reqCommunity = $request->input('snmp_community');
-
-        // -----------------------------
-        // STEP 4: Inventory Path
-        // -----------------------------
-        $basePath = "/opt/librenms";
-        $inventoryDir = $basePath . "/librenms-ansible-inventory-plugin/hosts/";
-
-        if (!file_exists($inventoryDir)) {
-            mkdir($inventoryDir, 0755, true);
-        }
-
-        // -----------------------------
-        // STEP 5: Process Each IP
-        // -----------------------------
-        $results = [];
-        $successCount = 0;
-        $failedCount = 0;
-
-        foreach ($validIPs as $ip) {
-            $hostnameip = trim($ip);
-            
-            // Hierarchical Credential Check
-            $device = Device::where('hostname', $hostnameip)->orWhere('overwrite_ip', $hostnameip)->first();
-            
-            // 1. DB -> 2. Request -> 3. Default (admin)
-            $ansibleUser = ($device && !empty($device->ssh_user)) ? $device->ssh_user : ($reqUser ?: 'admin');
-            $ansiblePassword = ($device && !empty($device->ssh_pass)) ? $device->ssh_pass : ($reqPass ?: 'admin');
-            $snmpCommunity = ($device && !empty($device->community)) ? $device->community : ($reqCommunity ?: 'public');
-
-            $hostname = 'bridge_' . str_replace('.', '_', $hostnameip);
-            $inventoryFile = $inventoryDir . $hostname . ".yml";
-
-            // Generate inventory
-            $inventoryContent = $this->generateInventoryYaml(
-                $hostname,
-                $hostnameip,
-                $ansibleUser,
-                $ansiblePassword,
-                $snmpCommunity
-            );
-
-            try {
-                file_put_contents($inventoryFile, $inventoryContent);
-            } catch (\Exception $e) {
-                $results[] = [
-                    'ip' => $ip,
-                    'status' => 'failed',
-                    'error' => 'Inventory creation failed'
-                ];
-                $failedCount++;
-                continue;
-            }
-
-            // -----------------------------
-            // STEP 6: Run Ansible
-            // -----------------------------
-            $playbook = $basePath . "/librenms-ansible-inventory-plugin/playbooks/firstconfiguploadip.yml";
-
-            if (!file_exists($playbook)) {
-                return response()->json([
-                    'success' => false,
-                    'message' => "Playbook not found"
-                ], 500);
-            }
-            //dd($commands);
-
-            $extraVars = [
-                'hostname' => $hostnameip,
-                'cli_commands' => $commands,
-                'ansible_user' => $ansibleUser,
-                'ansible_password' => $ansiblePassword
-            ];
-
-            try {
-                
-                $ansibleResult = $this->runAnsible($playbook, $inventoryFile, $extraVars);
-                $output = $ansibleResult['output'];
-                $exitCode = $ansibleResult['exit_code'];
-
-                // Check for failure in output even if exit code is 0 (due to playbook structure)
-                $isFailed = ($exitCode !== 0) || 
-                            (strpos($output, 'failed=1') !== false) || 
-                            (strpos($output, 'unreachable=1') !== false) ||
-                            (strpos($output, 'ERROR:') !== false) ||
-                            (strpos($output, 'Unknown command') !== false) ||
-                            (strpos($output, 'Invalid input') !== false);
-
-                if ($isFailed) {
-                    $results[] = [
-                        'ip' => $ip,
-                        'hostname' => $hostname,
-                        'status' => 'failed',
-                        'ansible_output' => $output,
-                        'error' => 'Ansible execution failed or host unreachable'
-                    ];
-                    $failedCount++;
-                } else {
-                    $results[] = [
-                        'ip' => $ip,
-                        'hostname' => $hostname,
-                        'status' => 'success',
-                        'ansible_output' => $output,
-                    ];
-                    $successCount++;
-                }
-
-            } catch (\Exception $e) {
-
-                $results[] = [
-                    'ip' => $ip,
-                    'hostname' => $hostname,
-                    'status' => 'failed',
-                    'error' => $e->getMessage()
-                ];
-
-                $failedCount++;
-            }
-        }
-
-        // -----------------------------
-        // FINAL RESPONSE
-        // -----------------------------
-        return response()->json([
-            'success' => ($failedCount === 0),
-            'message' => ($failedCount === 0) ? "Successfully processed {$successCount} device(s)" : "Processed with {$failedCount} failure(s). Success: {$successCount}, Failed: {$failedCount}",
-            'results' => $results,
-            'summary' => [
-                'total' => count($validIPs),
-                'success' => $successCount,
-                'failed' => $failedCount
-            ]
-        ]);
-}
-    /**
-     * Generate inventory YAML content
-     */
-    private function generateInventoryYaml($hostname, $ip, $username, $password, $community)
-    {
-        return <<<YAML
-    all:
-      children:
-        alphabridge_devices:
-          hosts:
-            bridge1:
-              ansible_host: {$ip}
-              ansible_user: {$username}
-              ansible_password: {$password}
-              ansible_connection: local
-              ansible_python_interpreter: /usr/bin/python3
-              os: switchv1alphabridge
-              snmpver: v2c
-              community: {$community}
-    
-    YAML;
+        return $this->processPush($request);
     }
-
 
     public function index(Request $request)
     {
@@ -437,9 +147,6 @@ class SystemBulkUploadController extends Controller
             'uploadedFiles'
         ));
     }
-
-
-   
 
     public function process(Request $request)
     {
@@ -514,12 +221,6 @@ class SystemBulkUploadController extends Controller
                 copy($modelBaseFiles[$model], $devicePath);
                 chmod($devicePath, 0644);
 
-                /*
-                 |--------------------------------------------------------------------------
-                 | OPTIONAL: Trigger Ansible Here
-                 |--------------------------------------------------------------------------
-                 */
-
                 $this->runAnsibleFirmwareUpload($device, $deviceFile);
 
                 $success++;
@@ -541,8 +242,8 @@ class SystemBulkUploadController extends Controller
     private function runAnsibleFirmwareUpload($device, $filename)
     {
        
-        $hosts = "{$this->pluginPath}/hosts/{$device->hostname}.yml";
-        $playbook = "{$this->pluginPath}/playbooks/tftpupload.yml";
+        $hosts = $this->pluginPath . "/hosts/{$device->hostname}.yml";
+        $playbook = $this->pluginPath . "/playbooks/tftpupload.yml";
 
 
         $tftpServer = "192.168.200.128"; 
@@ -561,11 +262,6 @@ class SystemBulkUploadController extends Controller
 
     }
 
-
-
-    /**
-     * Get content of a previously uploaded config file
-     */
     public function getUploadedFileContent(Request $request)
     {
         $path = $request->query('path');
@@ -579,9 +275,6 @@ class SystemBulkUploadController extends Controller
         return response()->json(['success' => false, 'message' => 'File not found at ' . $path], 404);
     }
 
-    /**
-     * Clear uploaded files session
-     */
     public function clearSession()
     {
         Session::forget('system_bulk_uploads');
@@ -591,9 +284,6 @@ class SystemBulkUploadController extends Controller
             ->with('info', 'Upload session has been cleared');
     }
 
-    /**
-     * Get list of uploaded files
-     */
     public function getUploadedFiles()
     {
         $uploadedFiles = Session::get('system_bulk_uploads', []);

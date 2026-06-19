@@ -57,6 +57,7 @@ use App\Http\Controllers\BackupController;
 use App\Http\Controllers\TftpDownloadController;
 use App\Http\Controllers\SystemBulkUploadController;
 use App\Http\Controllers\LicenceController;
+use App\Http\Controllers\TemplatePushController;
 use App\Services\LicenseVerifier;
 
 /*
@@ -232,7 +233,12 @@ Route::middleware(['auth', 'license'])->group(function () {
     Route::resource('syssoftbulk', SystemBulkUploadController::class);
     Route::get('addhost/ip', [SystemBulkUploadController::class, 'addHostIp'])->name('addhost.ip');
     Route::post('addhost/ip/save', [SystemBulkUploadController::class, 'addHostIpsave'])->name('addhost.ip.save');
+    Route::get('addhost/template', [TemplatePushController::class, 'addHostTemplate'])->name('addhost.template');
+    Route::post('addhost/template/save', [TemplatePushController::class, 'addHostTemplateSave'])->name('addhost.template.save');
+    Route::post('addhost/template/store', [TemplatePushController::class, 'storeTemplate'])->name('addhost.template.store');
+    Route::post('addhost/template/delete', [TemplatePushController::class, 'destroyTemplate'])->name('addhost.template.delete');
     Route::get('addhost/ip/file-content', [SystemBulkUploadController::class, 'getUploadedFileContent'])->name('addhost.ip.file-content');
+    Route::post('addhost/ports/fetch', [TemplatePushController::class, 'getDevicePorts'])->name('addhost.ports.fetch');
     // Add to routes/web.php for testing
     Route::get('/system/bulk-upload', [SystemBulkUploadController::class, 'index'])->name('system.bulk.upload');
     Route::post('/system/bulk-upload/process', [SystemBulkUploadController::class, 'process'])->name('system.bulk.upload.process');

@@ -1,6 +1,6 @@
 @extends('layouts.librenmsv1')
 
-@section('title', __('Push configuration to devices by IP'))
+@section('title', __('Push Configuration to Devices by IP'))
 
 @section('content')
     <div class="container-fluid">
@@ -18,29 +18,12 @@
                 </div>
             @endif
 
-            @if ($errors->any())
-                <div class="alert alert-danger alert-dismissible" role="alert">
-                    <button type="button" class="close" data-dismiss="alert" aria-label="Close">
-                        <span aria-hidden="true">&times;</span>
-                    </button>
-                    <i class="fa fa-exclamation-circle fa-fw"></i> <strong>{{ __('Validation Errors:') }}</strong>
-                    <ul class="mb-0 mt-1">
-                        @foreach ($errors->all() as $e)
-                            <li>{{ $e }}</li>
-                        @endforeach
-                    </ul>
-                </div>
-            @endif
-
             <div class="alert alert-info">
                 <strong>{{ __('Instructions:') }}</strong>
                 <ul class="mb-0">
                     <li>{{ __('Enter one IP address per line in the textarea') }}</li>
-                    <li>{{ __('Each line will be validated in real-time') }}</li>
-                    <li>{{ __('Lines starting with # will be ignored as comments') }}</li>
-                    <li>{{ __('Upload the startup-config file for the devices') }}</li>
-                    <li>{{ __('Kindly verify the correctness of the startup-config file before uploading') }}</li>
-                    <li>{{ __('After uploading, there is no rollback provision, so please proceed carefully') }}</li>
+                    <li>{{ __('Load a template/file or upload a new configuration file') }}</li>
+                    <li>{{ __('Credentials from the database will be prioritized') }}</li>
                 </ul>
             </div>
 
@@ -87,9 +70,12 @@
                 <!-- Template Name Input -->
                 <div class="form-group">
                     <label for="template_name" class="col-sm-3 control-label">{{ __('Template Name') }}</label>
-                    <div class="col-sm-9">
-                        <input type="text" name="template_name" id="template_name" class="form-control" placeholder="{{ __('Enter a name to save this as a template (optional)') }}">
-                        <span class="help-block">{{ __('If provided, this configuration will be saved as a template for future use.') }}</span>
+                    <div class="col-sm-4">
+                        <input type="text" name="template_name" id="template_name" class="form-control" placeholder="{{ __('Template Name') }}">
+                    </div>
+                    <label for="template_folder" class="col-sm-1 control-label">{{ __('Folder') }}</label>
+                    <div class="col-sm-4">
+                        <input type="text" name="template_folder" id="template_folder" class="form-control" placeholder="{{ __('general') }}">
                     </div>
                 </div>
 
@@ -143,7 +129,7 @@
                 <div class="form-group">
                     <label for="hostname" class="col-sm-3 control-label">{{ __('IP Addresses') }} <span class="text-danger">*</span></label>
                     <div class="col-sm-9">
-                        <textarea name="hostname" id="hostname" class="form-control" rows="8" placeholder="{{ __('Enter one IP address per line:') }}&#10;192.168.1.1&#10;192.168.1.2&#10;192.168.1.3&#10;# This is a comment and will be ignored" required></textarea>
+                        <textarea name="hostname" id="hostname" class="form-control" rows="8" placeholder="{{ __('Enter one IP address per line:') }}&#10;192.168.1.1&#10;192.168.1.2&#10;192.168.1.3" required></textarea>
                         <span class="help-block">{{ __('Enter one IP per line. Lines starting with # are ignored. Each IP is validated in real-time.') }}</span>
                     </div>
                 </div>
@@ -170,8 +156,7 @@
                 <div class="form-group">
                     <label for="config_file" class="col-sm-3 control-label">{{ __('Config File') }} <span class="text-danger">*</span></label>
                     <div class="col-sm-9">
-                        <input type="file" name="config_file" id="config_file" class="form-control" accept=".conf,.cfg,.txt,.bin" required>
-                        <span class="help-block">{{ __('Select the startup-config file to upload to devices') }}</span>
+                        <input type="file" name="config_file" id="config_file" class="form-control" accept=".conf,.cfg,.txt,.bin">
                     </div>
                 </div>
 
@@ -181,20 +166,10 @@
                     <div class="col-sm-9">
                         <div class="panel panel-default">
                             <div class="panel-heading">
-                                <strong>{{ __('Uploaded Configuration File') }}</strong>
-                                <button type="button" class="btn btn-xs btn-default pull-right" id="toggleConfigView">
-                                    <i class="fa fa-eye"></i> {{ __('Show/Hide Content') }}
-                                </button>
+                                <strong id="configFileName"></strong>
                             </div>
                             <div class="panel-body">
-                                <div class="alert alert-info">
-                                    <i class="fa fa-file-text-o"></i> 
-                                    <strong id="configFileName"></strong>
-                                    <small class="text-muted"> (<span id="configFileSize"></span> bytes)</small>
-                                </div>
-                                <div id="configContent" style="display: none; margin-top: 10px;">
-                                    <pre id="configFileContent" style="max-height: 300px; overflow-y: auto; background: #f5f5f5; padding: 10px; border-radius: 4px; font-size: 12px;"></pre>
-                                </div>
+                                <pre id="configFileContent" style="max-height: 200px; overflow-y: auto; background: #f5f5f5; padding: 10px; font-size: 11px;"></pre>
                             </div>
                         </div>
                     </div>
@@ -222,99 +197,6 @@
     @parent
     <script type="text/javascript">
         $(document).ready(function() {
-            // Handle template selection
-            $('#load_template').on('change', function() {
-                const val = $(this).val();
-                if (val) {
-                    const template = JSON.parse(val);
-                    $('#hostname').val(template.hostname).trigger('input');
-                    $('#template_name').val(template.name);
-                    $('#load_file').val(''); // Clear other dropdown
-                    
-                    // Show commands in preview
-                    if (template.commands && template.commands.length > 0) {
-                        $('#configFileName').text(template.original_filename || 'Template Commands');
-                        $('#configFileSize').text('N/A');
-                        $('#configFileContent').text(template.commands.join('\n'));
-                        $('#configPreview').slideDown();
-                        $('#configContent').show();
-                        
-                        // Set a hidden field or flag to indicate we're using template commands
-                        if ($('#use_template_commands').length === 0) {
-                            $('#ipUploadForm').append('<input type="hidden" id="use_template_commands" name="use_template_commands" value="1">');
-                            $('#ipUploadForm').append('<input type="hidden" id="loaded_template_name" name="loaded_template_name" value="">');
-                        }
-                        $('#loaded_template_name').val(template.name);
-                        $('#loaded_filename').remove();
-                        
-                        // Make config_file not required if we have template commands
-                        $('#config_file').prop('required', false);
-                        
-                        // Re-validate IPs to enable submit button
-                        const validation = validateAndParseIPs($('#hostname').val());
-                        displayValidationResults(validation);
-                    }
-                } else {
-                    $('#hostname').val('').trigger('input');
-                    $('#template_name').val('');
-                    $('#configPreview').slideUp();
-                    $('#use_template_commands').remove();
-                    $('#loaded_template_name').remove();
-                    $('#config_file').prop('required', true);
-                }
-            });
-
-            // Handle file selection from previously uploaded files
-            $('#load_file').on('change', function() {
-                const path = $(this).val();
-                if (path) {
-                    $('#load_template').val(''); // Clear other dropdown
-                    
-                    // Fetch content via AJAX
-                    $.ajax({
-                        url: "{{ route('addhost.ip.file-content') }}",
-                        type: 'GET',
-                        data: { path: path },
-                        success: function(response) {
-                            if (response.success) {
-                                $('#configFileName').text(response.filename);
-                                $('#configFileSize').text('N/A');
-                                $('#configFileContent').text(response.content);
-                                $('#configPreview').slideDown();
-                                $('#configContent').show();
-                                
-                                // Set a hidden field to indicate we're using a previously uploaded file
-                                if ($('#use_template_commands').length === 0) {
-                                    $('#ipUploadForm').append('<input type="hidden" id="use_template_commands" name="use_template_commands" value="1">');
-                                }
-                                if ($('#loaded_filename').length === 0) {
-                                    $('#ipUploadForm').append('<input type="hidden" id="loaded_filename" name="loaded_filename" value="">');
-                                }
-                                $('#loaded_filename').val(path); // Save the FULL PATH
-                                $('#loaded_template_name').remove();
-                                
-                                // Make config_file not required
-                                $('#config_file').prop('required', false);
-                                
-                                // Re-validate IPs
-                                const validation = validateAndParseIPs($('#hostname').val());
-                                displayValidationResults(validation);
-                            } else {
-                                alert('Error: ' + response.message);
-                            }
-                        },
-                        error: function() {
-                            alert('An error occurred while fetching file content');
-                        }
-                    });
-                } else {
-                    $('#configPreview').slideUp();
-                    $('#use_template_commands').remove();
-                    $('#loaded_filename').remove();
-                    $('#config_file').prop('required', true);
-                }
-            });
-
             let validIPs = [];
 
             // Function to validate IP address
@@ -337,243 +219,165 @@
                     const trimmedLine = line.trim();
                     
                     if (trimmedLine === '') {
-                        results.push({
-                            lineNumber: index + 1,
-                            content: originalLine,
-                            status: 'empty',
-                            message: 'Empty line (ignored)'
-                        });
+                        results.push({ lineNumber: index + 1, content: originalLine, status: 'empty', message: 'Empty line' });
                     } else if (trimmedLine.startsWith('#')) {
                         commentCount++;
-                        results.push({
-                            lineNumber: index + 1,
-                            content: originalLine,
-                            status: 'comment',
-                            message: 'Comment line (ignored)',
-                            icon: 'fa-comment'
-                        });
+                        results.push({ lineNumber: index + 1, content: originalLine, status: 'comment', message: 'Comment' });
                     } else if (isValidIP(trimmedLine)) {
                         validCount++;
                         valid.push(trimmedLine);
-                        results.push({
-                            lineNumber: index + 1,
-                            content: originalLine,
-                            status: 'valid',
-                            message: 'Valid IP address',
-                            icon: 'fa-check-circle',
-                            ip: trimmedLine
-                        });
+                        results.push({ lineNumber: index + 1, content: originalLine, status: 'valid', message: 'Valid' });
                     } else {
                         invalidCount++;
-                        results.push({
-                            lineNumber: index + 1,
-                            content: originalLine,
-                            status: 'invalid',
-                            message: 'Invalid IP address format',
-                            icon: 'fa-times-circle'
-                        });
+                        results.push({ lineNumber: index + 1, content: originalLine, status: 'invalid', message: 'Invalid' });
                     }
                 });
                 
-                return {
-                    results: results,
-                    valid: valid,
-                    validCount: validCount,
-                    invalidCount: invalidCount,
-                    commentCount: commentCount,
-                    totalLines: lines.length
-                };
+                return { results: results, valid: valid, validCount: validCount, invalidCount: invalidCount, commentCount: commentCount, totalLines: lines.length };
             }
 
-            // Function to display validation results
             function displayValidationResults(validation) {
                 const previewDiv = $('#ipValidationPreview');
                 const resultsDiv = $('#validationResults');
-                const validCountSpan = $('#validCount');
-                const invalidCountSpan = $('#invalidCount');
-                const commentCountSpan = $('#commentCount');
-                const submitBtn = $('#submitBtn');
-                const configFile = $('#config_file').val();
+                $('#validCount').text(validation.validCount);
+                $('#invalidCount').text(validation.invalidCount);
+                $('#commentCount').text(validation.commentCount);
                 
-                // Update counters
-                validCountSpan.text(validation.validCount);
-                invalidCountSpan.text(validation.invalidCount);
-                commentCountSpan.text(validation.commentCount);
-                
-                // Build results HTML
-                let resultsHtml = '<table class="table table-condensed table-hover" style="margin-bottom: 0;">';
-                resultsHtml += '<thead><tr><th>Line</th><th>Content</th><th>Status</th></tr></thead><tbody>';
-                
+                let resultsHtml = '<table class="table table-condensed table-hover" style="margin-bottom: 0;"><tbody>';
                 validation.results.forEach(result => {
-                    let statusClass = '';
-                    let statusIcon = '';
-                    let statusText = '';
-                    
-                    switch(result.status) {
-                        case 'valid':
-                            statusClass = 'text-success';
-                            statusIcon = '<i class="fa fa-check-circle text-success"></i>';
-                            statusText = 'Valid';
-                            break;
-                        case 'invalid':
-                            statusClass = 'text-danger';
-                            statusIcon = '<i class="fa fa-times-circle text-danger"></i>';
-                            statusText = 'Invalid';
-                            break;
-                        case 'comment':
-                            statusClass = 'text-info';
-                            statusIcon = '<i class="fa fa-comment text-info"></i>';
-                            statusText = 'Comment';
-                            break;
-                        case 'empty':
-                            statusClass = 'text-muted';
-                            statusIcon = '<i class="fa fa-minus-circle text-muted"></i>';
-                            statusText = 'Empty';
-                            break;
-                    }
-                    
-                    resultsHtml += `
-                        <tr class="${statusClass}">
-                            <td style="width: 60px;">${result.lineNumber}</td>
-                            <td><code>${escapeHtml(result.content) || '(empty)'}</code></td>
-                            <td style="width: 150px;">${statusIcon} ${statusText} - ${result.message}</td>
-                        </tr>
-                    `;
+                    let statusClass = result.status === 'valid' ? 'text-success' : (result.status === 'invalid' ? 'text-danger' : 'text-info');
+                    resultsHtml += `<tr class="${statusClass}"><td>Line ${result.lineNumber}</td><td><code>${result.content}</code></td><td>${result.message}</td></tr>`;
                 });
-                
                 resultsHtml += '</tbody></table>';
                 resultsDiv.html(resultsHtml);
                 
-                // Show/hide preview
-                if (validation.totalLines > 0) {
-                    previewDiv.slideDown();
-                } else {
-                    previewDiv.slideUp();
-                }
-                
-                // Enable/disable submit button
+                if (validation.totalLines > 0) { previewDiv.slideDown(); } else { previewDiv.slideUp(); }
+                updateSubmitButton(validation);
+            }
+
+            function updateSubmitButton(validation) {
+                const hasFile = $('#config_file').val() !== '';
                 const useTemplateCommands = $('#use_template_commands').val() === '1';
-                if (validation.validCount > 0 && (configFile || useTemplateCommands)) {
-                    submitBtn.prop('disabled', false);
-                    validIPs = validation.valid;
-                } else {
-                    submitBtn.prop('disabled', true);
-                    validIPs = [];
-                }
+                validIPs = validation.valid;
+                $('#submitBtn').prop('disabled', !(validation.validCount > 0 && (hasFile || useTemplateCommands)));
             }
 
-            // Function to escape HTML
-            function escapeHtml(text) {
-                const map = {
-                    '&': '&amp;',
-                    '<': '&lt;',
-                    '>': '&gt;',
-                    '"': '&quot;',
-                    "'": '&#039;'
-                };
-                return text.replace(/[&<>"']/g, function(m) { return map[m]; });
-            }
-
-            // Real-time validation on input
-            $('#hostname').on('input', function(e) {
-                const content = $(this).val();
+            function updateUI() {
+                const content = $('#hostname').val();
                 const validation = validateAndParseIPs(content);
                 displayValidationResults(validation);
+            }
+
+            $('#hostname').on('input', updateUI);
+
+            // Handle template selection
+            $('#load_template').on('change', function() {
+                const val = $(this).val();
+                if (val) {
+                    const template = JSON.parse(val);
+                    $('#template_name').val(template.name);
+                    $('#load_file').val('');
+                    
+                    if (template.commands && template.commands.length > 0) {
+                        $('#configFileName').text(template.original_filename || 'Template Commands');
+                        $('#configFileContent').text(template.commands.join('\n'));
+                        $('#configPreview').slideDown();
+                        
+                        if ($('#use_template_commands').length === 0) {
+                            $('#ipUploadForm').append('<input type="hidden" id="use_template_commands" name="use_template_commands" value="1">');
+                            $('#ipUploadForm').append('<input type="hidden" id="loaded_template_name" name="loaded_template_name" value="">');
+                        }
+                        $('#use_template_commands').val('1');
+                        $('#loaded_template_name').val(template.name);
+                        $('#loaded_filename').remove();
+                        $('#config_file').prop('required', false);
+                    }
+
+                    // Trigger UI update AFTER flags are set
+                    $('#hostname').val(template.hostname).trigger('input');
+                } else {
+                    $('#hostname').val('').trigger('input');
+                    $('#template_name').val('');
+                    $('#configPreview').slideUp();
+                    $('#use_template_commands').remove();
+                    $('#loaded_template_name').remove();
+                    $('#config_file').prop('required', true);
+                }
             });
 
-            // Handle config file selection with preview
-            $('#config_file').on('change', function(e) {
-                const file = e.target.files[0];
-                
-                if (file) {
-                    // Check file size (max 10MB)
-                    if (file.size > 10 * 1024 * 1024) {
-                        alert('File size must be less than 10MB');
-                        $(this).val('');
-                        return;
-                    }
-                    
-                    // Display file info
-                    $('#configFileName').text(file.name);
-                    $('#configFileSize').text(file.size);
-                    $('#configPreview').slideDown();
-                    
-                    // Read and display file content
-                    const reader = new FileReader();
-                    reader.onload = function(e) {
-                        const content = e.target.result;
-                        // Limit preview to first 5000 characters
-                        let previewContent = content;
-                        if (content.length > 5000) {
-                            previewContent = content.substring(0, 5000) + '\n\n... (file truncated, showing first 5000 characters)';
+            // Handle file selection
+            $('#load_file').on('change', function() {
+                const path = $(this).val();
+                if (path) {
+                    $('#load_template').val('');
+                    $.ajax({
+                        url: "{{ route('addhost.ip.file-content') }}",
+                        type: 'GET',
+                        data: { path: path },
+                        success: function(response) {
+                            if (response.success) {
+                                $('#configFileName').text(response.filename);
+                                $('#configFileContent').text(response.content);
+                                $('#configPreview').slideDown();
+                                
+                                if ($('#use_template_commands').length === 0) {
+                                    $('#ipUploadForm').append('<input type="hidden" id="use_template_commands" name="use_template_commands" value="1">');
+                                }
+                                if ($('#loaded_filename').length === 0) {
+                                    $('#ipUploadForm').append('<input type="hidden" id="loaded_filename" name="loaded_filename" value="">');
+                                }
+                                $('#loaded_filename').val(path);
+                                $('#loaded_template_name').remove();
+                                $('#config_file').prop('required', false);
+                                updateUI();
+                            }
                         }
-                        $('#configFileContent').text(previewContent);
-                    };
-                    reader.readAsText(file);
-                    
-                    // Re-validate IPs
-                    const validation = validateAndParseIPs($('#hostname').val());
-                    displayValidationResults(validation);
+                    });
                 } else {
                     $('#configPreview').slideUp();
-                    $('#submitBtn').prop('disabled', true);
+                    $('#use_template_commands').remove();
+                    $('#loaded_filename').remove();
+                    $('#config_file').prop('required', true);
+                    updateUI();
                 }
             });
 
-            // Toggle config content view
-            $('#toggleConfigView').on('click', function() {
-                $('#configContent').slideToggle();
-                const icon = $(this).find('i');
-                if (icon.hasClass('fa-eye')) {
-                    icon.removeClass('fa-eye').addClass('fa-eye-slash');
-                    $(this).html('<i class="fa fa-eye-slash"></i> Hide Content');
+            $('#config_file').on('change', function(e) {
+                const file = e.target.files[0];
+                if (file) {
+                    $('#configFileName').text(file.name);
+                    const reader = new FileReader();
+                    reader.onload = function(e) {
+                        $('#configFileContent').text(e.target.result.substring(0, 2000));
+                        $('#configPreview').slideDown();
+                        updateUI();
+                    };
+                    reader.readAsText(file);
                 } else {
-                    icon.removeClass('fa-eye-slash').addClass('fa-eye');
-                    $(this).html('<i class="fa fa-eye"></i> Show Content');
+                    $('#configPreview').slideUp();
+                    updateUI();
                 }
             });
 
-            // Handle form submission with AJAX
             $('#ipUploadForm').on('submit', function(e) {
                 e.preventDefault();
-                
-                if (validIPs.length === 0) {
-                    alert('Please enter at least one valid IP address');
-                    return false;
-                }
+                const content = $('#hostname').val();
+                const validation = validateAndParseIPs(content);
+                if (validation.validCount === 0) { alert('Please enter at least one valid IP address'); return false; }
                 
                 const useTemplateCommands = $('#use_template_commands').val() === '1';
-                if (!$('#config_file').val() && !useTemplateCommands) {
-                    alert('Please select a config file to upload');
-                    return false;
-                }
+                if (!$('#config_file').val() && !useTemplateCommands) { alert('Please select a config file'); return false; }
                 
-                if (!confirm(`Are you sure you want to process ${validIPs.length} device(s)?\n\nValid IPs: ${validIPs.join(', ')}\n`)) {
-                    return false;
-                }
+                if (!confirm(`Process ${validation.validCount} device(s)?`)) return false;
                 
-                // Show loading spinner
                 $('#submitBtn').prop('disabled', true);
                 $('#loadingSpinner').show();
-
-                // Show processing alert
                 $('.alert-success, .alert-warning, .alert-info').remove();
-                const processingHtml = `
-                    <div class="alert alert-info" id="processingAlert">
-                        <i class="fa fa-spinner fa-spin fa-fw"></i> 
-                        <strong>Processing...</strong> {{ __('Please wait while we configure your devices. This may take a few minutes.') }}
-                    </div>
-                `;
-                $('.panel:first').before(processingHtml);
-                $('html, body').animate({ scrollTop: 0 }, 'fast');
-                
-                // Create FormData object for file upload
+                $('.panel:first').before(`<div class="alert alert-info" id="processingAlert"><i class="fa fa-spinner fa-spin"></i> Processing...</div>`);
+
                 const formData = new FormData(this);
-                
-                // Add valid IPs list to form data
-                formData.append('valid_ips', JSON.stringify(validIPs));
-                
-                // Submit via AJAX
+                formData.append('valid_ips', JSON.stringify(validation.valid));
+
                 $.ajax({
                     url: $(this).attr('action'),
                     type: 'POST',
@@ -581,80 +385,32 @@
                     processData: false,
                     contentType: false,
                     success: function(response) {
-                        // Clear any existing alerts
-                        $('.alert-success, .alert-warning').remove();
                         $('#processingAlert').remove();
-
+                        const type = response.success ? 'success' : 'warning';
+                        const alertHtml = `
+                            <div class="alert alert-${type} alert-dismissible" role="alert">
+                                <button type="button" class="close" data-dismiss="alert">&times;</button>
+                                <strong>${type === 'success' ? 'Success!' : 'Warning!'}</strong> ${response.message}
+                                <pre class="mt-2" style="max-height: 200px; overflow-y: auto;">${JSON.stringify(response.results, null, 2)}</pre>
+                            </div>
+                        `;
+                        $('.panel:first').before(alertHtml);
                         if (response.success) {
-                            // Show success message
-                            const successHtml = `
-                                <div class="alert alert-success alert-dismissible fade in" role="alert">
-                                    <button type="button" class="close" data-dismiss="alert" aria-label="Close">
-                                        <span aria-hidden="true">&times;</span>
-                                    </button>
-                                    <i class="fa fa-check-circle fa-fw"></i> 
-                                    <strong>Success!</strong> ${response.message}
-                                    ${response.results ? '<pre class="mt-2" style="max-height: 200px; overflow-y: auto;">' + JSON.stringify(response.results, null, 2) + '</pre>' : ''}
-                                </div>
-                            `;
-                            $('.panel:first').before(successHtml);
-                            
-                            // Reset form only on full success
-                            $('#hostname').val('');
+                            $('#hostname').val('').trigger('input');
                             $('#config_file').val('');
-                            $('#ipValidationPreview').hide();
                             $('#configPreview').hide();
-                            validIPs = [];
-                        } else {
-                            // Show warning message for partial or full failure
-                            const warningHtml = `
-                                <div class="alert alert-warning alert-dismissible fade in" role="alert">
-                                    <button type="button" class="close" data-dismiss="alert" aria-label="Close">
-                                        <span aria-hidden="true">&times;</span>
-                                    </button>
-                                    <i class="fa fa-exclamation-triangle fa-fw"></i> 
-                                    <strong>Warning!</strong> ${response.message}
-                                    ${response.results ? '<pre class="mt-2" style="max-height: 400px; overflow-y: auto;">' + JSON.stringify(response.results, null, 2) + '</pre>' : ''}
-                                </div>
-                            `;
-                            $('.panel:first').before(warningHtml);
                         }
-                        
-                        // Scroll to top
-                        $('html, body').animate({ scrollTop: 0 }, 'slow');
                     },
-                    error: function(xhr) {
-                        $('#processingAlert').remove();
-                        let errorMsg = 'An error occurred while processing devices';
-                        if (xhr.responseJSON && xhr.responseJSON.message) {
-                            errorMsg = xhr.responseJSON.message;
-                        }
-                        alert(errorMsg);
-                    },
-                    complete: function() {
-                        $('#submitBtn').prop('disabled', false);
-                        $('#loadingSpinner').hide();
-                    }
+                    error: function() { $('#processingAlert').remove(); alert('An error occurred'); },
+                    complete: function() { $('#submitBtn').prop('disabled', false); $('#loadingSpinner').hide(); $('html, body').animate({ scrollTop: 0 }, 'slow'); }
                 });
             });
 
-            // Handle reset button
-            $('#resetBtn').on('click', function(e) {
-                e.preventDefault();
-                $('#hostname').val('');
-                $('#config_file').val('');
-                $('#ipValidationPreview').hide();
+            $('#resetBtn').on('click', function() {
+                $('.alert-success, .alert-warning, .alert-info').remove();
                 $('#configPreview').hide();
-                $('#submitBtn').prop('disabled', true);
-                validIPs = [];
-                $('#configContent').hide();
+                $('#ipValidationPreview').hide();
             });
-            
-            // Initial validation if there's pre-filled content
-            if ($('#hostname').val()) {
-                const validation = validateAndParseIPs($('#hostname').val());
-                displayValidationResults(validation);
-            }
         });
     </script>
 @endsection

@@ -7,7 +7,7 @@ HOST = "192.168.200.245"
 USER = "admin"
 PASSWORD = "admin"
 
-raw_commands = json.loads("[\"interface g0\\/2\",\"description kunal\"]")
+raw_commands = json.loads("switchport")
 COMMANDS = raw_commands if isinstance(raw_commands, list) else raw_commands.split("\n")
 
 OUTPUT_FILE = "/opt/librenms/librenms-ansible-inventory-plugin/tmp/telnet_output.txt"
