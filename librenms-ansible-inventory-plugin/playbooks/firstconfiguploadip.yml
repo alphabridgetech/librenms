@@ -23,15 +23,13 @@
         content: |
           import telnetlib
           import time
-          import json
           import sys
 
           HOST = "{{ ansible_host }}"
           USER = "{{ ansible_user }}"
           PASSWORD = "{{ ansible_password }}"
 
-          raw_commands = json.loads({{ cli_commands | to_json }})
-          COMMANDS = raw_commands if isinstance(raw_commands, list) else raw_commands.split("\n")
+          COMMANDS = {{ cli_commands | to_json }}
 
           OUTPUT_FILE = "{{ output_file }}"
 

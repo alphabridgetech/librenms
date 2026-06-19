@@ -72,6 +72,7 @@
             <a target="_blank" href="https://twitter.com/telequill">{{ __('Twitter') }}</a> |
             <a target="_blank" href="https://www.linkedin.com/company/alphabridge">{{ __('LinkedIn') }}</a> |
 
+            
           </p>
           <h3>{{ __('Contributors') }}</h3>
           <b>1.Rajiv Mittal</b><br>

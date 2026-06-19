@@ -26,12 +26,8 @@ trait HandlesPushConfiguration
         $extraVarsString = "";
 
         if (!empty($extraVars)) {
-            foreach ($extraVars as $key => $value) {
-                if (is_array($value)) {
-                    $value = json_encode($value);
-                }
-                $extraVarsString .= " --extra-vars '{$key}={$value}'";
-            }
+            $json = json_encode($extraVars);
+            $extraVarsString = " --extra-vars '" . $json . "'";
         }
 
         $cmd = "source {$this->venv} && ansible-playbook -i {$hosts} {$playbook}{$extraVarsString} 2>&1";
@@ -169,7 +165,7 @@ trait HandlesPushConfiguration
 
             $playbook = $this->pluginPath . "/playbooks/firstconfiguploadip.yml";
             $extraVars = [
-                'cli_commands' => implode("\n", $commands),
+                'cli_commands' => $commands,
             ];
 
             try {

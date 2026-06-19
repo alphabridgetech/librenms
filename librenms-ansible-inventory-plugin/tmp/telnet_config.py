@@ -1,14 +1,12 @@
 import telnetlib
 import time
-import json
 import sys
 
-HOST = "192.168.200.245"
+HOST = "192.168.200.244"
 USER = "admin"
 PASSWORD = "admin"
 
-raw_commands = json.loads("switchport")
-COMMANDS = raw_commands if isinstance(raw_commands, list) else raw_commands.split("\n")
+COMMANDS = ["interface GigaEthernet0/2", "description kunal"]
 
 OUTPUT_FILE = "/opt/librenms/librenms-ansible-inventory-plugin/tmp/telnet_output.txt"
 
