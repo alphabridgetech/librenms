@@ -24,6 +24,33 @@
                     <div class="panel panel-default">
                         <div class="panel-heading">
                             <strong><i class="fa fa-cube"></i> {{ __('Template Builder') }}</strong>
+                            <button type="button" class="btn btn-xs btn-link pull-right" data-toggle="collapse" data-target="#builderHelp" style="padding: 0;">
+                                <i class="fa fa-question-circle"></i> {{ __('Help') }}
+                            </button>
+                        </div>
+                        <div id="builderHelp" class="collapse">
+                            <div class="panel-body" style="border-bottom: 1px solid #ddd; background: #fafafa; font-size: 12px;">
+                                <strong>{{ __('How to build a template:') }}</strong>
+                                <ol style="padding-left: 20px; margin-bottom: 0;">
+                                    <li>{{ __('Give your template a name above.') }}</li>
+                                    <li>{{ __('Click') }} <strong>{{ __('Add Field') }}</strong> {{ __('for each value you want to collect.') }}</li>
+                                    <li>
+                                        <strong>{{ __('Field Types:') }}</strong>
+                                        <ul style="padding-left: 18px;">
+                                            <li><strong>{{ __('Text/Number') }}</strong> — {{ __('user types a value, use') }} <code>@{{value}}</code> {{ __('in the command') }}</li>
+                                            <li><strong>{{ __('Dropdown') }}</strong> — {{ __('user picks from options, format:') }} <code>val:cmd, val2:cmd2</code></li>
+                                            <li><strong>{{ __('Checkbox') }}</strong> — {{ __('if checked, command is pushed as-is') }}</li>
+                                            <li><strong>{{ __('Put Only Cmd') }}</strong> — {{ __('no user input, command is always pushed') }}</li>
+                                        </ul>
+                                    </li>
+                                    <li>
+                                        <strong>{{ __('Cross-Field References:') }}</strong>
+                                        {{ __('Use') }} <code>@{{field:Label}}</code> {{ __('in any command to pull another field\'s value.') }}
+                                        <br><em>{{ __('Example:') }}</em> <code>switchport pvid @{{field:VLAN ID}}</code>
+                                    </li>
+                                    <li>{{ __('Click') }} <strong>{{ __('Save Template') }}</strong> {{ __('to store it, then load it on the right side.') }}</li>
+                                </ol>
+                            </div>
                         </div>
                         <div class="panel-body">
                             <div class="form-group">
@@ -310,7 +337,7 @@
                     contentType: 'application/json',
                     success: function(response) {
                         if (response.success) {
-                            alert('Template saved! Please refresh the page.');
+                            location.reload();
                         } else {
                             alert('Failed: ' + response.message);
                         }
@@ -345,10 +372,34 @@
                 }
 
                 // Collect values from dynamic form fields (for form type templates)
+                const fieldValues = {};
                 $('#dynamic_form_fields .dynamic-field-row').each(function() {
                     const $field = $(this);
-                    const commandTemplate = $field.data('command');
+                    const label = $field.data('label') || '';
                     const type = $field.data('type');
+
+                    if (type === 'putonlycmd' || type === 'checkbox') return;
+
+                    const rawValue = $field.find('.dynamic-field-value').val();
+                    if (rawValue) {
+                        let val = rawValue;
+                        if (type === 'dropdown') {
+                            const parts = rawValue.split(':', 2);
+                            val = parts[0].trim();
+                        }
+                        if (label) fieldValues[label] = val;
+                    }
+                });
+
+                $('#dynamic_form_fields .dynamic-field-row').each(function() {
+                    const $field = $(this);
+                    let commandTemplate = $field.data('command') || '';
+                    const type = $field.data('type');
+
+                    commandTemplate = commandTemplate.replace(/\{\{field:([^}]+)\}\}/g, function(match, label) {
+                        const trimmed = label.trim();
+                        return fieldValues[trimmed] || match;
+                    });
 
                     if (type === 'checkbox') {
                         const checked = $field.find('.dynamic-field-value').is(':checked');
