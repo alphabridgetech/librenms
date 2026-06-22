@@ -195,7 +195,7 @@ Artisan::command('scan
 // mark schedule working
 Schedule::call(function () {
     Cache::put('scheduler_working', now(), now()->addMinutes(6));
-})->everyFiveMinutes();
+})->everyMinute();
 
 // schedule maintenance, should be after all others
 $maintenance_log_file = Config::get('log_dir') . '/maintenance.log';

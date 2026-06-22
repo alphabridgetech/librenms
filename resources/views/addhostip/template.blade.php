@@ -204,6 +204,7 @@
                                     <option value="number" ${type === 'number' ? 'selected' : ''}>{{ __('Number') }}</option>
                                     <option value="dropdown" ${type === 'dropdown' ? 'selected' : ''}>{{ __('Dropdown') }}</option>
                                     <option value="checkbox" ${type === 'checkbox' ? 'selected' : ''}>{{ __('Checkbox') }}</option>
+                                    <option value="putonlycmd" ${type === 'putonlycmd' ? 'selected' : ''}>{{ __('Put Only Cmd') }}</option>
                                 </select>
                             </div>
                             <div class="col-sm-4">
@@ -240,14 +241,22 @@
 
                 $(`#builder_fields_container .builder-field:last .field-type`).on('change', function() {
                     const val = $(this).val();
+                    const $label = $(this).closest('.builder-field').find('.field-label').closest('.col-sm-4');
                     const $options = $(this).closest('.builder-field').find('.field-options').closest('.col-sm-4');
                     const $command = $(this).closest('.builder-field').find('.field-command').closest('.row');
                     if (val === 'dropdown') {
+                        $label.show();
                         $options.show();
                         $command.show();
                     } else if (val === 'checkbox') {
+                        $label.show();
                         $options.hide();
+                    } else if (val === 'putonlycmd') {
+                        $label.hide();
+                        $options.hide();
+                        $command.show();
                     } else {
+                        $label.show();
                         $options.hide();
                         $command.show();
                     }
@@ -344,6 +353,13 @@
                     if (type === 'checkbox') {
                         const checked = $field.find('.dynamic-field-value').is(':checked');
                         if (checked && commandTemplate) {
+                            coreCommands.push(commandTemplate);
+                        }
+                        return;
+                    }
+
+                    if (type === 'putonlycmd') {
+                        if (commandTemplate) {
                             coreCommands.push(commandTemplate);
                         }
                         return;
@@ -514,6 +530,8 @@
                         inputHtml = '<input type="number" class="form-control dynamic-field-value" placeholder="' + _.escape(field.label) + '">';
                     } else if (field.type === 'checkbox') {
                         inputHtml = '<input type="checkbox" class="dynamic-field-value" value="1"> <span>{{ __('Enable') }}</span>';
+                    } else if (field.type === 'putonlycmd') {
+                        inputHtml = '<input type="hidden" class="dynamic-field-value" value="1"><code class="help-block" style="font-size: 12px; margin-top: 5px;">' + _.escape(field.command || '') + '</code>';
                     } else {
                         inputHtml = '<input type="text" class="form-control dynamic-field-value" placeholder="' + _.escape(field.label) + '">';
                     }
