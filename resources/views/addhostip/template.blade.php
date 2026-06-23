@@ -440,15 +440,41 @@
                 // Wrap with interface context
                 let finalCommands = [];
                 const selectedIfaces = $('.device-interface-select').val();
+
+                // Split: interface-level (with @{{interface}}) vs global
+                const interfaceCmds = [];
+                const globalCmds = [];
+                coreCommands.forEach(function(cmd) {
+                    if (cmd.indexOf('@{{interface}}') !== -1) {
+                        interfaceCmds.push(cmd);
+                    } else {
+                        globalCmds.push(cmd);
+                    }
+                });
+
                 if (selectedIfaces && selectedIfaces.length > 0) {
                     selectedIfaces.forEach(function(iface) {
-                        finalCommands.push('interface ' + iface);
-                        coreCommands.forEach(function(cmd) {
+                        if (interfaceCmds.length > 0) {
+                            interfaceCmds.forEach(function(cmd) {
+                                finalCommands.push(cmd.replace(/\{\{interface\}\}/g, iface));
+                            });
+                        } else {
+                            finalCommands.push('interface ' + iface);
+                            globalCmds.forEach(function(cmd) {
+                                finalCommands.push(cmd);
+                            });
+                        }
+                    });
+                    // Add global-only commands once (not wrapped in interface block)
+                    if (interfaceCmds.length > 0) {
+                        globalCmds.forEach(function(cmd) {
                             finalCommands.push(cmd);
                         });
-                    });
+                    }
                 } else {
-                    finalCommands = coreCommands;
+                    coreCommands.forEach(function(cmd) {
+                        finalCommands.push(cmd.replace(/\{\{interface\}\}/g, ''));
+                    });
                 }
 
                 $('#commandsContent').text(finalCommands.join('\n'));
@@ -793,4 +819,6 @@
             updateSelectedCount();
         });
     </script>
+
+#
 @endsection
