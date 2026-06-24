@@ -1,82 +1,159 @@
-@extends('layouts.librenmsv1')
+<!DOCTYPE HTML>
+<html lang="en">
 
-@section('title', __('Template Push Configuration'))
+<head>
+    <meta charset="utf-8">
+    <meta http-equiv="X-UA-Compatible" content="IE=edge">
+    <title>Template Push Configuration | Telequill</title>
+    <base href="http://localhost:8000/">
+    <meta http-equiv="content-type" content="text/html; charset=utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+            <link rel="apple-touch-icon" sizes="180x180" href="http://localhost/images/apple-touch-icon.png">
+        <link rel="icon" type="image/png" href="http://localhost/images/fabavicon-32x32.png" sizes="32x32">
+        <link rel="icon" type="image/png" href="http://localhost/images/abfavicon-16x16.png" sizes="16x16">
+        <link rel="mask-icon" href="http://localhost/images/safari-pinned-tab.svg" color="#5bbad5">
+        <link rel="shortcut icon" href="http://localhost/images/abfavicon.ico">
+    
+    <link rel="manifest" href="http://localhost/images/manifest.json" crossorigin="use-credentials">
+    <meta name="csrf-token" content="">
+    <meta name="msapplication-config" content="http://localhost/images/browserconfig.xml">
+    <meta name="theme-color" content="#ffffff">
 
-@section('content')
-    <div class="container-fluid">
-        <x-panel>
-            <x-slot name="title">
-                <i class="fa fa-file-code-o fa-fw fa-lg"></i> {{ __('Template Push Configuration') }}
-            </x-slot>
+    <link rel="preload" as="style" href="http://localhost/build/assets/app-Cy_b8bgj.css" /><link rel="modulepreload" as="script" href="http://localhost/build/assets/app-BvogTMTL.js" /><link rel="stylesheet" href="http://localhost/build/assets/app-Cy_b8bgj.css" /><script type="module" src="http://localhost/build/assets/app-BvogTMTL.js"></script>    <link href="http://localhost/css/bootstrap-datetimepicker.min.css" rel="stylesheet">
+    <link href="http://localhost/css/bootstrap-switch.min.css" rel="stylesheet">
+    <link href="http://localhost/css/toastr.min.css" rel="stylesheet">
+    <link href="http://localhost/css/jquery.bootgrid.min.css" rel="stylesheet">
+    <link href="http://localhost/css/tagmanager.css" rel="stylesheet">
+    <link href="http://localhost/css/mktree.css" rel="stylesheet">
+    <link href="http://localhost/css/vis.min.css" rel="stylesheet">
+    <link href="http://localhost/css/fontawesome.min.css" rel="stylesheet">
+    <link href="http://localhost/css/v4-shims.min.css" rel="stylesheet">
+    <link href="http://localhost/css/jquery.gridster.min.css?ver=09292021" rel="stylesheet">
+    <link href="http://localhost/css/leaflet.css" rel="stylesheet">
+    <link href="http://localhost/css/MarkerCluster.css" rel="stylesheet">
+    <link href="http://localhost/css/MarkerCluster.Default.css" rel="stylesheet">
+    <link href="http://localhost/css/L.Control.Locate.min.css" rel="stylesheet">
+    <link href="http://localhost/css/leaflet.awesome-markers.css" rel="stylesheet">
+    <link href="http://localhost/css/select2.min.css" rel="stylesheet">
+    <link href="http://localhost/css/select2-bootstrap.min.css" rel="stylesheet">
+    <link href="http://localhost/css/query-builder.default.min.css" rel="stylesheet">
+    <link href="http://localhost/css/styles.css?ver=25052501" rel="stylesheet">
+    <link href="http://localhost/css/tw_dark.css?ver=31072025" rel="stylesheet">
+                
+    <script src="http://localhost/js/polyfill.min.js"></script>
+    <script src="http://localhost/js/popper.min.js"></script>
+    <script src="http://localhost/js/jquery.min.js?ver=05072021"></script>
+    <script src="http://localhost/js/bootstrap.min.js?ver=05072021"></script>
+    <script src="http://localhost/js/bootstrap-hover-dropdown.min.js?ver=05072021"></script>
+    <script src="http://localhost/js/bootstrap-switch.min.js?ver=05072021"></script>
+    <script src="http://localhost/js/hogan-2.0.0.js"></script>
+    <script src="http://localhost/js/moment.min.js"></script>
+    <script src="http://localhost/js/bootstrap-datetimepicker.min.js?ver=05072021"></script>
+    <script src="http://localhost/js/typeahead.bundle.min.js?ver=05072021"></script>
+    <script src="http://localhost/js/tagmanager.js?ver=05072021"></script>
+    <script src="http://localhost/js/mktree.js"></script>
+    <script src="http://localhost/js/jquery.bootgrid.min.js"></script>
+    <script src="http://localhost/js/handlebars.min.js"></script>
+    <script data-pace-options='{ "eventLag": { "lagThreshold": 30 } }' src="http://localhost/js/pace.min.js"></script>
+    <script src="http://localhost/js/qrcode.min.js"></script>
+    <script src="http://localhost/js/select2.full.min.js"></script>
+    <script>
+        $.ajaxSetup({
+            headers: {
+                'X-CSRF-TOKEN': $('meta[name="csrf-token"]').attr('content')
+            }
+        });
+        var ajax_url = "http://localhost/ajax";
+    </script>
+    <script src="http://localhost/js/librenms.js?ver=30062025"></script>
+    <script type="text/javascript" src="http://localhost/js/overlib_mini.js"></script>
+    <script type="text/javascript" src="http://localhost/js/toastr.min.js?ver=05072021"></script>
+    <script type="text/javascript" src="http://localhost/js/boot.js?ver=10272021"></script>
+    <script>
+        window.siteStyle = '';
+        window.siteStylePreference = 'device';
 
-            @if (session('status'))
-                <div class="alert alert-success alert-dismissible" role="alert">
-                    <button type="button" class="close" data-dismiss="alert" aria-label="Close">
-                        <span aria-hidden="true">&times;</span>
-                    </button>
-                    <i class="fa fa-check-circle fa-fw"></i> {{ session('status') }}
-                </div>
-            @endif
+        // Apply color scheme
+        applySiteStyle(window.siteStylePreference);
 
-            <div class="row">
+        // Listen for system theme changes in device mode
+        window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', (event) => {
+            if (window.siteStylePreference === 'device') {
+                applySiteStyle(event.matches ? 'dark' : 'light');
+            }
+        });
+    </script>
+        </head>
+
+<body>
+    
+    
+        <div class="container-fluid">
+        <div class="panel panel-default">
+  <div class="panel-heading">
+    <h3 class="panel-title"><i class="fa fa-file-code-o fa-fw fa-lg"></i> Template Push Configuration</h3>
+  </div>
+
+  <div class="panel-body ">
+    <div class="row">
                 <!-- LEFT: Template Builder -->
                 <div class="col-md-5">
                     <div class="panel panel-default">
                         <div class="panel-heading">
-                            <strong><i class="fa fa-cube"></i> {{ __('Template Builder') }}</strong>
+                            <strong><i class="fa fa-cube"></i> Template Builder</strong>
                             <button type="button" class="btn btn-xs btn-link pull-right" data-toggle="collapse" data-target="#builderHelp" style="padding: 0;">
-                                <i class="fa fa-question-circle"></i> {{ __('Help') }}
+                                <i class="fa fa-question-circle"></i> Help
                             </button>
                         </div>
                         <div id="builderHelp" class="collapse">
                             <div class="panel-body" style="border-bottom: 1px solid #ddd; background: #fafafa; font-size: 12px;">
-                                <strong>{{ __('How to build a template:') }}</strong>
+                                <strong>How to build a template:</strong>
                                 <ol style="padding-left: 20px; margin-bottom: 0;">
-                                    <li>{{ __('Give your template a name above.') }}</li>
-                                    <li>{{ __('Click') }} <strong>{{ __('Add Field') }}</strong> {{ __('for each value you want to collect.') }}</li>
+                                    <li>Give your template a name above.</li>
+                                    <li>Click <strong>Add Field</strong> for each value you want to collect.</li>
                                     <li>
-                                        <strong>{{ __('Field Types:') }}</strong>
+                                        <strong>Field Types:</strong>
                                         <ul style="padding-left: 18px;">
-                                            <li><strong>{{ __('Text/Number') }}</strong> — {{ __('user types a value, use') }} <code>@@{{value}}</code> {{ __('in the command') }}</li>
-                                            <li><strong>{{ __('Dropdown') }}</strong> — {{ __('user picks from options, format:') }} <code>val:cmd, val2:cmd2</code></li>
-                                            <li><strong>{{ __('Checkbox') }}</strong> — {{ __('if checked, command is pushed as-is') }}</li>
-                                            <li><strong>{{ __('Put Only Cmd') }}</strong> — {{ __('no user input, command is always pushed') }}</li>
-                                            <li><strong>{{ __('Dynamic Rules List') }}</strong> — {{ __('repeater with custom variables, e.g.') }} <code>@@{{from}} @@{{to}}</code></li>
+                                            <li><strong>Text/Number</strong> — user types a value, use <code>@{{value}}</code> in the command</li>
+                                            <li><strong>Dropdown</strong> — user picks from options, format: <code>val:cmd, val2:cmd2</code></li>
+                                            <li><strong>Checkbox</strong> — if checked, command is pushed as-is</li>
+                                            <li><strong>Put Only Cmd</strong> — no user input, command is always pushed</li>
+                                            <li><strong>Dynamic Rules List</strong> — repeater with custom variables, e.g. <code>@{{from}} @{{to}}</code></li>
                                         </ul>
                                     </li>
                                     <li>
-                                        <strong>{{ __('Cross-Field References:') }}</strong>
-                                        {{ __('Use') }} <code>@@{{field:Label}}</code> {{ __('in any command to pull another field\'s value.') }}
-                                        <br><em>{{ __('Example:') }}</em> <code>switchport pvid @@{{field:VLAN ID}}</code>
+                                        <strong>Cross-Field References:</strong>
+                                        Use <code>@{{field:Label}}</code> in any command to pull another field&#039;s value.
+                                        <br><em>Example:</em> <code>switchport pvid @{{field:VLAN ID}}</code>
                                     </li>
-                                    <li>{{ __('Click') }} <strong>{{ __('Save Template') }}</strong> {{ __('to store it, then load it on the right side.') }}</li>
+                                    <li>Click <strong>Save Template</strong> to store it, then load it on the right side.</li>
                                 </ol>
                             </div>
                         </div>
                         <div class="panel-body">
                             <div class="form-group">
-                                <label for="builder_template_name">{{ __('Template Name') }}</label>
-                                <input type="text" id="builder_template_name" class="form-control" placeholder="{{ __('My Template') }}">
+                                <label for="builder_template_name">Template Name</label>
+                                <input type="text" id="builder_template_name" class="form-control" placeholder="My Template">
                             </div>
 
                             <div id="builder_fields_container">
-                                <p class="text-muted">{{ __('No fields yet. Click "Add Field" to start building your template.') }}</p>
+                                <p class="text-muted">No fields yet. Click &quot;Add Field&quot; to start building your template.</p>
                             </div>
 
                             <button type="button" class="btn btn-sm btn-success" id="addFieldBtn">
-                                <i class="fa fa-plus"></i> {{ __('Add Field') }}
+                                <i class="fa fa-plus"></i> Add Field
                             </button>
                             <button type="button" class="btn btn-sm btn-primary" id="saveBuilderTemplateBtn">
-                                <i class="fa fa-save"></i> {{ __('Save Template') }}
+                                <i class="fa fa-save"></i> Save Template
                             </button>
 
                             <div id="builder_preview_section" style="margin-top: 20px;">
                                 <hr style="margin: 15px 0;">
                                 <h5 style="font-weight: bold; margin-bottom: 12px; color: #333;">
-                                    <i class="fa fa-eye"></i> {{ __('Commands Preview') }}
+                                    <i class="fa fa-eye"></i> Commands Preview
                                 </h5>
                                 <div id="builder_preview_placeholder" class="text-muted" style="font-size: 12px;">
-                                    {{ __('Add fields above to see the generated commands preview.') }}
+                                    Add fields above to see the generated commands preview.
                                 </div>
                                 <div id="builder_preview_commands_container" style="display: none;">
                                     <pre id="builder_preview_commands" style="max-height: 150px; overflow-y: auto; background: #fafafa; border: 1px solid #ccc; padding: 8px 12px; font-size: 11px; margin-bottom: 0; font-family: monospace; color: #333;"></pre>
@@ -88,51 +165,31 @@
 
                 <!-- RIGHT: Push Interface -->
                 <div class="col-md-7">
-                    <form id="ipUploadForm" method="post" action="{{ route('addhost.template.save') }}" enctype="multipart/form-data" class="form-horizontal" role="form">
-                        @csrf
-
-                        @if(!empty($templates))
-                        <div class="form-group">
-                            <label for="load_template" class="col-sm-3 control-label">{{ __('Load Template') }}</label>
-                            <div class="col-sm-9">
-                                <select id="load_template" class="form-control">
-                                    <option value="">{{ __('-- Select Template --') }}</option>
-                                    @foreach($templates as $template)
-                                        @php $typeLabel = strtoupper($template['type'] ?? 'other'); @endphp
-                                        <option value="{{ json_encode($template) }}" data-type="{{ $template['type'] ?? 'other' }}">[{{ $typeLabel }}] {{ $template['name'] }}</option>
-                                    @endforeach
-                                </select>
-                            </div>
-                        </div>
-                        @endif
-
+                    <form id="ipUploadForm" method="post" action="http://localhost/addhost/template/save" enctype="multipart/form-data" class="form-horizontal" role="form">
+                        <input type="hidden" name="_token" value="" autocomplete="off">
+                        
                         <div id="template_config_section" style="display: none;">
                             <hr>
 
                             <div class="form-group">
-                                <label for="template_name" class="col-sm-3 control-label">{{ __('Template Name') }}</label>
+                                <label for="template_name" class="col-sm-3 control-label">Template Name</label>
                                 <div class="col-sm-6">
-                                    <input type="text" name="template_name" id="template_name" class="form-control" placeholder="{{ __('Template Name') }}">
+                                    <input type="text" name="template_name" id="template_name" class="form-control" placeholder="Template Name">
                                 </div>
                                 <div class="col-sm-3">
                                     <button type="button" class="btn btn-danger btn-sm" id="deleteTemplateBtn" style="display: none;">
-                                        <i class="fa fa-trash"></i> {{ __('Delete') }}
+                                        <i class="fa fa-trash"></i> Delete
                                     </button>
                                 </div>
                             </div>
 
                             <!-- Device Selection -->
                             <div class="form-group">
-                                <label for="device_select" class="col-sm-3 control-label">{{ __('Select Device') }} <span class="text-danger">*</span></label>
+                                <label for="device_select" class="col-sm-3 control-label">Select Device <span class="text-danger">*</span></label>
                                 <div class="col-sm-9">
                                     <select name="device_id" id="device_select" class="form-control" style="width: 100%;" required>
-                                        <option value="">{{ __('-- Select Device --') }}</option>
-                                        @foreach($devices as $device)
-                                            <option value="{{ $device->device_id }}" data-ip="{{ $device->overwrite_ip ?: $device->hostname }}">
-                                                {{ $device->hostname }} ({{ $device->overwrite_ip ?: $device->hostname }})
-                                            </option>
-                                        @endforeach
-                                    </select>
+                                        <option value="">-- Select Device --</option>
+                                                                            </select>
                                 </div>
                             </div>
 
@@ -144,33 +201,33 @@
                             <!-- Port Mode Selection (for access/trunk templates) -->
                             <div id="port_mode_group">
                                 <div class="form-group">
-                                    <label class="col-sm-3 control-label">{{ __('Port Mode') }} <span class="text-danger">*</span></label>
+                                    <label class="col-sm-3 control-label">Port Mode <span class="text-danger">*</span></label>
                                     <div class="col-sm-9">
                                         <div class="btn-group" data-toggle="buttons">
                                             <label class="btn btn-default active" id="mode_access">
-                                                <input type="radio" name="port_mode" value="access" checked> {{ __('Access') }}
+                                                <input type="radio" name="port_mode" value="access" checked> Access
                                             </label>
                                             <label class="btn btn-default" id="mode_trunk">
-                                                <input type="radio" name="port_mode" value="trunk"> {{ __('Trunk') }}
+                                                <input type="radio" name="port_mode" value="trunk"> Trunk
                                             </label>
                                             <label class="btn btn-default" id="mode_custom">
-                                                <input type="radio" name="port_mode" value="custom"> {{ __('Custom') }}
+                                                <input type="radio" name="port_mode" value="custom"> Custom
                                             </label>
                                         </div>
                                     </div>
                                 </div>
 
                                 <div class="form-group" id="pvid_group">
-                                    <label for="pvid" class="col-sm-3 control-label">{{ __('PVID') }} <span class="text-danger">*</span></label>
+                                    <label for="pvid" class="col-sm-3 control-label">PVID <span class="text-danger">*</span></label>
                                     <div class="col-sm-3">
                                         <input type="number" name="pvid" id="pvid" class="form-control" value="1" min="1" max="4094">
                                     </div>
                                 </div>
 
                                 <div class="form-group" id="custom_commands_group" style="display: none;">
-                                    <label for="custom_commands" class="col-sm-3 control-label">{{ __('Custom Commands') }} <span class="text-danger">*</span></label>
+                                    <label for="custom_commands" class="col-sm-3 control-label">Custom Commands <span class="text-danger">*</span></label>
                                     <div class="col-sm-9">
-                                        <textarea name="custom_commands" id="custom_commands" class="form-control" rows="6" placeholder="{{ __('Enter one command per line...') }}" style="font-family: monospace;"></textarea>
+                                        <textarea name="custom_commands" id="custom_commands" class="form-control" rows="6" placeholder="Enter one command per line..." style="font-family: monospace;"></textarea>
                                     </div>
                                 </div>
                             </div>
@@ -180,7 +237,7 @@
 
                             <!-- Commands Preview -->
                             <div class="form-group" id="commandsPreview">
-                                <label class="col-sm-3 control-label">{{ __('Commands to Push') }}</label>
+                                <label class="col-sm-3 control-label">Commands to Push</label>
                                 <div class="col-sm-9">
                                     <pre id="commandsContent" style="max-height: 150px; overflow-y: auto; background: #f5f5f5; padding: 10px; font-size: 12px;"></pre>
                                 </div>
@@ -192,9 +249,9 @@
                             <div class="form-group">
                                 <div class="col-sm-offset-3 col-sm-9">
                                     <button type="submit" class="btn btn-success" id="submitBtn" disabled>
-                                        <i class="fa fa-plus"></i> {{ __('Push to Device') }}
+                                        <i class="fa fa-plus"></i> Push to Device
                                     </button>
-                                    <button type="reset" class="btn btn-default" id="resetBtn">{{ __('Reset') }}</button>
+                                    <button type="reset" class="btn btn-default" id="resetBtn">Reset</button>
                                     <div id="loadingSpinner" style="display: none; margin-left: 10px;" class="pull-right">
                                         <i class="fa fa-spinner fa-spin"></i> Processing...
                                     </div>
@@ -204,13 +261,13 @@
                     </form>
                 </div>
             </div>
-        </x-panel>
-    </div>
-@endsection
+  </div>
 
-@section('scripts')
-    @parent
-    <script type="text/javascript">
+
+</div>
+    </div>
+
+            <script type="text/javascript">
         $(document).ready(function() {
             let validIPs = [];
             let pendingTemplateInterfaces = {};
@@ -254,24 +311,24 @@
                     <div class="builder-field well well-sm" data-field-id="${id}">
                         <div class="row">
                             <div class="col-sm-4">
-                                <label>{{ __('Label') }}</label>
-                                <input type="text" class="form-control input-sm field-label" value="${_.escape(label)}" placeholder="{{ __('Field Label') }}">
+                                <label>Label</label>
+                                <input type="text" class="form-control input-sm field-label" value="${_.escape(label)}" placeholder="Field Label">
                             </div>
                             <div class="col-sm-3">
-                                <label>{{ __('Type') }}</label>
+                                <label>Type</label>
                                 <select class="form-control input-sm field-type">
-                                    <option value="text" ${type === 'text' ? 'selected' : ''}>{{ __('Text') }}</option>
-                                    <option value="number" ${type === 'number' ? 'selected' : ''}>{{ __('Number') }}</option>
-                                    <option value="dropdown" ${type === 'dropdown' ? 'selected' : ''}>{{ __('Dropdown') }}</option>
-                                    <option value="checkbox" ${type === 'checkbox' ? 'selected' : ''}>{{ __('Checkbox') }}</option>
-                                    <option value="putonlycmd" ${type === 'putonlycmd' ? 'selected' : ''}>{{ __('Put Only Cmd') }}</option>
-                                    <option value="dynamic_list" ${type === 'dynamic_list' ? 'selected' : ''}>{{ __('Dynamic Rules List') }}</option>
+                                    <option value="text" ${type === 'text' ? 'selected' : ''}>Text</option>
+                                    <option value="number" ${type === 'number' ? 'selected' : ''}>Number</option>
+                                    <option value="dropdown" ${type === 'dropdown' ? 'selected' : ''}>Dropdown</option>
+                                    <option value="checkbox" ${type === 'checkbox' ? 'selected' : ''}>Checkbox</option>
+                                    <option value="putonlycmd" ${type === 'putonlycmd' ? 'selected' : ''}>Put Only Cmd</option>
+                                    <option value="dynamic_list" ${type === 'dynamic_list' ? 'selected' : ''}>Dynamic Rules List</option>
                                 </select>
                             </div>
                             <div class="col-sm-4">
-                                <label>{{ __('Dropdown Options') }}</label>
-                                <input type="text" class="form-control input-sm field-options" value="${_.escape(options)}" placeholder="{{ __('val:cmd, val2:cmd2') }}">
-                                <span class="help-block" style="font-size: 11px; margin-bottom: 0;">{{ __('Use') }} <code>value:command</code> {{ __('for per-option commands, or just') }} <code>value</code> {{ __('to use the template') }}</span>
+                                <label>Dropdown Options</label>
+                                <input type="text" class="form-control input-sm field-options" value="${_.escape(options)}" placeholder="val:cmd, val2:cmd2">
+                                <span class="help-block" style="font-size: 11px; margin-bottom: 0;">Use <code>value:command</code> for per-option commands, or just <code>value</code> to use the template</span>
                             </div>
                             <div class="col-sm-1">
                                 <label>&nbsp;</label>
@@ -280,9 +337,9 @@
                         </div>
                         <div class="row" style="margin-top: 6px;">
                             <div class="col-sm-12">
-                                <label>{{ __('Command Template') }}</label>
-                                <input type="text" class="form-control input-sm field-command" value="${_.escape(command)}" placeholder="e.g. switchport pvid @@{{value}}">
-                                <span class="help-block" style="font-size: 11px; margin-bottom: 0;">{{ __('Use') }} <code>@@{{value}}</code> {{ __('where the field value should be inserted') }}</span>
+                                <label>Command Template</label>
+                                <input type="text" class="form-control input-sm field-command" value="${_.escape(command)}" placeholder="e.g. switchport pvid @{{value}}">
+                                <span class="help-block" style="font-size: 11px; margin-bottom: 0;">Use <code>@{{value}}</code> where the field value should be inserted</span>
                             </div>
                         </div>
                     </div>
@@ -313,8 +370,8 @@
                         $label.show();
                         $options.show();
                         $command.show();
-                        $commandInput.attr('placeholder', 'e.g. switchport pvid @@{{value}}');
-                        $help.html('Use <code>@@{{value}}</code> where the field value should be inserted');
+                        $commandInput.attr('placeholder', 'e.g. switchport pvid @{{value}}');
+                        $help.html('Use <code>@{{value}}</code> where the field value should be inserted');
                     } else if (val === 'checkbox') {
                         $label.show();
                         $options.hide();
@@ -322,20 +379,20 @@
                         $label.hide();
                         $options.hide();
                         $command.show();
-                        $commandInput.attr('placeholder', 'e.g. switchport pvid @@{{value}}');
-                        $help.html('Use <code>@@{{value}}</code> where the field value should be inserted');
+                        $commandInput.attr('placeholder', 'e.g. switchport pvid @{{value}}');
+                        $help.html('Use <code>@{{value}}</code> where the field value should be inserted');
                     } else if (val === 'dynamic_list') {
                         $label.show();
                         $options.hide();
                         $command.show();
-                        $commandInput.attr('placeholder', 'e.g. switchport dot1q-translating-tunnel mode QinQ translate @@{{from}} @@{{to}}');
-                        $help.html('Use variables like <code>@@{{from}}</code>, <code>@@{{to}}</code>, etc. A row layout will be generated dynamically for each variable.');
+                        $commandInput.attr('placeholder', 'e.g. switchport dot1q-translating-tunnel mode QinQ translate @{{from}} @{{to}}');
+                        $help.html('Use variables like <code>@{{from}}</code>, <code>@{{to}}</code>, etc. A row layout will be generated dynamically for each variable.');
                     } else {
                         $label.show();
                         $options.hide();
                         $command.show();
-                        $commandInput.attr('placeholder', 'e.g. switchport pvid @@{{value}}');
-                        $help.html('Use <code>@@{{value}}</code> where the field value should be inserted');
+                        $commandInput.attr('placeholder', 'e.g. switchport pvid @{{value}}');
+                        $help.html('Use <code>@{{value}}</code> where the field value should be inserted');
                     }
                 });
                 $lastField.find('.field-type').trigger('change');
@@ -347,7 +404,7 @@
                 $lastField.find('.remove-field-btn').on('click', function() {
                     $(this).closest('.builder-field').remove();
                     if ($('#builder_fields_container').children().length === 0) {
-                        $('#builder_fields_container').html('<p class="text-muted">{{ __('No fields yet. Click "Add Field" to start building your template.') }}</p>');
+                        $('#builder_fields_container').html('<p class="text-muted">No fields yet. Click &quot;Add Field&quot; to start building your template.</p>');
                     }
                     updateBuilderPreview();
                 });
@@ -485,14 +542,14 @@
                 }
 
                 const data = {
-                    _token: '{{ csrf_token() }}',
+                    _token: '',
                     template_name: name,
                     port_mode: 'form',
                     fields: fields
                 };
 
                 $.ajax({
-                    url: '{{ route("addhost.template.store") }}',
+                    url: 'http://localhost/addhost/template/store',
                     type: 'POST',
                     data: JSON.stringify(data),
                     contentType: 'application/json',
@@ -644,11 +701,11 @@
                 let finalCommands = [];
                 const selectedIfaces = $('.device-interface-select').val();
 
-                // Split: interface-level (with @{{interface}}) vs global
+                // Split: interface-level (with {{interface}}) vs global
                 const interfaceCmds = [];
                 const globalCmds = [];
                 coreCommands.forEach(function(cmd) {
-                    if (cmd.indexOf('@{{interface}}') !== -1) {
+                    if (cmd.indexOf('{{interface}}') !== -1) {
                         interfaceCmds.push(cmd);
                     } else {
                         globalCmds.push(cmd);
@@ -736,10 +793,10 @@
                 $interfaceContainer.html('<div class="form-group"><div class="col-sm-offset-3 col-sm-9"><i class="fa fa-spinner fa-spin"></i> Loading interfaces...</div></div>');
 
                 $.ajax({
-                    url: "{{ route('addhost.ports.fetch') }}",
+                    url: "http://localhost/addhost/ports/fetch",
                     type: 'POST',
                     data: {
-                        _token: '{{ csrf_token() }}',
+                        _token: '',
                         device_ids: [selectedDeviceId]
                     },
                     success: function(response) {
@@ -809,7 +866,7 @@
                     } else if (field.type === 'number') {
                         inputHtml = '<input type="number" class="form-control dynamic-field-value" placeholder="' + _.escape(field.label) + '">';
                     } else if (field.type === 'checkbox') {
-                        inputHtml = '<input type="checkbox" class="dynamic-field-value" value="1"> <span>{{ __('Enable') }}</span>';
+                        inputHtml = '<input type="checkbox" class="dynamic-field-value" value="1"> <span>Enable</span>';
                     } else if (field.type === 'putonlycmd') {
                         inputHtml = '<input type="hidden" class="dynamic-field-value" value="1"><code class="help-block" style="font-size: 12px; margin-top: 5px;">' + _.escape(field.command || '') + '</code>';
                     } else if (field.type === 'dynamic_list') {
@@ -817,7 +874,7 @@
                             <div class="dynamic-list-field-container" data-label="${_.escape(field.label)}" data-command="${_.escape(field.command || '')}">
                                 <div class="dynamic-rules-list"></div>
                                 <button type="button" class="btn btn-xs btn-success add-dynamic-rule-btn" style="margin-top: 5px;">
-                                    <i class="fa fa-plus"></i> {{ __('Add Row') }}
+                                    <i class="fa fa-plus"></i> Add Row
                                 </button>
                             </div>
                         `;
@@ -1003,10 +1060,10 @@
                 if (!confirm('Delete template "' + name + '"?')) return;
 
                 $.ajax({
-                    url: '{{ route("addhost.template.delete") }}',
+                    url: 'http://localhost/addhost/template/delete',
                     type: 'POST',
                     data: {
-                        _token: '{{ csrf_token() }}',
+                        _token: '',
                         template_name: name
                     },
                     success: function(response) {
@@ -1136,4 +1193,249 @@
     </script>
 
 #
-@endsection
+
+    
+    
+    <audio id="okSound" preload="auto">
+        <source src="http://localhost/sounds/ok.mp3" type="audio/mpeg">
+    </audio>
+
+    <audio id="warningSound" preload="auto">
+        <source src="http://localhost/sounds/warning.mp3" type="audio/mpeg">
+    </audio>
+
+    <audio id="criticalSound" preload="auto">
+        <source src="http://localhost/sounds/critical.mp3" type="audio/mpeg">
+    </audio>
+
+    <script>
+        let currentSound = null;
+        let shownAlerts = new Set();
+        let audioUnlocked = false;
+
+        let soundEnabled = localStorage.getItem("alertSound") !== "off";
+
+        document.addEventListener("DOMContentLoaded", function() {
+
+            updateSoundButton();
+
+            const btn = document.getElementById("soundToggle");
+
+            if (btn) {
+                btn.addEventListener("click", function() {
+
+                    soundEnabled = !soundEnabled;
+
+                    localStorage.setItem("alertSound", soundEnabled ? "on" : "off");
+
+                    if (!soundEnabled) {
+                        stopAlertSound(); // immediate mute
+                    }
+
+                    updateSoundButton();
+
+                });
+            }
+
+        });
+
+
+
+        /* --------------------------------
+           Unlock browser audio
+        -------------------------------- */
+
+        document.addEventListener("click", function() {
+
+            if (!audioUnlocked) {
+
+                let sounds = [
+                    document.getElementById("okSound"),
+                    document.getElementById("warningSound"),
+                    document.getElementById("criticalSound")
+                ];
+
+                sounds.forEach(function(s) {
+
+                    if (s) {
+                        s.play().then(() => {
+                            s.pause();
+                            s.currentTime = 0;
+                        }).catch(() => {});
+                    }
+
+                });
+
+                audioUnlocked = true;
+            }
+
+        });
+
+
+
+        /* --------------------------------
+           Update Button
+        -------------------------------- */
+
+        function updateSoundButton() {
+
+            const btn = document.getElementById("soundToggle");
+
+            if (!btn) return;
+
+            if (soundEnabled) {
+                btn.innerHTML = "🔊 ON";
+            } else {
+                btn.innerHTML = "🔇 Mute";
+            }
+
+        }
+
+
+
+        /* --------------------------------
+           Play Sound
+        -------------------------------- */
+
+        function playAlertSound(type) {
+
+            if (!soundEnabled) return;
+
+            stopAlertSound();
+
+            if (type === "ok") {
+                currentSound = document.getElementById("okSound");
+            }
+
+            if (type === "warning") {
+                currentSound = document.getElementById("warningSound");
+            }
+
+            if (type === "critical") {
+                currentSound = document.getElementById("criticalSound");
+            }
+
+            if (currentSound) {
+
+                currentSound.volume = 1.0;
+                currentSound.currentTime = 0;
+
+                currentSound.play().catch(function(e) {
+                    console.log("Sound blocked:", e);
+                });
+
+            }
+
+        }
+
+
+
+        /* --------------------------------
+           Stop Sound
+        -------------------------------- */
+
+        function stopAlertSound() {
+
+            if (currentSound) {
+
+                currentSound.pause();
+                currentSound.currentTime = 0;
+
+                currentSound = null;
+
+            }
+
+        }
+
+
+
+        /* --------------------------------
+           Show Notification
+        -------------------------------- */
+
+        function showAlertNotification(type, message,url) {
+
+            if (!soundEnabled) return;
+
+            playAlertSound(type);
+
+            toastr.options = {
+
+                closeButton: true,
+                progressBar: true,
+                positionClass: "toast-top-right",
+                timeOut: 0,
+                extendedTimeOut: 0,
+                preventDuplicates: true,
+                onclick: function () {
+                    window.open(url, "_blank");
+                },
+                onHidden: function() {
+                    stopAlertSound();
+                }
+
+            };
+
+            if (type === "ok") {
+                toastr.success(message, "OK Alert");
+            }
+
+            if (type === "warning") {
+                toastr.warning(message, "Warning Alert");
+            }
+
+            if (type === "critical") {
+                toastr.error(message, "Critical Alert");
+            }
+
+        }
+
+
+
+        /* --------------------------------
+           Fetch Alerts
+        -------------------------------- */
+
+        setInterval(function() {
+
+            $.get("ajax/alerts-api", function(data) {
+
+                if (!data.alerts) return;
+
+                data.alerts.forEach(function(alert) {
+                   
+                    if (shownAlerts.has(alert.id)) {
+                        return;
+                    }
+
+                    shownAlerts.add(alert.id);
+
+                    let type = "warning";
+
+                    if (alert.severity === "critical") {
+                        type = "critical";
+                    }
+
+                    if (alert.severity === "ok") {
+                        type = "ok";
+                    }
+
+                    let message = alert.hostname + " : " + alert.rule_name;
+
+                    
+
+                    // LibreNMS alert page example
+                    let url = "/alerts/" + alert.id;
+
+                    showAlertNotification(type, message,url);
+
+                });
+
+            });
+
+        }, 5000);
+    </script>
+
+</body>
+
+</html>
