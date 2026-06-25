@@ -37,17 +37,17 @@
                                     <li>
                                         <strong>{{ __('Field Types:') }}</strong>
                                         <ul style="padding-left: 18px;">
-                                            <li><strong>{{ __('Text/Number') }}</strong> — {{ __('user types a value, use') }} <code>@@{{value}}</code> {{ __('in the command') }}</li>
+                                            <li><strong>{{ __('Text/Number') }}</strong> — {{ __('user types a value, use') }} <code>@{{value}}</code> {{ __('in the command') }}</li>
                                             <li><strong>{{ __('Dropdown') }}</strong> — {{ __('user picks from options, format:') }} <code>val:cmd, val2:cmd2</code></li>
                                             <li><strong>{{ __('Checkbox') }}</strong> — {{ __('if checked, command is pushed as-is') }}</li>
                                             <li><strong>{{ __('Put Only Cmd') }}</strong> — {{ __('no user input, command is always pushed') }}</li>
-                                            <li><strong>{{ __('Dynamic Rules List') }}</strong> — {{ __('repeater with custom variables, e.g.') }} <code>@@{{from}} @@{{to}}</code></li>
+                                            <li><strong>{{ __('Dynamic Rules List') }}</strong> — {{ __('repeater with custom variables, e.g.') }} <code>@{{from}} @{{to}}</code></li>
                                         </ul>
                                     </li>
                                     <li>
                                         <strong>{{ __('Cross-Field References:') }}</strong>
-                                        {{ __('Use') }} <code>@@{{field:Label}}</code> {{ __('in any command to pull another field\'s value.') }}
-                                        <br><em>{{ __('Example:') }}</em> <code>switchport pvid @@{{field:VLAN ID}}</code>
+                                        {{ __('Use') }} <code>@{{field:Label}}</code> {{ __('in any command to pull another field\'s value.') }}
+                                        <br><em>{{ __('Example:') }}</em> <code>switchport pvid @{{field:VLAN ID}}</code>
                                     </li>
                                     <li>{{ __('Click') }} <strong>{{ __('Save Template') }}</strong> {{ __('to store it, then load it on the right side.') }}</li>
                                 </ol>
@@ -219,7 +219,7 @@
 
             function getTemplateVariables(templateStr) {
                 const vars = [];
-                const regex = /@\{\{([^}]+)\}\}/g;
+                const regex = /\{\{([^}]+)\}\}/g;
                 let match;
                 while ((match = regex.exec(templateStr)) !== null) {
                     const varName = match[1].trim();
@@ -281,8 +281,8 @@
                         <div class="row" style="margin-top: 6px;">
                             <div class="col-sm-12">
                                 <label>{{ __('Command Template') }}</label>
-                                <input type="text" class="form-control input-sm field-command" value="${_.escape(command)}" placeholder="e.g. switchport pvid @@{{value}}">
-                                <span class="help-block" style="font-size: 11px; margin-bottom: 0;">{{ __('Use') }} <code>@@{{value}}</code> {{ __('where the field value should be inserted') }}</span>
+                                <input type="text" class="form-control input-sm field-command" value="${_.escape(command)}" placeholder="e.g. switchport pvid @{{value}}">
+                                <span class="help-block" style="font-size: 11px; margin-bottom: 0;">{{ __('Use') }} <code>@{{value}}</code> {{ __('where the field value should be inserted') }}</span>
                             </div>
                         </div>
                     </div>
@@ -313,8 +313,8 @@
                         $label.show();
                         $options.show();
                         $command.show();
-                        $commandInput.attr('placeholder', 'e.g. switchport pvid @@{{value}}');
-                        $help.html('Use <code>@@{{value}}</code> where the field value should be inserted');
+                        $commandInput.attr('placeholder', 'e.g. switchport pvid @{{value}}');
+                        $help.html('Use <code>@{{value}}</code> where the field value should be inserted');
                     } else if (val === 'checkbox') {
                         $label.show();
                         $options.hide();
@@ -322,20 +322,20 @@
                         $label.hide();
                         $options.hide();
                         $command.show();
-                        $commandInput.attr('placeholder', 'e.g. switchport pvid @@{{value}}');
-                        $help.html('Use <code>@@{{value}}</code> where the field value should be inserted');
+                        $commandInput.attr('placeholder', 'e.g. switchport pvid @{{value}}');
+                        $help.html('Use <code>@{{value}}</code> where the field value should be inserted');
                     } else if (val === 'dynamic_list') {
                         $label.show();
                         $options.hide();
                         $command.show();
-                        $commandInput.attr('placeholder', 'e.g. switchport dot1q-translating-tunnel mode QinQ translate @@{{from}} @@{{to}}');
-                        $help.html('Use variables like <code>@@{{from}}</code>, <code>@@{{to}}</code>, etc. A row layout will be generated dynamically for each variable.');
+                        $commandInput.attr('placeholder', 'e.g. switchport dot1q-translating-tunnel mode QinQ translate @{{from}} @{{to}}');
+                        $help.html('Use variables like <code>@{{from}}</code>, <code>@{{to}}</code>, etc. A row layout will be generated dynamically for each variable.');
                     } else {
                         $label.show();
                         $options.hide();
                         $command.show();
-                        $commandInput.attr('placeholder', 'e.g. switchport pvid @@{{value}}');
-                        $help.html('Use <code>@@{{value}}</code> where the field value should be inserted');
+                        $commandInput.attr('placeholder', 'e.g. switchport pvid @{{value}}');
+                        $help.html('Use <code>@{{value}}</code> where the field value should be inserted');
                     }
                 });
                 $lastField.find('.field-type').trigger('change');
@@ -453,7 +453,7 @@
                             let sampleVal = '100';
                             if (v.toLowerCase() === 'from') sampleVal = '5376';
                             if (v.toLowerCase() === 'to') sampleVal = '262';
-                            const reg = new RegExp('@\\{\\{' + v + '\\}\\}', 'g');
+                            const reg = new RegExp('\\{\\{' + v + '\\}\\}', 'g');
                             rule1 = rule1.replace(reg, sampleVal);
                             rule2 = rule2.replace(reg, varLabel);
                         });
@@ -569,7 +569,7 @@
                                 const val = $(this).val() || '';
                                 const varLabel = varName.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
                                 const displayVal = val.trim() !== '' ? val.trim() : varLabel;
-                                const reg = new RegExp('@\\{\\{' + varName + '\\}\\}', 'g');
+                                const reg = new RegExp('\\{\\{' + varName + '\\}\\}', 'g');
                                 cmd = cmd.replace(reg, displayVal);
                             });
                             coreCommands.push(cmd);

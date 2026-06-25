@@ -2,11 +2,11 @@ import telnetlib
 import time
 import sys
 
-HOST = "192.168.200.244"
+HOST = "192.168.200.245"
 USER = "admin"
 PASSWORD = "admin"
 
-COMMANDS = ["interface GigaEthernet0/1", "description tagore"]
+COMMANDS = ["interface GigaEthernet0/1", "description wss"]
 
 OUTPUT_FILE = "/opt/librenms/librenms-ansible-inventory-plugin/tmp/telnet_output.txt"
 
