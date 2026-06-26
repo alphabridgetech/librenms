@@ -49,6 +49,14 @@
                                         {{ __('Use') }} <code>@{{field:Label}}</code> {{ __('in any command to pull another field\'s value.') }}
                                         <br><em>{{ __('Example:') }}</em> <code>switchport pvid @{{field:VLAN ID}}</code>
                                     </li>
+                                    <li>
+                                        <strong>{{ __('Dynamic Interface Context:') }}</strong>
+                                        {{ __('Use') }} <code>interface @{{interface}}</code> {{ __('to start an interface block. Subsequent commands up to a') }} <code>!</code> {{ __('will repeat for each selected interface.') }}
+                                        <br><em>{{ __('Example:') }}</em>
+                                        <pre style="margin-top: 5px; margin-bottom: 5px; padding: 5px; font-size: 11px; display: inline-block; background: #fff; border: 1px solid #ddd; border-radius: 3px;">interface @{{interface}}
+switchport pvid @{{value}}
+!</pre>
+                                    </li>
                                     <li>{{ __('Click') }} <strong>{{ __('Save Template') }}</strong> {{ __('to store it, then load it on the right side.') }}</li>
                                 </ol>
                             </div>
@@ -285,7 +293,7 @@
                             <div class="col-sm-12">
                                 <label>{{ __('Command Template') }}</label>
                                 <input type="text" class="form-control input-sm field-command" value="${_.escape(command)}" placeholder="e.g. switchport pvid @{{value}}">
-                                <span class="help-block" style="font-size: 11px; margin-bottom: 0;">{{ __('Use') }} <code>@{{value}}</code> {{ __('where the field value should be inserted') }}</span>
+                                <span class="help-block" style="font-size: 11px; margin-bottom: 0;">{{ __('Use') }} <code>@{{value}}</code> {{ __('where the field value should be inserted. You can also use') }} <code>interface @{{interface}}</code> {{ __('to start an interface block.') }}</span>
                             </div>
                         </div>
                     </div>
@@ -317,7 +325,7 @@
                         $options.show();
                         $command.show();
                         $commandInput.attr('placeholder', 'e.g. switchport pvid @{{value}}');
-                        $help.html('Use <code>@{{value}}</code> where the field value should be inserted');
+                        $help.html('Use <code>@{{value}}</code> where the field value should be inserted. You can also use <code>interface @{{interface}}</code> to start an interface block.');
                     } else if (val === 'checkbox') {
                         $label.show();
                         $options.hide();
@@ -326,7 +334,7 @@
                         $options.hide();
                         $command.show();
                         $commandInput.attr('placeholder', 'e.g. switchport pvid @{{value}}');
-                        $help.html('Use <code>@{{value}}</code> where the field value should be inserted');
+                        $help.html('Use <code>@{{value}}</code> where the field value should be inserted. You can also use <code>interface @{{interface}}</code> to start an interface block.');
                     } else if (val === 'dynamic_list') {
                         $label.show();
                         $options.hide();
@@ -338,7 +346,7 @@
                         $options.hide();
                         $command.show();
                         $commandInput.attr('placeholder', 'e.g. switchport pvid @{{value}}');
-                        $help.html('Use <code>@{{value}}</code> where the field value should be inserted');
+                        $help.html('Use <code>@{{value}}</code> where the field value should be inserted. You can also use <code>interface @{{interface}}</code> to start an interface block.');
                     }
                 });
                 $lastField.find('.field-type').trigger('change');
