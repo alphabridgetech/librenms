@@ -114,7 +114,10 @@
                                 <div class="col-sm-6">
                                     <input type="text" name="template_name" id="template_name" class="form-control" placeholder="{{ __('Template Name') }}">
                                 </div>
-                                <div class="col-sm-3">
+                                <div class="col-sm-3" style="white-space: nowrap;">
+                                    <button type="button" class="btn btn-primary btn-sm" id="editTemplateBtn" style="display: none; margin-right: 5px;">
+                                        <i class="fa fa-pencil"></i> {{ __('Edit') }}
+                                    </button>
                                     <button type="button" class="btn btn-danger btn-sm" id="deleteTemplateBtn" style="display: none;">
                                         <i class="fa fa-trash"></i> {{ __('Delete') }}
                                     </button>
@@ -446,19 +449,13 @@
                             if (cmdTemp) coreCommands.push(cmdTemp);
                             return;
                         }
-                        let rule1 = cmdTemp;
-                        let rule2 = cmdTemp;
+                        let rule = cmdTemp;
                         vars.forEach(v => {
                             const varLabel = v.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
-                            let sampleVal = '100';
-                            if (v.toLowerCase() === 'from') sampleVal = '5376';
-                            if (v.toLowerCase() === 'to') sampleVal = '262';
                             const reg = new RegExp('\\{\\{' + v + '\\}\\}', 'g');
-                            rule1 = rule1.replace(reg, sampleVal);
-                            rule2 = rule2.replace(reg, varLabel);
+                            rule = rule.replace(reg, varLabel);
                         });
-                        coreCommands.push(rule1);
-                        coreCommands.push(rule2);
+                        coreCommands.push(rule);
                         return;
                     } else {
                         if (commandTemplate) {
@@ -923,6 +920,11 @@
                     $('#template_name').val(template.name);
                     $('#template_config_section').show();
                     $('#deleteTemplateBtn').show();
+                    if (type === 'form') {
+                        $('#editTemplateBtn').show();
+                    } else {
+                        $('#editTemplateBtn').hide();
+                    }
 
                     if (template.interfaces) {
                         pendingTemplateInterfaces = template.interfaces;
@@ -984,6 +986,7 @@
                     $('#template_name').val('');
                     $('#template_config_section').hide();
                     $('#deleteTemplateBtn').hide();
+                    $('#editTemplateBtn').hide();
                     $('#dynamic_form_fields').empty().hide();
                     $('#port_mode_group').show();
                     $('#device_select').val('').trigger('change');
@@ -994,6 +997,25 @@
                     $('#mode_custom').removeClass('active');
                     updateSelectedCount();
                 }
+            });
+
+            // Edit template handler
+            $('#editTemplateBtn').on('click', function() {
+                const val = $('#load_template').val();
+                if (!val) return;
+                const template = JSON.parse(val);
+
+                if (!confirm('Load template "' + template.name + '" into builder for editing? This will overwrite your current unsaved builder progress.')) return;
+
+                $('#builder_template_name').val(template.name);
+                $('#builder_fields_container').empty();
+                if (template.fields) {
+                    template.fields.forEach(function(field) {
+                        addBuilderField(field);
+                    });
+                }
+                updateBuilderPreview();
+                $('html, body').animate({ scrollTop: $('#builder_template_name').offset().top - 20 }, 'slow');
             });
 
             // Delete template handler
