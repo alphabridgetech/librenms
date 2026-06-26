@@ -641,36 +641,60 @@
                 let finalCommands = [];
                 const selectedIfaces = $('.device-interface-select').val();
 
-                // Split: interface-level (with @{{interface}}) vs global
-                const interfaceCmds = [];
-                const globalCmds = [];
-                coreCommands.forEach(function(cmd) {
-                    if (cmd.indexOf('@{{interface}}') !== -1) {
-                        interfaceCmds.push(cmd);
-                    } else {
-                        globalCmds.push(cmd);
-                    }
-                });
-
                 if (selectedIfaces && selectedIfaces.length > 0) {
-                    selectedIfaces.forEach(function(iface) {
-                        if (interfaceCmds.length > 0) {
-                            interfaceCmds.forEach(function(cmd) {
-                                finalCommands.push(cmd.replace(/\{\{interface\}\}/g, iface));
-                            });
-                        } else {
-                            finalCommands.push('interface ' + iface);
-                            globalCmds.forEach(function(cmd) {
+                    const blocks = [];
+                    const hasInterfaceVar = coreCommands.some(cmd => cmd.indexOf('@{{interface}}') !== -1);
+
+                    if (!hasInterfaceVar) {
+                        // Legacy fallback: wrap everything in virtual interface blocks
+                        blocks.push({
+                            type: 'interface',
+                            commands: ['interface @{{interface}}'].concat(coreCommands)
+                        });
+                    } else {
+                        // Dynamic sequential block parsing
+                        let currentBlock = { type: 'global', commands: [] };
+
+                        coreCommands.forEach(function(cmd) {
+                            const trimmed = cmd.trim();
+                            // If it contains @{{interface}}, it starts a new interface block
+                            if (cmd.indexOf('@{{interface}}') !== -1) {
+                                if (currentBlock.commands.length > 0) {
+                                    blocks.push(currentBlock);
+                                }
+                                currentBlock = { type: 'interface', commands: [cmd] };
+                            }
+                            // If it is '!', it resets/exits to a new global block
+                            else if (trimmed === '!') {
+                                if (currentBlock.commands.length > 0) {
+                                    blocks.push(currentBlock);
+                                }
+                                currentBlock = { type: 'global', commands: [cmd] };
+                            }
+                            // Otherwise, it continues the current block (global or interface)
+                            else {
+                                currentBlock.commands.push(cmd);
+                            }
+                        });
+                        if (currentBlock.commands.length > 0) {
+                            blocks.push(currentBlock);
+                        }
+                    }
+
+                    // Generate final commands by iterating through blocks in order
+                    blocks.forEach(function(block) {
+                        if (block.type === 'global') {
+                            block.commands.forEach(function(cmd) {
                                 finalCommands.push(cmd);
+                            });
+                        } else if (block.type === 'interface') {
+                            selectedIfaces.forEach(function(iface) {
+                                block.commands.forEach(function(cmd) {
+                                    finalCommands.push(cmd.replace(/\{\{interface\}\}/g, iface));
+                                });
                             });
                         }
                     });
-                    // Add global-only commands once (not wrapped in interface block)
-                    if (interfaceCmds.length > 0) {
-                        globalCmds.forEach(function(cmd) {
-                            finalCommands.push(cmd);
-                        });
-                    }
                 } else {
                     coreCommands.forEach(function(cmd) {
                         finalCommands.push(cmd.replace(/\{\{interface\}\}/g, ''));
