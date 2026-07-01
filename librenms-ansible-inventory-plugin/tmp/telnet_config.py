@@ -6,7 +6,7 @@ HOST = "192.168.200.245"
 USER = "admin"
 PASSWORD = "admin"
 
-COMMANDS = ["interface GigaEthernet0/1", "description wss"]
+COMMANDS = ["interface GigaEthernet0/2", "description kunalapktest"]
 
 OUTPUT_FILE = "/opt/librenms/librenms-ansible-inventory-plugin/tmp/telnet_output.txt"
 

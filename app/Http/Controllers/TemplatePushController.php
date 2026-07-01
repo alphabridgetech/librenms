@@ -71,7 +71,7 @@ class TemplatePushController extends Controller
             'template_name' => 'nullable|string|max:255',
         ]);
 
-        return $this->processPush($request);
+        return $this->processPushNetworkCommand($request);
     }
 
     public function storeTemplate(Request $request)
