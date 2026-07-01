@@ -206,6 +206,73 @@ class Git
         });
     }
 
+    public function versionChangelog(): array
+    {
+        return $this->cacheGet('versionChangelog', function () {
+            if (!$this->isAvailable()) {
+                return [];
+            }
+
+            // Get up to 100 commits with their decorations
+            $output = $this->run('log', ['-n', '100', '--date=short', '--pretty=format:%h|%d|%ad|%s'])->getOutput();
+            $lines = explode("\n", rtrim($output));
+            
+            $changelog = [];
+            $currentVersion = 'Unreleased Changes';
+            $currentDate = '';
+            
+            foreach ($lines as $line) {
+                if (empty($line)) {
+                    continue;
+                }
+                
+                $parts = explode('|', $line, 4);
+                if (count($parts) < 4) {
+                    continue;
+                }
+                
+                $sha = $parts[0];
+                $decoration = trim($parts[1]);
+                $date = $parts[2];
+                $subject = $parts[3];
+                
+                // Check if this commit has a tag
+                if (!empty($decoration)) {
+                    $decoration = trim($decoration, '()');
+                    $decParts = explode(',', $decoration);
+                    foreach ($decParts as $decPart) {
+                        $decPart = trim($decPart);
+                        if (\Illuminate\Support\Str::startsWith($decPart, 'tag: ')) {
+                            $currentVersion = substr($decPart, 5);
+                            $currentDate = $date;
+                            break;
+                        } elseif (preg_match('/^v?\d+\.\d+\.\d+/', $decPart)) {
+                            $currentVersion = $decPart;
+                            $currentDate = $date;
+                            break;
+                        }
+                    }
+                }
+                
+                if (!isset($changelog[$currentVersion])) {
+                    $changelog[$currentVersion] = [
+                        'version' => $currentVersion,
+                        'date' => $currentDate,
+                        'commits' => []
+                    ];
+                }
+                
+                $changelog[$currentVersion]['commits'][] = [
+                    'sha' => $sha,
+                    'date' => $date,
+                    'subject' => $subject
+                ];
+            }
+            
+            return $changelog;
+        });
+    }
+
     private function headCommit(): array
     {
         return $this->cacheGet('headCommit', function () {

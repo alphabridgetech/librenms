@@ -4,16 +4,42 @@
 
 @section('content')
 <div class="modal fade" id="git_log" tabindex="-1" role="dialog" aria-labelledby="git_log_label" aria-hidden="true">
-    <div class="modal-dialog">
+    <div class="modal-dialog" style="width: 700px; max-width: 90%;">
         <div class="modal-content">
-            <div class="modal-header">
+            <div class="modal-header" style="background: #f8f9fa; border-bottom: 1px solid #dee2e6;">
                 <button type="button" class="close" data-dismiss="modal" aria-label="Close"><span aria-hidden="true">&times;</span></button>
-                <h4 class="modal-title" id="myModalLabel">{{ __('Local git log') }}</h4>
+                <h4 class="modal-title" id="myModalLabel" style="font-weight: 600; color: #333;">{{ __('Version Update History') }}</h4>
             </div>
-            <div class="modal-body">
-                <pre>{!! $git_log !!}</pre>
+            <div class="modal-body" style="max-height: 450px; overflow-y: auto; padding: 20px;">
+                @if(empty($version_changelog))
+                    <div class="alert alert-info">{{ __('No version changes found or Git is not available.') }}</div>
+                @else
+                    @foreach ($version_changelog as $v)
+                        <div class="version-section" style="margin-bottom: 25px;">
+                            <h4 style="border-bottom: 2px solid #5c7080; padding-bottom: 8px; margin-top: 5px; color: #1a252c; font-weight: bold;">
+                                <i class="fa fa-tag"></i> {{ __('Version') }}: {{ $v['version'] }}
+                                @if(!empty($v['date']))
+                                    <span class="label label-default" style="float: right; font-size: 12px; margin-top: 3px;">{{ $v['date'] }}</span>
+                                @endif
+                            </h4>
+                            <div style="padding-left: 15px;">
+                                <ul style="list-style-type: none; padding-left: 0; margin-bottom: 0;">
+                                    @foreach ($v['commits'] as $commit)
+                                        <li style="margin-bottom: 8px; line-height: 1.5; font-size: 14px;">
+                                            <span class="label label-primary" style="font-family: monospace; font-size: 11px; padding: 2px 5px; display: inline-block; min-width: 60px; text-align: center; margin-right: 8px;">{{ $commit['sha'] }}</span>
+                                            <span style="color: #2b3a42;">{{ $commit['subject'] }}</span>
+                                            @if($commit['date'] !== $v['date'])
+                                                <small class="text-muted" style="font-size: 11px; margin-left: 5px;">({{ $commit['date'] }})</small>
+                                            @endif
+                                        </li>
+                                    @endforeach
+                                </ul>
+                            </div>
+                        </div>
+                    @endforeach
+                @endif
             </div>
-            <div class="modal-footer">
+            <div class="modal-footer" style="background: #f8f9fa; border-top: 1px solid #dee2e6;">
                 <button type="button" class="btn btn-default" data-dismiss="modal">@Lang('Close')</button>
             </div>
         </div>
@@ -28,7 +54,7 @@
             <table class='table table-condensed table-hover'>
                 <tr>
                     <td><b>{{ __('Version') }}</b></td>
-                    <td><a target="_blank" href='3'>{{ $version_local }}<span id='version_date' style="display: none;">{{ $git_date }}</span></a></td>
+                    <td><a href="#git_log" data-toggle="modal">{{ $version_local }}<span id='version_date' style="display: none;">{{ $git_date }}</span></a></td>
                 </tr>
                 <tr>
                     <td><b>{{ __('Database Schema') }}</b></td>

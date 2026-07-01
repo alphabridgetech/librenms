@@ -201,8 +201,11 @@ class ErrorReporting
     private static function findFirstNonVendorFrame(): array
     {
         foreach (debug_backtrace() as $trace) {
+            if (!isset($trace['file']) || !isset($trace['line'])) {
+                continue;
+            }
             // not vendor frames
-            if (isset($trace['file']) && self::isUndesirableTracePath($trace['file'])) {
+            if (self::isUndesirableTracePath($trace['file'])) {
                 continue;
             }
             // not this class

@@ -73,6 +73,7 @@ class AboutController extends Controller
             'db_schema' => $version->database(),
             'git_log' => $version->git->log(),
             'git_date' => $version->date(),
+            'version_changelog' => $version->git->versionChangelog(),
             'project_name' => LibrenmsConfig::get('project_name'),
 
             'version_local' => $version->name(),
