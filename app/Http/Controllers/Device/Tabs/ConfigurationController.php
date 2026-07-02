@@ -110,9 +110,9 @@ class ConfigurationController implements DeviceTab
 
     if (File::exists($tftpPath)) {
         $tftpFiles = collect(File::files($tftpPath))
-            ->filter(fn ($file) => $file->isFile())
+            ->filter(fn ($file) => $file->isFile() && str_contains($file->getFilename(), $device->hostname))
             ->map(fn ($file) => $file->getFilename())
-            ->sort()
+            ->sortDesc()
             ->values()
             ->toArray();
     }
@@ -131,6 +131,9 @@ class ConfigurationController implements DeviceTab
             ],
             'tftpServer' => $tftpServer,
             'tftp_files' => $tftpFiles,
+            'backup_time' => \DB::table('config')->where('config_name', 'backup_time')->value('config_value') ?: '01:30',
+            'tftp_server_ip' => \DB::table('config')->where('config_name', 'tftp_server_ip')->value('config_value'),
+            'config_backup_logs' => \App\Models\ConfigBackupLog::with('user')->where('device_id', $device->device_id)->latest()->limit(10)->get(),
             'interfaces' => $device->ports()->pluck('ifName')->toArray(),
             'api_token' => $this->getUserLibreNMSToken(),
             'dropdownLinks' => $this->pageLinks($request),

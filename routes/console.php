@@ -208,3 +208,135 @@ Schedule::command(MaintenanceCleanupNetworks::class, [])
     ->weeklyOn(0, '2:00')
     ->onOneServer()
     ->appendOutputTo($maintenance_log_file);
+
+Artisan::command('backup:startup-configs', function () {
+    /** @var Illuminate\Console\Command $this */
+    $tftpServer = \DB::table('config')->where('config_name', 'tftp_server_ip')->value('config_value');
+    
+    if (empty($tftpServer) || $tftpServer === 'localhost' || $tftpServer === '127.0.0.1') {
+        $tftpServer = parse_url(config('app.url'), PHP_URL_HOST);
+    }
+    
+    if (empty($tftpServer) || $tftpServer === 'localhost' || $tftpServer === '127.0.0.1') {
+        $tftpServer = '192.168.200.128'; // Fallback IP
+    }
+
+    $devices = \App\Models\Device::where('disabled', 0)->get();
+    $this->info("Starting daily startup-config backups for " . $devices->count() . " devices using TFTP server: " . $tftpServer);
+
+    $pluginPath = base_path('librenms-ansible-inventory-plugin');
+    $playbook = "{$pluginPath}/playbooks/tftpexport.yml";
+
+    foreach ($devices as $device) {
+        $hostname = $device->hostname;
+        $hostsFile = "{$pluginPath}/hosts/{$hostname}.yml";
+
+        if (!file_exists($hostsFile)) {
+            $this->warn("Skipping device {$hostname}: hosts definition file not found.");
+            continue;
+        }
+
+        $date = date('Y-m-d');
+        $destination_file = "{$hostname}_{$date}_startup-config";
+        
+        $this->info("Exporting startup-config for {$hostname} to {$destination_file}...");
+
+        $cmd = [
+            'ansible-playbook',
+            '-i', $hostsFile,
+            $playbook,
+            '-e', json_encode([
+                'tftp_server' => $tftpServer,
+                'filename' => 'startup-config',
+                'destination_file' => $destination_file
+            ])
+        ];
+
+        $process = new Process($cmd);
+        $process->setTimeout(12000);
+
+        try {
+            $process->run();
+
+            if ($process->isSuccessful()) {
+                $this->info("Successfully backed up {$hostname}.");
+                
+                // Sync file locally if it was uploaded to a remote TFTP server
+                $localPath = "/tftpboot/{$destination_file}";
+                if (!file_exists($localPath)) {
+                    $downloadCmd = "tftp -g -r " . escapeshellarg($destination_file) . " -l " . escapeshellarg($localPath) . " " . escapeshellarg($tftpServer);
+                    shell_exec($downloadCmd);
+                }
+
+                try {
+                    \App\Models\ConfigBackupLog::create([
+                        'device_id' => $device->device_id,
+                        'user_id' => null, // Automated background task
+                        'filename' => $destination_file,
+                        'tftp_server' => $tftpServer,
+                        'status' => 'success',
+                        'message' => "Daily automated backup completed successfully.",
+                    ]);
+                } catch (\Exception $e) {
+                    $this->warn("Could not log automated backup to DB: " . $e->getMessage());
+                }
+            } else {
+                $this->error("Failed to back up {$hostname}: " . $process->getErrorOutput());
+                try {
+                    \App\Models\ConfigBackupLog::create([
+                        'device_id' => $device->device_id,
+                        'user_id' => null,
+                        'filename' => $destination_file,
+                        'tftp_server' => $tftpServer,
+                        'status' => 'error',
+                        'message' => "Daily automated backup failed: " . $process->getErrorOutput(),
+                    ]);
+                } catch (\Exception $e) {
+                    $this->warn("Could not log automated backup error to DB: " . $e->getMessage());
+                }
+            }
+        } catch (\Symfony\Component\Process\Exception\ProcessTimedOutException $e) {
+            $this->error("Failed to back up {$hostname} due to timeout (120s).");
+            try {
+                \App\Models\ConfigBackupLog::create([
+                    'device_id' => $device->device_id,
+                    'user_id' => null,
+                    'filename' => $destination_file,
+                    'tftp_server' => $tftpServer,
+                    'status' => 'error',
+                    'message' => "Daily automated backup failed: Process timed out after 120 seconds.",
+                ]);
+            } catch (\Exception $dbEx) {
+                $this->warn("Could not log automated backup timeout to DB: " . $dbEx->getMessage());
+            }
+        } catch (\Exception $e) {
+            $this->error("Failed to back up {$hostname} due to exception: " . $e->getMessage());
+            try {
+                \App\Models\ConfigBackupLog::create([
+                    'device_id' => $device->device_id,
+                    'user_id' => null,
+                    'filename' => $destination_file,
+                    'tftp_server' => $tftpServer,
+                    'status' => 'error',
+                    'message' => "Daily automated backup failed with exception: " . $e->getMessage(),
+                ]);
+            } catch (\Exception $dbEx) {
+                $this->warn("Could not log automated backup exception to DB: " . $dbEx->getMessage());
+            }
+        }
+    }
+})->purpose('Backup startup-configs daily for all active network devices');
+
+$backupTime = '01:30';
+$tftpServer = '192.168.200.128';
+try {
+    $backupTime = \DB::table('config')->where('config_name', 'backup_time')->value('config_value') ?: '01:30';
+    $tftpServer = \DB::table('config')->where('config_name', 'tftp_server_ip')->value('config_value') ?: '192.168.200.128';
+} catch (\Exception $e) {
+    // Fallback to default if DB is not reachable during bootstrap (e.g. CLI operations)
+}
+
+Schedule::command('backup:startup-configs')
+    ->dailyAt($backupTime)
+    ->onOneServer()
+    ->appendOutputTo(config('log_dir', storage_path('logs')) . '/startup_backups.log');

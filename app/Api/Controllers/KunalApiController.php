@@ -777,15 +777,18 @@ public function getvlan($hostname)
 
     public function tftpexport(Request $request, $hostname)
     {
-        
         $request->validate([
             'tftp_server' => 'required|string',
             'filename'    => 'required|string',
         ]);
+        
+        $device = \App\Models\Device::where('hostname', $hostname)->first();
+        $deviceId = $device ? $device->device_id : null;
+
         $playbook = "{$this->pluginPath}/playbooks/tftpexport.yml";
         $hosts    = "{$this->pluginPath}/hosts/{$hostname}.yml";
 
-        $destination_file = $hostname . '_' . $request->filename;
+        $destination_file = $hostname . '_' . date('Y-m-d_His') . '_' . $request->filename;
         $exportPath = "{$this->tftpPath}/{$destination_file}";
 
         $output = $this->runAnsible($playbook, $hosts, [
@@ -793,9 +796,47 @@ public function getvlan($hostname)
             "filename"    => $request->filename,
             "destination_file" => $destination_file,
         ]);
+        
         if (!file_exists($exportPath)) {
-        return $this->error("Export failed, file not found");
+            // Attempt to pull the file from the remote TFTP server to the local directory
+            $tftpIp = $request->tftp_server;
+            $downloadCmd = "tftp -g -r " . escapeshellarg($destination_file) . " -l " . escapeshellarg($exportPath) . " " . escapeshellarg($tftpIp);
+            shell_exec($downloadCmd);
         }
+
+        if (!file_exists($exportPath)) {
+            if ($deviceId) {
+                try {
+                    \App\Models\ConfigBackupLog::create([
+                        'device_id' => $deviceId,
+                        'user_id' => \Auth::id(),
+                        'filename' => $destination_file,
+                        'tftp_server' => $request->tftp_server,
+                        'status' => 'error',
+                        'message' => 'TFTP export failed, file not found. Raw output: ' . $output,
+                    ]);
+                } catch (\Exception $e) {
+                    \Log::warning("Could not log export error: " . $e->getMessage());
+                }
+            }
+            return $this->error("Export failed, file not found");
+        }
+
+        if ($deviceId) {
+            try {
+                \App\Models\ConfigBackupLog::create([
+                    'device_id' => $deviceId,
+                    'user_id' => \Auth::id(),
+                    'filename' => $destination_file,
+                    'tftp_server' => $request->tftp_server,
+                    'status' => 'success',
+                    'message' => 'Startup-config exported successfully.',
+                ]);
+            } catch (\Exception $e) {
+                \Log::warning("Could not log export success: " . $e->getMessage());
+            }
+        }
+
         return $this->success([
             "message"  => "TFTP export initiated",
             "filename" => $request->filename,
@@ -954,6 +995,36 @@ public function getvlan($hostname)
 
 
 
+
+    public function saveTftpSchedule(Request $request)
+    {
+        $request->validate([
+            'backup_time' => 'required|regex:/^\d{2}:\d{2}$/',
+            'tftp_server_ip' => 'nullable|string',
+        ]);
+
+        $tftpServerIp = $request->tftp_server_ip ?: $request->getHost();
+
+        \DB::table('config')->updateOrInsert(
+            ['config_name' => 'backup_time'],
+            [
+                'config_value' => $request->backup_time,
+            ]
+        );
+
+        \DB::table('config')->updateOrInsert(
+            ['config_name' => 'tftp_server_ip'],
+            [
+                'config_value' => $tftpServerIp,
+            ]
+        );
+
+        return $this->success([
+            "message" => "Backup schedule updated successfully",
+            "backup_time" => $request->backup_time,
+            "tftp_server_ip" => $tftpServerIp,
+        ]);
+    }
 
     #------------------------------------------------------------
     #                            UTIL
