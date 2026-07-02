@@ -133,6 +133,7 @@ class ConfigurationController implements DeviceTab
             'tftp_files' => $tftpFiles,
             'backup_time' => \DB::table('config')->where('config_name', 'backup_time')->value('config_value') ?: '01:30',
             'tftp_server_ip' => \DB::table('config')->where('config_name', 'tftp_server_ip')->value('config_value'),
+            'backup_retention_days' => \DB::table('config')->where('config_name', 'backup_retention_days')->value('config_value') ?: 30,
             'config_backup_logs' => \App\Models\ConfigBackupLog::with('user')->where('device_id', $device->device_id)->latest()->limit(10)->get(),
             'interfaces' => $device->ports()->pluck('ifName')->toArray(),
             'api_token' => $this->getUserLibreNMSToken(),

@@ -1001,6 +1001,7 @@ public function getvlan($hostname)
         $request->validate([
             'backup_time' => 'required|regex:/^\d{2}:\d{2}$/',
             'tftp_server_ip' => 'nullable|string',
+            'backup_retention_days' => 'required|integer|min:1',
         ]);
 
         $tftpServerIp = $request->tftp_server_ip ?: $request->getHost();
@@ -1019,10 +1020,18 @@ public function getvlan($hostname)
             ]
         );
 
+        \DB::table('config')->updateOrInsert(
+            ['config_name' => 'backup_retention_days'],
+            [
+                'config_value' => $request->backup_retention_days,
+            ]
+        );
+
         return $this->success([
             "message" => "Backup schedule updated successfully",
             "backup_time" => $request->backup_time,
             "tftp_server_ip" => $tftpServerIp,
+            "backup_retention_days" => $request->backup_retention_days,
         ]);
     }
 

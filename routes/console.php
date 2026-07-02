@@ -325,6 +325,44 @@ Artisan::command('backup:startup-configs', function () {
             }
         }
     }
+
+    // Cleanup old backups based on retention settings
+    $retentionDays = 30;
+    try {
+        $retentionDays = (int)\DB::table('config')->where('config_name', 'backup_retention_days')->value('config_value') ?: 30;
+    } catch (\Exception $e) {
+        // Fallback to default
+    }
+
+    $this->info("Cleaning up backups older than {$retentionDays} days...");
+    $thresholdTime = time() - ($retentionDays * 24 * 60 * 60);
+
+    // 1. Delete files in /tftpboot older than threshold
+    $tftpPath = '/tftpboot';
+    if (file_exists($tftpPath) && is_dir($tftpPath)) {
+        $files = scandir($tftpPath);
+        foreach ($files as $file) {
+            if ($file === '.' || $file === '..') {
+                continue;
+            }
+            $filePath = "{$tftpPath}/{$file}";
+            if (is_file($filePath) && str_contains($file, 'startup-config')) {
+                if (filemtime($filePath) < $thresholdTime) {
+                    unlink($filePath);
+                    $this->info("Deleted old local backup file: {$file}");
+                }
+            }
+        }
+    }
+
+    // 2. Delete database log entries older than threshold
+    try {
+        $thresholdDate = date('Y-m-d H:i:s', $thresholdTime);
+        $deletedLogsCount = \App\Models\ConfigBackupLog::where('created_at', '<', $thresholdDate)->delete();
+        $this->info("Deleted {$deletedLogsCount} old backup log records from database.");
+    } catch (\Exception $e) {
+        $this->error("Failed to delete old log records: " . $e->getMessage());
+    }
 })->purpose('Backup startup-configs daily for all active network devices');
 
 $backupTime = '01:30';

@@ -354,6 +354,10 @@
             <label class="tq-label">{{ __('TFTP Server IP (Optional)') }}</label>
             <input type="text" id="tftpServerInput" class="tq-input" value="{{ $data['tftp_server_ip'] }}" placeholder="Leave blank to use current Telequill IP: {{ $data['tftpServer'] }}" style="max-width: 400px;">
         </div>
+        <div class="tq-form-group">
+            <label class="tq-label">{{ __('Backup Retention Period (Days)') }}</label>
+            <input type="number" id="backupRetentionInput" class="tq-input" value="{{ $data['backup_retention_days'] }}" placeholder="30" min="1" style="width: auto; max-width: 200px;">
+        </div>
         
         <div style="margin-top: 24px;">
             <button type="button" id="saveScheduleBtn" class="tq-btn tq-btn-info" onclick="saveBackupSchedule()">
@@ -570,9 +574,14 @@
         const apiToken = "{{ $data['api_token'] }}";
         const backupTime = document.getElementById("backupTimeInput").value;
         const tftpServerIp = document.getElementById("tftpServerInput").value;
+        const backupRetentionDays = document.getElementById("backupRetentionInput").value;
 
         if (!backupTime) {
             alert("Backup time is required!");
+            return;
+        }
+        if (!backupRetentionDays || backupRetentionDays < 1) {
+            alert("Backup retention period must be at least 1 day!");
             return;
         }
 
@@ -588,7 +597,8 @@
             },
             body: JSON.stringify({
                 backup_time: backupTime,
-                tftp_server_ip: tftpServerIp
+                tftp_server_ip: tftpServerIp,
+                backup_retention_days: backupRetentionDays
             })
         })
         .then(res => res.json())
@@ -596,7 +606,7 @@
             btn.disabled = false;
             btn.innerHTML = 'Save Schedule';
             if (res.status === "success") {
-                alert("Backup schedule saved successfully! Future daily backups will run at: " + backupTime + " using TFTP: " + res.tftp_server_ip);
+                alert("Backup schedule saved successfully! Future daily backups will run at: " + backupTime + " using TFTP: " + res.tftp_server_ip + " with a retention of " + res.backup_retention_days + " days.");
             } else {
                 alert("Failed to save schedule: " + (res.message || "Unknown error"));
             }

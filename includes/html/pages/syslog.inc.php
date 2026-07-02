@@ -88,6 +88,7 @@ $pagetitle[] = 'Syslog';
         '&nbsp;&nbsp;<input name="to" type="text" class="form-control" id="dtpickerto" maxlength="16" value="<?php echo htmlspecialchars($vars['to'] ?? ''); ?>" placeholder="To" data-date-format="YYYY-MM-DD HH:mm">' +
         '</div>' +
         '&nbsp;&nbsp;<button type="submit" class="btn btn-default">Filter</button>' +
+        '&nbsp;&nbsp;<button type="button" id="liveToggleBtn" class="btn btn-warning" onclick="toggleLiveSyslog()"><i class="fa fa-play"></i> Live Output</button>' +
         '</form>' +
         '</div>' +
         '</div>' +
@@ -192,5 +193,27 @@ $pagetitle[] = 'Syslog';
             }
         }
     })<?php echo isset($vars['priority']) ? ".val('" . htmlspecialchars($vars['priority']) . "').trigger('change');" : ''; ?>;
+
+    let liveSyslogInterval = null;
+    function toggleLiveSyslog() {
+        const btn = document.getElementById("liveToggleBtn");
+        if (liveSyslogInterval) {
+            clearInterval(liveSyslogInterval);
+            liveSyslogInterval = null;
+            btn.innerHTML = '<i class="fa fa-play"></i> Live Output';
+            btn.className = "btn btn-warning";
+        } else {
+            // Instantly refresh first
+            $("#syslog").bootgrid("reload");
+            
+            // Set 5 seconds interval
+            liveSyslogInterval = setInterval(() => {
+                $("#syslog").bootgrid("reload");
+            }, 5000);
+            
+            btn.innerHTML = '<i class="fa fa-stop"></i> Live: ON (5s)';
+            btn.className = "btn btn-danger";
+        }
+    }
 </script>
 
