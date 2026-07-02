@@ -13,7 +13,7 @@ show_version: |
             PCB version:A
             snmp info:
             vend_ID:58158   product_ID:311   system_ID:1.3.6.1.4.1.58158.1.311.0
-            AS212XTS uptime is 0:21:33:25, The current time: 2000-1-1 21:34:20
+            AS212XTS uptime is 0:23:18:25, The current time: 2000-1-1 23:19:23
             7 times of reboot catched, last 4 times reboot history recorded:
             No. 1: System is rebooted by command at 2000-1-1 0:22:43, uptime 0:00:22:31
             No. 2: System is rebooted by command at 2000-1-1 0:44:41, uptime 0:00:44:28
