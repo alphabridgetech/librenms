@@ -735,7 +735,9 @@ function applySiteStyle(newStyle) {
 
     if (window.siteStyle !== newStyle) {
         window.siteStyle = newStyle;
-        $.post(ajax_url + '/set_style', { style: newStyle });
+        if (window.isAuthenticated) {
+            $.post(ajax_url + '/set_style', { style: newStyle });
+        }
         document.querySelectorAll('img.graph-image').forEach(img => {
             img.src = img.src.replace(/&style=\w+/g, '') + '&style=' + newStyle;
         });

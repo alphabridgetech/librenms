@@ -83,6 +83,7 @@
     <script type="text/javascript" src="{{ asset('js/toastr.min.js?ver=05072021') }}"></script>
     <script type="text/javascript" src="{{ asset('js/boot.js?ver=10272021') }}"></script>
     <script>
+        window.isAuthenticated = {{ Auth::check() ? 'true' : 'false' }};
         window.siteStyle = '{{ session('applied_site_style') }}';
         window.siteStylePreference = '{{ session('preferences.site_style') ?? session('applied_site_style', 'device') }}';
 
@@ -340,9 +341,10 @@
            Fetch Alerts
         -------------------------------- */
 
+        @auth
         setInterval(function() {
 
-            $.get("ajax/alerts-api", function(data) {
+            $.get(window.location.origin + "/ajax/alerts-api", function(data) {
 
                 if (!data.alerts) return;
 
@@ -378,6 +380,7 @@
             });
 
         }, 5000);
+        @endauth
     </script>
 
 </body>
