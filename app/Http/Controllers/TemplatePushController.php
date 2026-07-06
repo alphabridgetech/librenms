@@ -19,7 +19,7 @@ class TemplatePushController extends Controller
     {
         $this->authorize('create', \App\Models\CustomMib::class);
         
-        $devices = Device::orderBy('hostname')->get(['device_id', 'hostname', 'overwrite_ip']);
+        $devices = Device::orderBy('hostname')->get(['device_id', 'hostname', 'overwrite_ip', 'sysName', 'display', 'ip']);
         
         $templates = [];
         try {

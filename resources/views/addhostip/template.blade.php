@@ -140,7 +140,7 @@ switchport pvid @{{value}}
                                         <option value="">{{ __('-- Select Device --') }}</option>
                                         @foreach($devices as $device)
                                             <option value="{{ $device->device_id }}" data-ip="{{ $device->overwrite_ip ?: $device->hostname }}">
-                                                {{ $device->hostname }} ({{ $device->overwrite_ip ?: $device->hostname }})
+                                                {{ $device->sysName ?: $device->hostname }} ({{ $device->overwrite_ip ?: $device->hostname }})
                                             </option>
                                         @endforeach
                                     </select>
@@ -227,6 +227,11 @@ switchport pvid @{{value}}
             let pendingTemplateInterfaces = {};
             let interfaceRequestId = 0;
             let builderFieldCount = 0;
+
+            $('#device_select').select2({
+                placeholder: '-- Select Device --',
+                allowClear: true
+            });
 
             function getTemplateVariables(templateStr) {
                 const vars = [];
