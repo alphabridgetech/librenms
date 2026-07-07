@@ -16,6 +16,7 @@ return [
         'poller' => 'Poller',
         'system' => 'System',
         'webui' => 'Web UI',
+        'default_snmp' => 'Default SNMP',
     ],
     'sections' => [
         'alerting' => [
@@ -88,6 +89,9 @@ return [
             'scheduledtasks' => ['name' => 'Scheduled Tasks'],
             'server' => ['name' => 'Server'],
             'reporting' => ['name' => 'Reporting'],
+        ],
+        'default_snmp' => [
+            'default_snmp' => ['name' => 'Default SNMP Credentials'],
         ],
         'webui' => [
             'availability-map' => ['name' => 'Availability Map Settings'],
@@ -2352,6 +2356,60 @@ return [
         'smokeping.url' => [
             'description' => 'URL to smokeping',
             'help' => 'Full URL to the smokeping gui',
+        ],
+        'default_snmp' => [
+            'enabled' => [
+                'description' => 'Enable Default SNMP Config',
+                'help' => 'When enabled, the Add Device page will use these defaults automatically when no SNMP credentials are provided.',
+            ],
+            'version' => [
+                'description' => 'Default SNMP Version',
+                'help' => 'Default SNMP version to use when adding devices.',
+            ],
+            'port' => [
+                'description' => 'Default SNMP Port',
+                'help' => 'Default SNMP port to use when adding devices.',
+            ],
+            'transport' => [
+                'description' => 'Default SNMP Transport',
+                'help' => 'Default SNMP transport protocol to use when adding devices.',
+            ],
+            'community' => [
+                'description' => 'Default SNMP Community',
+                'help' => 'Default community string for SNMP v1/v2c when adding devices.',
+            ],
+            'v3_authlevel' => [
+                'description' => 'Default SNMPv3 Auth Level',
+                'help' => 'Default authentication level for SNMPv3 when adding devices.',
+            ],
+            'v3_authname' => [
+                'description' => 'Default SNMPv3 Auth User Name',
+                'help' => 'Default SNMPv3 authentication username.',
+            ],
+            'v3_authpass' => [
+                'description' => 'Default SNMPv3 Auth Password',
+                'help' => 'Default SNMPv3 authentication password.',
+            ],
+            'v3_authalgo' => [
+                'description' => 'Default SNMPv3 Auth Algorithm',
+                'help' => 'Default SNMPv3 authentication algorithm.',
+            ],
+            'v3_cryptopass' => [
+                'description' => 'Default SNMPv3 Crypto Password',
+                'help' => 'Default SNMPv3 privacy (encryption) password.',
+            ],
+            'v3_cryptoalgo' => [
+                'description' => 'Default SNMPv3 Crypto Algorithm',
+                'help' => 'Default SNMPv3 privacy (encryption) algorithm.',
+            ],
+            'ssh_user' => [
+                'description' => 'Default SSH Username',
+                'help' => 'Default SSH username for devices added via quick add.',
+            ],
+            'ssh_pass' => [
+                'description' => 'Default SSH Password',
+                'help' => 'Default SSH password for devices added via quick add.',
+            ],
         ],
     ],
     'twofactor' => [

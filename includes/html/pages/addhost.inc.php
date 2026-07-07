@@ -92,6 +92,23 @@ if (! empty($_POST['hostname'])) {
     } else {
         $new_device = new \App\Models\Device(['hostname' => $hostname]);
 
+        // Apply default SNMP config if enabled and no specific credentials provided
+        $default_snmp_enabled = LibrenmsConfig::get('default_snmp.enabled', false);
+        if ($default_snmp_enabled && empty($_POST['community']) && empty($_POST['authname']) && empty($_POST['authpass'])) {
+            $_POST['snmpver'] = LibrenmsConfig::get('default_snmp.version', 'v2c');
+            $_POST['port'] = LibrenmsConfig::get('default_snmp.port', '');
+            $_POST['transport'] = LibrenmsConfig::get('default_snmp.transport', '');
+            $_POST['community'] = LibrenmsConfig::get('default_snmp.community', '');
+            $_POST['authlevel'] = LibrenmsConfig::get('default_snmp.v3_authlevel', 'noAuthNoPriv');
+            $_POST['authname'] = LibrenmsConfig::get('default_snmp.v3_authname', '');
+            $_POST['authpass'] = LibrenmsConfig::get('default_snmp.v3_authpass', '');
+            $_POST['authalgo'] = LibrenmsConfig::get('default_snmp.v3_authalgo', 'MD5');
+            $_POST['cryptopass'] = LibrenmsConfig::get('default_snmp.v3_cryptopass', '');
+            $_POST['cryptoalgo'] = LibrenmsConfig::get('default_snmp.v3_cryptoalgo', 'AES');
+            $_POST['ssh_user'] = LibrenmsConfig::get('default_snmp.ssh_user', '');
+            $_POST['ssh_pass'] = LibrenmsConfig::get('default_snmp.ssh_pass', '');
+        }
+
         if (Auth::user()->hasGlobalRead()) {
             // Settings common to SNMPv2 & v3
             if ($_POST['port']) {
@@ -273,7 +290,8 @@ foreach (PortAssociationMode::getModes() as $mode) {
           </div>
         </div>
         <div id="snmpv3">
-          <div class="form-group">
+            
+          <div class="form-group">  
             <div class="col-sm-12 alert alert-info">
               <label class="control-label text-left input-sm">SNMPv3 Configuration</label>
             </div>

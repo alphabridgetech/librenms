@@ -58,6 +58,7 @@ use App\Http\Controllers\TftpDownloadController;
 use App\Http\Controllers\SystemBulkUploadController;
 use App\Http\Controllers\LicenceController;
 use App\Http\Controllers\TemplatePushController;
+use App\Http\Controllers\ZtpController;
 use App\Services\LicenseVerifier;
 
 /*
@@ -79,6 +80,9 @@ Route::get(
 
 Route::post('/license/upload', [LicenceController::class, 'licenceUpload'])->name('license.upload');
 Route::post('/license/upload-key', [LicenceController::class, 'uploadPublicKey'])->name('license.upload-key');
+
+// ZTP: public endpoint — called by the switch during boot (no auth required)
+Route::get('/ztp/config/{mac}', [ZtpController::class, 'serveConfig'])->name('ztp.config');
 
 // Auth
 AuthFacade::routes(['register' => false, 'reset' => false, 'verify' => false]);
@@ -242,6 +246,10 @@ Route::middleware(['auth', 'license'])->group(function () {
     // Add to routes/web.php for testing
     Route::get('/system/bulk-upload', [SystemBulkUploadController::class, 'index'])->name('system.bulk.upload');
     Route::post('/system/bulk-upload/process', [SystemBulkUploadController::class, 'process'])->name('system.bulk.upload.process');
+
+    // ZTP (Zero Touch Provisioning) — authenticated management routes
+    Route::resource('ztp', ZtpController::class)->except(['show']);
+    Route::post('ztp/{ztp}/reset', [ZtpController::class, 'resetStatus'])->name('ztp.reset');
 
 
     //kunal add 
