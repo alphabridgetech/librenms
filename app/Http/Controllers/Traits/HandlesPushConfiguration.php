@@ -14,6 +14,42 @@ trait HandlesPushConfiguration
     protected $venv;
     protected $pluginPath;
 
+    protected function loadTemplateData(string $templateName, ?string $folder = null): ?array
+    {
+        $slug = Str::slug($templateName);
+        
+        if (!empty($folder)) {
+            $path = 'templates/' . Str::slug($folder) . '/' . $slug . '.json';
+            if (Storage::disk('local')->exists($path)) {
+                $content = Storage::disk('local')->get($path);
+                return json_decode($content, true);
+            }
+        }
+        
+        $path = 'templates/' . $slug . '.json';
+        if (Storage::disk('local')->exists($path)) {
+            $content = Storage::disk('local')->get($path);
+            return json_decode($content, true);
+        }
+
+        $path = 'templates/general/' . $slug . '.json';
+        if (Storage::disk('local')->exists($path)) {
+            $content = Storage::disk('local')->get($path);
+            return json_decode($content, true);
+        }
+
+        // Fallback: search all files in templates directory
+        $files = Storage::disk('local')->allFiles('templates');
+        foreach ($files as $file) {
+            if (basename($file) === $slug . '.json') {
+                $content = Storage::disk('local')->get($file);
+                return json_decode($content, true);
+            }
+        }
+
+        return null;
+    }
+
     protected function initAnsible()
     {
         $this->venv = base_path('librenms-ansible-inventory-plugin/bin/activate');
@@ -90,10 +126,8 @@ trait HandlesPushConfiguration
             $commands = array_values($commands);
         } elseif ($request->has('use_template_commands')) {
             if ($request->filled('loaded_template_name')) {
-                $templateFile = 'templates/' . Str::slug($request->input('template_folder', 'general')) . '/' . Str::slug($request->loaded_template_name) . '.json';
-                if (Storage::disk('local')->exists($templateFile)) {
-                    $content = Storage::disk('local')->get($templateFile);
-                    $data = json_decode($content, true);
+                $data = $this->loadTemplateData($request->loaded_template_name, $request->input('template_folder'));
+                if ($data) {
                     $commands = $data['commands'] ?? [];
                     if (empty($selectedInterfaces) && isset($data['interfaces'])) {
                         $selectedInterfaces = $data['interfaces'];
@@ -172,7 +206,7 @@ trait HandlesPushConfiguration
                 $ansibleResult = $this->runAnsible($playbook, $inventoryFile, $extraVars);
                 $output = $ansibleResult['output'];
                 $exitCode = $ansibleResult['exit_code'];
-                $isFailed = ($exitCode !== 0) || (strpos($output, 'failed=1') !== false) || (strpos($output, 'unreachable=1') !== false) || (strpos($output, 'ERROR:') !== false) || (strpos($output, 'Unknown command') !== false) || (strpos($output, 'Invalid input') !== false);
+                $isFailed = ($exitCode !== 0) || (strpos($output, 'failed=1') !== false) || (strpos($output, 'unreachable=1') !== false) || (strpos($output, 'ERROR:') !== false);
 
                 if ($isFailed) {
                     $results[] = ['ip' => $ip, 'hostname' => $hostname, 'status' => 'failed', 'ansible_output' => $output];
@@ -226,10 +260,8 @@ trait HandlesPushConfiguration
             $commands = array_values($commands);
         } elseif ($request->has('use_template_commands')) {
             if ($request->filled('loaded_template_name')) {
-                $templateFile = 'templates/' . Str::slug($request->input('template_folder', 'general')) . '/' . Str::slug($request->loaded_template_name) . '.json';
-                if (Storage::disk('local')->exists($templateFile)) {
-                    $content = Storage::disk('local')->get($templateFile);
-                    $data = json_decode($content, true);
+                $data = $this->loadTemplateData($request->loaded_template_name, $request->input('template_folder'));
+                if ($data) {
                     $commands = $data['commands'] ?? [];
                     if (empty($selectedInterfaces) && isset($data['interfaces'])) {
                         $selectedInterfaces = $data['interfaces'];
@@ -308,7 +340,7 @@ trait HandlesPushConfiguration
                 $ansibleResult = $this->runAnsible($playbook, $inventoryFile, $extraVars);
                 $output = $ansibleResult['output'];
                 $exitCode = $ansibleResult['exit_code'];
-                $isFailed = ($exitCode !== 0) || (strpos($output, 'failed=1') !== false) || (strpos($output, 'unreachable=1') !== false) || (strpos($output, 'ERROR:') !== false) || (strpos($output, 'Unknown command') !== false) || (strpos($output, 'Invalid input') !== false);
+                $isFailed = ($exitCode !== 0) || (strpos($output, 'failed=1') !== false) || (strpos($output, 'unreachable=1') !== false) || (strpos($output, 'ERROR:') !== false);
 
                 if ($isFailed) {
                     $results[] = ['ip' => $ip, 'hostname' => $hostname, 'status' => 'failed', 'ansible_output' => $output];

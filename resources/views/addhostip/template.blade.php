@@ -62,9 +62,19 @@ switchport pvid @{{value}}
                             </div>
                         </div>
                         <div class="panel-body">
-                            <div class="form-group">
-                                <label for="builder_template_name">{{ __('Template Name') }}</label>
-                                <input type="text" id="builder_template_name" class="form-control" placeholder="{{ __('My Template') }}">
+                            <div class="row">
+                                <div class="col-sm-6">
+                                    <div class="form-group">
+                                        <label for="builder_template_name">{{ __('Template Name') }}</label>
+                                        <input type="text" id="builder_template_name" class="form-control" placeholder="{{ __('My Template') }}">
+                                    </div>
+                                </div>
+                                <div class="col-sm-6">
+                                    <div class="form-group">
+                                        <label for="builder_template_folder">{{ __('Folder') }}</label>
+                                        <input type="text" id="builder_template_folder" class="form-control" placeholder="{{ __('general') }}">
+                                    </div>
+                                </div>
                             </div>
 
                             <div id="builder_fields_container">
@@ -497,6 +507,7 @@ switchport pvid @{{value}}
                 const data = {
                     _token: '{{ csrf_token() }}',
                     template_name: name,
+                    template_folder: $('#builder_template_folder').val() || '',
                     port_mode: 'form',
                     fields: fields
                 };
@@ -1045,6 +1056,7 @@ switchport pvid @{{value}}
                 if (!confirm('Load template "' + template.name + '" into builder for editing? This will overwrite your current unsaved builder progress.')) return;
 
                 $('#builder_template_name').val(template.name);
+                $('#builder_template_folder').val(template.template_folder || '');
                 $('#builder_fields_container').empty();
                 if (template.fields) {
                     template.fields.forEach(function(field) {
@@ -1061,12 +1073,22 @@ switchport pvid @{{value}}
                 if (!name) return;
                 if (!confirm('Delete template "' + name + '"?')) return;
 
+                let folder = '';
+                const val = $('#load_template').val();
+                if (val) {
+                    try {
+                        const template = JSON.parse(val);
+                        folder = template.template_folder || '';
+                    } catch (e) {}
+                }
+
                 $.ajax({
                     url: '{{ route("addhost.template.delete") }}',
                     type: 'POST',
                     data: {
                         _token: '{{ csrf_token() }}',
-                        template_name: name
+                        template_name: name,
+                        template_folder: folder
                     },
                     success: function(response) {
                         if (response.success) {

@@ -68,8 +68,7 @@
 
               # SAVE CONFIG
               try:
-                  output += send_cmd(tn, "exit") # Go back one level
-                  output += send_cmd(tn, "exit") # Go back to privileged EXEC
+                  output += send_cmd(tn, "end") # Go directly to privileged EXEC mode
                   output += send_cmd(tn, "write", timeout=10) # Try standard 'write'
               except Exception as save_err:
                   output += "\nNOTE: Save/Exit command failed (but user commands were sent): " + str(save_err)
@@ -100,7 +99,7 @@
     - name: Fetch output file
       fetch:
         src: "{{ output_file }}"
-        dest: "./telnet_output_{{ inventory_hostname }}.txt"
+        dest: "/opt/librenms/librenms-ansible-inventory-plugin/output/telnet_output_{{ inventory_hostname }}.txt"
         flat: yes
       delegate_to: localhost
 

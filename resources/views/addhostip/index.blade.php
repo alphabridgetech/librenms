@@ -70,12 +70,8 @@
                 <!-- Template Name Input -->
                 <div class="form-group">
                     <label for="template_name" class="col-sm-3 control-label">{{ __('Template Name') }}</label>
-                    <div class="col-sm-4">
+                    <div class="col-sm-9">
                         <input type="text" name="template_name" id="template_name" class="form-control" placeholder="{{ __('Template Name') }}">
-                    </div>
-                    <label for="template_folder" class="col-sm-1 control-label">{{ __('Folder') }}</label>
-                    <div class="col-sm-4">
-                        <input type="text" name="template_folder" id="template_folder" class="form-control" placeholder="{{ __('general') }}">
                     </div>
                 </div>
 
@@ -286,9 +282,11 @@
                         if ($('#use_template_commands').length === 0) {
                             $('#ipUploadForm').append('<input type="hidden" id="use_template_commands" name="use_template_commands" value="1">');
                             $('#ipUploadForm').append('<input type="hidden" id="loaded_template_name" name="loaded_template_name" value="">');
+                            $('#ipUploadForm').append('<input type="hidden" id="template_folder_hidden" name="template_folder" value="">');
                         }
                         $('#use_template_commands').val('1');
                         $('#loaded_template_name').val(template.name);
+                        $('#template_folder_hidden').val(template.template_folder || '');
                         $('#loaded_filename').remove();
                         $('#config_file').prop('required', false);
                     }
@@ -301,6 +299,7 @@
                     $('#configPreview').slideUp();
                     $('#use_template_commands').remove();
                     $('#loaded_template_name').remove();
+                    $('#template_folder_hidden').remove();
                     $('#config_file').prop('required', true);
                 }
             });

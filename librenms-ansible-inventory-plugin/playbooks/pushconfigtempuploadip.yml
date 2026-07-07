@@ -44,29 +44,40 @@
               if shell.recv_ready():
                   output += shell.recv(65535).decode(errors="ignore")
 
-              cmds = ["enable", "config"] + COMMANDS + ["exit", "exit", "write"]
-
-              for cmd in cmds:
+              def send_ssh_cmd(cmd):
                   shell.send(cmd + "\n")
                   time.sleep(1)
-
+                  res = ""
                   while shell.recv_ready():
-                      response = shell.recv(65535).decode(errors="ignore")
-                      output += response
+                      res += shell.recv(65535).decode(errors="ignore")
+                  
+                  error_patterns = [
+                      "Unknown command",
+                      "Invalid input",
+                      "Incomplete command",
+                      "Ambiguous command",
+                      "Invalid command"
+                  ]
+                  for pattern in error_patterns:
+                      if pattern in res:
+                          raise Exception(f"Device Error on command '{cmd}': {pattern}")
+                  return res
 
-                      error_patterns = [
-                          "Unknown command",
-                          "Invalid input",
-                          "Incomplete command",
-                          "Ambiguous command",
-                          "Invalid command"
-                      ]
+              # Enable & Config Mode
+              output += send_ssh_cmd("enable")
+              output += send_ssh_cmd("config")
 
-                      for pattern in error_patterns:
-                          if pattern in response:
-                              raise Exception(
-                                  f"Device Error on command '{cmd}': {pattern}"
-                              )
+              # RUN COMMANDS (FAST LOOP)
+              for cmd in COMMANDS:
+                  if cmd.strip():
+                      output += send_ssh_cmd(cmd.strip())
+
+              # SAVE CONFIG
+              try:
+                  output += send_ssh_cmd("end")
+                  output += send_ssh_cmd("write")
+              except Exception as save_err:
+                  output += "\nNOTE: Save/Exit command failed (but user commands were sent): " + str(save_err)
 
               shell.send("exit\n")
               time.sleep(1)
@@ -93,6 +104,13 @@
       command: python3 {{ script_path }}
       register: result
       changed_when: false
+      delegate_to: localhost
+
+    - name: Fetch output file
+      fetch:
+        src: "{{ output_file }}"
+        dest: "/opt/librenms/librenms-ansible-inventory-plugin/output/ssh_output_{{ inventory_hostname }}.txt"
+        flat: yes
       delegate_to: localhost
 
     - name: Show result

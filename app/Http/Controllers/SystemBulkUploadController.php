@@ -57,6 +57,15 @@ class SystemBulkUploadController extends Controller
                         $content = Storage::disk('local')->get($file);
                         $data = json_decode($content, true);
                         if ($data) {
+                            if (isset($data['type']) && $data['type'] === 'form') {
+                                continue;
+                            }
+                            $parts = explode('/', $file);
+                            if (count($parts) > 2) {
+                                $data['template_folder'] = $parts[count($parts) - 2];
+                            } else {
+                                $data['template_folder'] = '';
+                            }
                             $templates[] = $data;
                         }
                     }

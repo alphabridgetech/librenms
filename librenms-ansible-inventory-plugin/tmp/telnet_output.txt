@@ -1,4 +1,5 @@
- 
+ *****
+
 
 
 
@@ -13,13 +14,8 @@
 
 
 
-AS212XTS>enable
-AS212XTS#config
-AS212XTS_config#interface GigaEthernet0/2
-AS212XTS_config_g0/2#description kunalapktest
-AS212XTS_config_g0/2#exit
-AS212XTS_config#exit
-AS212XTS#write
-Saving current configuration...
-OK!
-AS212XTS#
+kunalll>enable
+kunalll#config
+kunalll_config#hostname kunalll
+kunalll_config#
+NOTE: Save/Exit command failed (but user commands were sent): Device Error on command 'end': Unknown command

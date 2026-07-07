@@ -6,7 +6,7 @@ HOST = "192.168.200.245"
 USER = "admin"
 PASSWORD = "admin"
 
-COMMANDS = ["interface GigaEthernet0/2", "description kunalapktest"]
+COMMANDS = ["hostname kunalll"]
 
 OUTPUT_FILE = "/opt/librenms/librenms-ansible-inventory-plugin/tmp/telnet_output.txt"
 
@@ -45,8 +45,7 @@ try:
 
     # SAVE CONFIG
     try:
-        output += send_cmd(tn, "exit") # Go back one level
-        output += send_cmd(tn, "exit") # Go back to privileged EXEC
+        output += send_cmd(tn, "end") # Go directly to privileged EXEC mode
         output += send_cmd(tn, "write", timeout=10) # Try standard 'write'
     except Exception as save_err:
         output += "\nNOTE: Save/Exit command failed (but user commands were sent): " + str(save_err)

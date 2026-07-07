@@ -30,6 +30,15 @@ class TemplatePushController extends Controller
                         $content = Storage::disk('local')->get($file);
                         $data = json_decode($content, true);
                         if ($data) {
+                            if (isset($data['type']) && $data['type'] !== 'form') {
+                                continue;
+                            }
+                            $parts = explode('/', $file);
+                            if (count($parts) > 2) {
+                                $data['template_folder'] = $parts[count($parts) - 2];
+                            } else {
+                                $data['template_folder'] = '';
+                            }
                             $templates[] = $data;
                         }
                     }
@@ -113,7 +122,17 @@ class TemplatePushController extends Controller
             ];
         }
 
-        $filePath = 'templates/' . $slug . '.json';
+        $folder = $request->input('template_folder');
+        if (!empty($folder)) {
+            $folderSlug = Str::slug($folder);
+            $filePath = 'templates/' . $folderSlug . '/' . $slug . '.json';
+            
+            if (!Storage::disk('local')->exists('templates/' . $folderSlug)) {
+                Storage::disk('local')->makeDirectory('templates/' . $folderSlug);
+            }
+        } else {
+            $filePath = 'templates/' . $slug . '.json';
+        }
 
         try {
             Storage::disk('local')->put($filePath, json_encode($data, JSON_PRETTY_PRINT));
@@ -132,14 +151,48 @@ class TemplatePushController extends Controller
         }
 
         $slug = Str::slug($name);
-        $filePath = 'templates/' . $slug . '.json';
+        $folder = $request->input('template_folder');
+        
+        $filePath = null;
+        if (!empty($folder)) {
+            $path = 'templates/' . Str::slug($folder) . '/' . $slug . '.json';
+            if (Storage::disk('local')->exists($path)) {
+                $filePath = $path;
+            }
+        }
+        
+        if (!$filePath) {
+            $path = 'templates/' . $slug . '.json';
+            if (Storage::disk('local')->exists($path)) {
+                $filePath = $path;
+            }
+        }
+
+        if (!$filePath) {
+            $path = 'templates/general/' . $slug . '.json';
+            if (Storage::disk('local')->exists($path)) {
+                $filePath = $path;
+            }
+        }
+
+        // Fallback: search all files in templates directory
+        if (!$filePath) {
+            $files = Storage::disk('local')->allFiles('templates');
+            foreach ($files as $file) {
+                if (basename($file) === $slug . '.json') {
+                    $filePath = $file;
+                    break;
+                }
+            }
+        }
+
+        if (!$filePath) {
+            return response()->json(['success' => false, 'message' => 'Template not found'], 404);
+        }
 
         try {
-            if (Storage::disk('local')->exists($filePath)) {
-                Storage::disk('local')->delete($filePath);
-                return response()->json(['success' => true, 'message' => 'Template deleted successfully']);
-            }
-            return response()->json(['success' => false, 'message' => 'Template file not found'], 404);
+            Storage::disk('local')->delete($filePath);
+            return response()->json(['success' => true, 'message' => 'Template deleted successfully']);
         } catch (\Exception $e) {
             Log::error('Failed to delete template: ' . $e->getMessage());
             return response()->json(['success' => false, 'message' => 'Failed to delete template'], 500);
