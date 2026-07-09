@@ -37,8 +37,6 @@
                                 <label for="destination">Backup Destination:</label>
                                 <select name="destination" id="destination" class="form-control" required>
                                     <option value="local">Same Device (storage/app/backups/)</option>
-                                    <option value="external">External Hard Drive (/mnt/external/)</option>
-                                    <option value="network">Network Drive (/mnt/network/)</option>
                                 </select>
                             </div>
                             
@@ -105,8 +103,6 @@
                                         <label for="db_backup_destination">Backup Destination:</label>
                                         <select name="db_backup_destination" id="db_backup_destination" class="form-control" required>
                                             <option value="local" {{ $db_backup_destination == 'local' ? 'selected' : '' }}>Same Device (storage/app/backups/)</option>
-                                            <option value="external" {{ $db_backup_destination == 'external' ? 'selected' : '' }}>External Hard Drive (/mnt/external/)</option>
-                                            <option value="network" {{ $db_backup_destination == 'network' ? 'selected' : '' }}>Network Drive (/mnt/network/)</option>
                                         </select>
                                     </div>
                                 </div>
