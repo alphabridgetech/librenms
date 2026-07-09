@@ -367,9 +367,11 @@ Artisan::command('backup:startup-configs', function () {
 
 $backupTime = '01:30';
 $tftpServer = '192.168.200.128';
+$dbBackupTime = '02:00';
 try {
     $backupTime = \DB::table('config')->where('config_name', 'backup_time')->value('config_value') ?: '01:30';
     $tftpServer = \DB::table('config')->where('config_name', 'tftp_server_ip')->value('config_value') ?: '192.168.200.128';
+    $dbBackupTime = \DB::table('config')->where('config_name', 'db_backup_time')->value('config_value') ?: '02:00';
 } catch (\Exception $e) {
     // Fallback to default if DB is not reachable during bootstrap (e.g. CLI operations)
 }
@@ -378,3 +380,89 @@ Schedule::command('backup:startup-configs')
     ->dailyAt($backupTime)
     ->onOneServer()
     ->appendOutputTo(config('log_dir', storage_path('logs')) . '/startup_backups.log');
+
+Artisan::command('backup:database', function () {
+    /** @var Illuminate\Console\Command $this */
+    $destination = 'local';
+    $retentionDays = 30;
+
+    try {
+        $destination = \DB::table('config')->where('config_name', 'db_backup_destination')->value('config_value') ?: 'local';
+        $retentionDays = (int)\DB::table('config')->where('config_name', 'db_backup_retention_days')->value('config_value') ?: 30;
+    } catch (\Exception $e) {
+        $this->error("Failed to read DB backup config: " . $e->getMessage());
+    }
+
+    $this->info("Starting daily automated database backup to destination: {$destination}");
+
+    $exitCode = Artisan::call('db:backup-manual', [
+        '--destination' => $destination
+    ]);
+
+    $output = Artisan::output();
+    $status = ($exitCode === 0) ? 'success' : 'error';
+
+    // Try to extract filename from output or guess it
+    $filename = "Unknown";
+    if (preg_match('/Target path: (.*)/', $output, $matches)) {
+        $filename = basename($matches[1]);
+    }
+
+    try {
+        \App\Models\BackupLog::create([
+            'user_id' => null, // null means automated/system
+            'action' => 'create',
+            'filename' => $filename,
+            'destination' => $destination,
+            'status' => $status,
+            'message' => ($status === 'error') ? $output : 'Daily automated backup completed successfully.',
+        ]);
+    } catch (\Exception $e) {
+        $this->warn("Could not log automated backup: " . $e->getMessage());
+    }
+
+    if ($exitCode === 0) {
+        $this->info("Daily automated backup completed successfully.");
+    } else {
+        $this->error("Daily automated backup failed: " . $output);
+    }
+
+    // Retention / Cleanup
+    $this->info("Cleaning up database backups older than {$retentionDays} days...");
+    $thresholdTime = time() - ($retentionDays * 24 * 60 * 60);
+    $basePath = '';
+
+    switch ($destination) {
+        case 'external':
+            $basePath = '/mnt/external';
+            break;
+        case 'network':
+            $basePath = '/mnt/network';
+            break;
+        case 'local':
+        default:
+            $basePath = storage_path('app/backups');
+            break;
+    }
+
+    if (file_exists($basePath) && is_dir($basePath)) {
+        $files = scandir($basePath);
+        foreach ($files as $file) {
+            if ($file === '.' || $file === '..') {
+                continue;
+            }
+            $filePath = "{$basePath}/{$file}";
+            if (is_file($filePath) && str_starts_with($file, 'backup_') && str_ends_with($file, '.sql')) {
+                if (filemtime($filePath) < $thresholdTime) {
+                    unlink($filePath);
+                    $this->info("Deleted old database backup file: {$file}");
+                }
+            }
+        }
+    }
+})->purpose('Backup the database daily and cleanup old backup files');
+
+Schedule::command('backup:database')
+    ->dailyAt($dbBackupTime)
+    ->onOneServer()
+    ->appendOutputTo(config('log_dir', storage_path('logs')) . '/db_backups.log');

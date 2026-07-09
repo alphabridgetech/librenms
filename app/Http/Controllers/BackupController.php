@@ -49,7 +49,48 @@ class BackupController extends Controller
             Log::warning("Could not fetch backup logs: " . $e->getMessage());
         }
 
-        return view('backup.index', compact('backups', 'logs'));
+        $db_backup_time = \DB::table('config')->where('config_name', 'db_backup_time')->value('config_value') ?: '02:00';
+        $db_backup_destination = \DB::table('config')->where('config_name', 'db_backup_destination')->value('config_value') ?: 'local';
+        $db_backup_retention_days = \DB::table('config')->where('config_name', 'db_backup_retention_days')->value('config_value') ?: 30;
+
+        return view('backup.index', compact('backups', 'logs', 'db_backup_time', 'db_backup_destination', 'db_backup_retention_days'));
+    }
+
+    /**
+     * Save the database backup schedule settings.
+     *
+     * @param  \Illuminate\Http\Request  $request
+     * @return \Illuminate\Http\RedirectResponse
+     */
+    public function saveSchedule(Request $request)
+    {
+        $request->validate([
+            'db_backup_time' => 'required|regex:/^\d{2}:\d{2}$/',
+            'db_backup_destination' => 'required|in:local,external,network',
+            'db_backup_retention_days' => 'required|integer|min:1',
+        ]);
+
+        try {
+            \DB::table('config')->updateOrInsert(
+                ['config_name' => 'db_backup_time'],
+                ['config_value' => $request->db_backup_time]
+            );
+
+            \DB::table('config')->updateOrInsert(
+                ['config_name' => 'db_backup_destination'],
+                ['config_value' => $request->db_backup_destination]
+            );
+
+            \DB::table('config')->updateOrInsert(
+                ['config_name' => 'db_backup_retention_days'],
+                ['config_value' => $request->db_backup_retention_days]
+            );
+
+            return redirect()->route('backup.index')->with('success', __('Database backup schedule saved successfully.'));
+        } catch (\Exception $e) {
+            Log::error("Failed to save DB backup schedule: " . $e->getMessage());
+            return redirect()->route('backup.index')->with('error', __('Failed to save schedule: ') . $e->getMessage());
+        }
     }
 
     /**

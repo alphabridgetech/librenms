@@ -82,6 +82,49 @@
                         </form>
                     </div>
                 </div>
+        </div>
+
+        <div class="row" style="margin-top: 20px;">
+            <div class="col-md-12">
+                <div class="panel panel-info">
+                    <div class="panel-heading">
+                        <h5 class="panel-title">Schedule Daily Database Backup Settings</h5>
+                    </div>
+                    <div class="panel-body">
+                        <form action="{{ route('backup.save-schedule') }}" method="POST">
+                            @csrf
+                            <div class="row">
+                                <div class="col-md-4">
+                                    <div class="form-group">
+                                        <label for="db_backup_time">Daily Backup Execution Time:</label>
+                                        <input type="time" name="db_backup_time" id="db_backup_time" class="form-control" value="{{ $db_backup_time }}" required>
+                                    </div>
+                                </div>
+                                <div class="col-md-4">
+                                    <div class="form-group">
+                                        <label for="db_backup_destination">Backup Destination:</label>
+                                        <select name="db_backup_destination" id="db_backup_destination" class="form-control" required>
+                                            <option value="local" {{ $db_backup_destination == 'local' ? 'selected' : '' }}>Same Device (storage/app/backups/)</option>
+                                            <option value="external" {{ $db_backup_destination == 'external' ? 'selected' : '' }}>External Hard Drive (/mnt/external/)</option>
+                                            <option value="network" {{ $db_backup_destination == 'network' ? 'selected' : '' }}>Network Drive (/mnt/network/)</option>
+                                        </select>
+                                    </div>
+                                </div>
+                                <div class="col-md-4">
+                                    <div class="form-group">
+                                        <label for="db_backup_retention_days">Backup Retention Period (Days):</label>
+                                        <input type="number" name="db_backup_retention_days" id="db_backup_retention_days" class="form-control" value="{{ $db_backup_retention_days }}" min="1" required>
+                                    </div>
+                                </div>
+                            </div>
+                            <div class="form-group" style="margin-top: 15px; margin-bottom: 0;">
+                                <button type="submit" class="btn btn-primary">
+                                    <i class="fa fa-floppy-o fa-fw"></i> Save Schedule Settings
+                                </button>
+                            </div>
+                        </form>
+                    </div>
+                </div>
             </div>
         </div>
 
