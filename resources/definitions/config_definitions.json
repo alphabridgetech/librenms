@@ -305,6 +305,13 @@
       "default": true,
       "type": "boolean"
     },
+    "development_mode": {
+      "default": false,
+      "type": "boolean",
+      "group": "webui",
+      "section": "general",
+      "order": 100
+    },
     "allow_unauth_graphs": {
       "default": false,
       "group": "webui",

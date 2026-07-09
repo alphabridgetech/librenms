@@ -74,7 +74,7 @@
 
               # SAVE CONFIG
               try:
-                  output += send_ssh_cmd("end")
+                  output += send_ssh_cmd("!")
                   output += send_ssh_cmd("write")
               except Exception as save_err:
                   output += "\nNOTE: Save/Exit command failed (but user commands were sent): " + str(save_err)

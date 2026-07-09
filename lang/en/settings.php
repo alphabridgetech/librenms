@@ -243,6 +243,10 @@ return [
             'description' => 'Allow Duplicate sysName',
             'help' => 'By default duplicate sysNames are disabled from being added to prevent a device with multiple interfaces from being added multiple times',
         ],
+        'development_mode' => [
+            'description' => 'Template Development Mode',
+            'help' => 'When enabled, users will be able to create, edit, and delete templates in the Template Push Configuration page.',
+        ],
         'allow_unauth_graphs' => [
             'description' => 'Allow unauthenticated graph access',
             'help' => 'Allows any one to access graphs without login',

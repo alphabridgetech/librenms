@@ -20,7 +20,7 @@
 
             <div class="row">
                 <!-- LEFT: Template Builder -->
-                <div class="col-md-5">
+                <div class="col-md-5" id="template_builder_col">
                     <div class="panel panel-default">
                         <div class="panel-heading">
                             <strong><i class="fa fa-cube"></i> {{ __('Template Builder') }}</strong>
@@ -105,7 +105,7 @@ switchport pvid @{{value}}
                 </div>
 
                 <!-- RIGHT: Push Interface -->
-                <div class="col-md-7">
+                <div class="col-md-7" id="push_interface_col">
                     <form id="ipUploadForm" method="post" action="{{ route('addhost.template.save') }}" enctype="multipart/form-data" class="form-horizontal" role="form">
                         @csrf
 
@@ -237,6 +237,35 @@ switchport pvid @{{value}}
             let pendingTemplateInterfaces = {};
             let interfaceRequestId = 0;
             let builderFieldCount = 0;
+
+            // Development Mode logic from global settings
+            const isDevMode = {{ \App\Facades\LibrenmsConfig::get('development_mode') ? 'true' : 'false' }};
+
+            function applyDevelopmentMode() {
+                if (isDevMode) {
+                    $('#template_builder_col').show();
+                    $('#push_interface_col').removeClass('col-md-12').addClass('col-md-7');
+                    
+                    const val = $('#load_template').val();
+                    if (val) {
+                        const template = JSON.parse(val);
+                        $('#deleteTemplateBtn').show();
+                        if (template.type === 'form') {
+                            $('#editTemplateBtn').show();
+                        } else {
+                            $('#editTemplateBtn').hide();
+                        }
+                    }
+                } else {
+                    $('#template_builder_col').hide();
+                    $('#push_interface_col').removeClass('col-md-7').addClass('col-md-12');
+                    $('#deleteTemplateBtn').hide();
+                    $('#editTemplateBtn').hide();
+                }
+            }
+
+            // Run on load
+            applyDevelopmentMode();
 
             $('#device_select').select2({
                 placeholder: '-- Select Device --',
@@ -967,10 +996,15 @@ switchport pvid @{{value}}
 
                     $('#template_name').val(template.name);
                     $('#template_config_section').show();
-                    $('#deleteTemplateBtn').show();
-                    if (type === 'form') {
-                        $('#editTemplateBtn').show();
+                    if (isDevMode) {
+                        $('#deleteTemplateBtn').show();
+                        if (type === 'form') {
+                            $('#editTemplateBtn').show();
+                        } else {
+                            $('#editTemplateBtn').hide();
+                        }
                     } else {
+                        $('#deleteTemplateBtn').hide();
                         $('#editTemplateBtn').hide();
                     }
 
