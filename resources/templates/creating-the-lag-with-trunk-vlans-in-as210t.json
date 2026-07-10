@@ -29,18 +29,6 @@
             "command": "aggregator-group load-balance both-mac"
         },
         {
-            "label": "Max-active links",
-            "type": "text",
-            "options": null,
-            "command": "aggregator-group max-active-linknumber {{value}}"
-        },
-        {
-            "label": "Minimum-Active links",
-            "type": "text",
-            "options": null,
-            "command": "aggregator-group least-active-linknumber {{value}}"
-        },
-        {
             "label": null,
             "type": "putonlycmd",
             "options": null,
@@ -53,5 +41,5 @@
             "command": "switchport trunk vlan-allowed {{value}}"
         }
     ],
-    "created_at": "2026-07-08 11:46:11"
+    "created_at": "2026-07-10 11:55:52"
 }
