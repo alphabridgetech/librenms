@@ -17,33 +17,36 @@ trait HandlesPushConfiguration
     protected function loadTemplateData(string $templateName, ?string $folder = null): ?array
     {
         $slug = Str::slug($templateName);
+        $templatesDir = resource_path('templates');
         
         if (!empty($folder)) {
-            $path = 'templates/' . Str::slug($folder) . '/' . $slug . '.json';
-            if (Storage::disk('local')->exists($path)) {
-                $content = Storage::disk('local')->get($path);
+            $path = $templatesDir . DIRECTORY_SEPARATOR . Str::slug($folder) . DIRECTORY_SEPARATOR . $slug . '.json';
+            if (file_exists($path)) {
+                $content = file_get_contents($path);
                 return json_decode($content, true);
             }
         }
         
-        $path = 'templates/' . $slug . '.json';
-        if (Storage::disk('local')->exists($path)) {
-            $content = Storage::disk('local')->get($path);
+        $path = $templatesDir . DIRECTORY_SEPARATOR . $slug . '.json';
+        if (file_exists($path)) {
+            $content = file_get_contents($path);
             return json_decode($content, true);
         }
 
-        $path = 'templates/general/' . $slug . '.json';
-        if (Storage::disk('local')->exists($path)) {
-            $content = Storage::disk('local')->get($path);
+        $path = $templatesDir . DIRECTORY_SEPARATOR . 'general' . DIRECTORY_SEPARATOR . $slug . '.json';
+        if (file_exists($path)) {
+            $content = file_get_contents($path);
             return json_decode($content, true);
         }
 
         // Fallback: search all files in templates directory
-        $files = Storage::disk('local')->allFiles('templates');
-        foreach ($files as $file) {
-            if (basename($file) === $slug . '.json') {
-                $content = Storage::disk('local')->get($file);
-                return json_decode($content, true);
+        if (is_dir($templatesDir)) {
+            $files = new \RecursiveIteratorIterator(new \RecursiveDirectoryIterator($templatesDir));
+            foreach ($files as $file) {
+                if ($file->isFile() && basename($file->getPathname()) === $slug . '.json') {
+                    $content = file_get_contents($file->getPathname());
+                    return json_decode($content, true);
+                }
             }
         }
 

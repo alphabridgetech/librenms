@@ -2,6 +2,7 @@
 #######################
 .*
 !/.gitignore
+!/resources/templates/.gitkeep
 !/.git-blame-ignore-revs
 !/.editorconfig
 !/.php_cs

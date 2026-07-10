@@ -23,19 +23,22 @@ class TemplatePushController extends Controller
         
         $templates = [];
         try {
-            if (Storage::disk('local')->exists('templates')) {
-                $files = Storage::disk('local')->allFiles('templates');
+            $templatesDir = resource_path('templates');
+            if (is_dir($templatesDir)) {
+                $files = new \RecursiveIteratorIterator(new \RecursiveDirectoryIterator($templatesDir));
                 foreach ($files as $file) {
-                    if (pathinfo($file, PATHINFO_EXTENSION) === 'json') {
-                        $content = Storage::disk('local')->get($file);
+                    if ($file->isFile() && $file->getExtension() === 'json') {
+                        $content = file_get_contents($file->getPathname());
                         $data = json_decode($content, true);
                         if ($data) {
                             if (isset($data['type']) && $data['type'] !== 'form') {
                                 continue;
                             }
-                            $parts = explode('/', $file);
-                            if (count($parts) > 2) {
-                                $data['template_folder'] = $parts[count($parts) - 2];
+                            // Calculate relative path to detect if it's in a subfolder
+                            $relativePath = str_replace($templatesDir . DIRECTORY_SEPARATOR, '', $file->getPathname());
+                            $parts = explode(DIRECTORY_SEPARATOR, $relativePath);
+                            if (count($parts) > 1) {
+                                $data['template_folder'] = $parts[0];
                             } else {
                                 $data['template_folder'] = '';
                             }
@@ -123,19 +126,25 @@ class TemplatePushController extends Controller
         }
 
         $folder = $request->input('template_folder');
+        $templatesDir = resource_path('templates');
+        
         if (!empty($folder)) {
             $folderSlug = Str::slug($folder);
-            $filePath = 'templates/' . $folderSlug . '/' . $slug . '.json';
+            $targetDir = $templatesDir . DIRECTORY_SEPARATOR . $folderSlug;
+            $filePath = $targetDir . DIRECTORY_SEPARATOR . $slug . '.json';
             
-            if (!Storage::disk('local')->exists('templates/' . $folderSlug)) {
-                Storage::disk('local')->makeDirectory('templates/' . $folderSlug);
+            if (!is_dir($targetDir)) {
+                mkdir($targetDir, 0755, true);
             }
         } else {
-            $filePath = 'templates/' . $slug . '.json';
+            $filePath = $templatesDir . DIRECTORY_SEPARATOR . $slug . '.json';
+            if (!is_dir($templatesDir)) {
+                mkdir($templatesDir, 0755, true);
+            }
         }
 
         try {
-            Storage::disk('local')->put($filePath, json_encode($data, JSON_PRETTY_PRINT));
+            file_put_contents($filePath, json_encode($data, JSON_PRETTY_PRINT));
             return response()->json(['success' => true, 'message' => 'Template saved successfully']);
         } catch (\Exception $e) {
             Log::error('Failed to save template: ' . $e->getMessage());
@@ -152,35 +161,36 @@ class TemplatePushController extends Controller
 
         $slug = Str::slug($name);
         $folder = $request->input('template_folder');
+        $templatesDir = resource_path('templates');
         
         $filePath = null;
         if (!empty($folder)) {
-            $path = 'templates/' . Str::slug($folder) . '/' . $slug . '.json';
-            if (Storage::disk('local')->exists($path)) {
+            $path = $templatesDir . DIRECTORY_SEPARATOR . Str::slug($folder) . DIRECTORY_SEPARATOR . $slug . '.json';
+            if (file_exists($path)) {
                 $filePath = $path;
             }
         }
         
         if (!$filePath) {
-            $path = 'templates/' . $slug . '.json';
-            if (Storage::disk('local')->exists($path)) {
+            $path = $templatesDir . DIRECTORY_SEPARATOR . $slug . '.json';
+            if (file_exists($path)) {
                 $filePath = $path;
             }
         }
 
         if (!$filePath) {
-            $path = 'templates/general/' . $slug . '.json';
-            if (Storage::disk('local')->exists($path)) {
+            $path = $templatesDir . DIRECTORY_SEPARATOR . 'general' . DIRECTORY_SEPARATOR . $slug . '.json';
+            if (file_exists($path)) {
                 $filePath = $path;
             }
         }
 
         // Fallback: search all files in templates directory
-        if (!$filePath) {
-            $files = Storage::disk('local')->allFiles('templates');
+        if (!$filePath && is_dir($templatesDir)) {
+            $files = new \RecursiveIteratorIterator(new \RecursiveDirectoryIterator($templatesDir));
             foreach ($files as $file) {
-                if (basename($file) === $slug . '.json') {
-                    $filePath = $file;
+                if ($file->isFile() && basename($file->getPathname()) === $slug . '.json') {
+                    $filePath = $file->getPathname();
                     break;
                 }
             }
@@ -191,7 +201,7 @@ class TemplatePushController extends Controller
         }
 
         try {
-            Storage::disk('local')->delete($filePath);
+            unlink($filePath);
             return response()->json(['success' => true, 'message' => 'Template deleted successfully']);
         } catch (\Exception $e) {
             Log::error('Failed to delete template: ' . $e->getMessage());
