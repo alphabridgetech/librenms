@@ -1,0 +1,57 @@
+{
+    "name": "Creating the LAG with Trunk vlans in AS210T",
+    "type": "form",
+    "hostname": "",
+    "interfaces": [],
+    "fields": [
+        {
+            "label": null,
+            "type": "putonlycmd",
+            "options": null,
+            "command": "!"
+        },
+        {
+            "label": "LAG number",
+            "type": "text",
+            "options": null,
+            "command": "interface port-aggregator {{value}}"
+        },
+        {
+            "label": null,
+            "type": "putonlycmd",
+            "options": null,
+            "command": "agg-period 1"
+        },
+        {
+            "label": null,
+            "type": "putonlycmd",
+            "options": null,
+            "command": "aggregator-group load-balance both-mac"
+        },
+        {
+            "label": "Max-active links",
+            "type": "text",
+            "options": null,
+            "command": "aggregator-group max-active-linknumber {{value}}"
+        },
+        {
+            "label": "Minimum-Active links",
+            "type": "text",
+            "options": null,
+            "command": "aggregator-group least-active-linknumber {{value}}"
+        },
+        {
+            "label": null,
+            "type": "putonlycmd",
+            "options": null,
+            "command": "switchport mode trunk"
+        },
+        {
+            "label": "Allowed-vlans",
+            "type": "text",
+            "options": null,
+            "command": "switchport trunk vlan-allowed {{value}}"
+        }
+    ],
+    "created_at": "2026-07-08 11:46:11"
+}

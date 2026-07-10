@@ -1,0 +1,33 @@
+{
+    "name": "Rate Limit in AS200 series on Interface",
+    "type": "form",
+    "hostname": "",
+    "interfaces": [],
+    "fields": [
+        {
+            "label": "Ingress (1= 64kbps)",
+            "type": "text",
+            "options": null,
+            "command": "switchport rate-limit  {{value}} ingress"
+        },
+        {
+            "label": "Egress (1= 64kbps)",
+            "type": "text",
+            "options": null,
+            "command": "switchport rate-limit  {{value}} egress"
+        },
+        {
+            "label": null,
+            "type": "putonlycmd",
+            "options": null,
+            "command": "!"
+        },
+        {
+            "label": "Burst-size",
+            "type": "dropdown",
+            "options": "low:rate-limit burst-size low, Middle:rate-limit burst-size middle, High:rate-limit burst-size high",
+            "command": null
+        }
+    ],
+    "created_at": "2026-07-08 11:16:12"
+}

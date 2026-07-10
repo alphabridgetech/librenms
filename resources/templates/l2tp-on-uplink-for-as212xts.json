@@ -1,0 +1,57 @@
+{
+    "name": "L2TP on uplink for AS212XTS",
+    "type": "form",
+    "hostname": "",
+    "interfaces": [],
+    "fields": [
+        {
+            "label": "Description",
+            "type": "text",
+            "options": null,
+            "command": "description {{value}}"
+        },
+        {
+            "label": "L2TP - CDP",
+            "type": "checkbox",
+            "options": null,
+            "command": "l2protocol-tunnel cdp"
+        },
+        {
+            "label": "L2TP - LLDP",
+            "type": "checkbox",
+            "options": null,
+            "command": "l2protocol-tunnel LLDP"
+        },
+        {
+            "label": "L2TP - STP",
+            "type": "checkbox",
+            "options": null,
+            "command": "l2protocol-tunnel stp"
+        },
+        {
+            "label": "L2TP - LACP",
+            "type": "checkbox",
+            "options": null,
+            "command": "l2protocol-tunnel lacp"
+        },
+        {
+            "label": null,
+            "type": "putonlycmd",
+            "options": null,
+            "command": "no spanning-tree"
+        },
+        {
+            "label": null,
+            "type": "putonlycmd",
+            "options": null,
+            "command": "switchport mode dot1q-tunnel-uplink"
+        },
+        {
+            "label": "Allowed Vlans",
+            "type": "text",
+            "options": null,
+            "command": "switchport trunk vlan-allowed {{value}}"
+        }
+    ],
+    "created_at": "2026-07-08 17:09:40"
+}

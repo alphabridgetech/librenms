@@ -608,6 +608,7 @@ switchport pvid @{{value}}
                     const $field = $(this);
                     let commandTemplate = $field.data('command') || '';
                     const type = $field.data('type');
+                    const label = $field.data('label') || '';
 
                     if (type === 'dynamic_list') {
                         const $rulesContainer = $field.find('.dynamic-list-field-container');
@@ -649,7 +650,15 @@ switchport pvid @{{value}}
 
                     const rawValue = $field.find('.dynamic-field-value').val();
                     const isFilled = (rawValue && rawValue.trim() !== '');
-                    const val = isFilled ? (type === 'dropdown' ? rawValue.split(':', 2)[0].trim() : rawValue) : ($field.data('label') || 'value');
+                    let val = isFilled ? (type === 'dropdown' ? rawValue.split(':', 2)[0].trim() : rawValue) : ($field.data('label') || 'value');
+
+                    if (isFilled && (label === 'Ingress (1= 64kbps)' || label === 'Egress (1= 64kbps)')) {
+                        let valNum = parseFloat(val);
+                        if (isNaN(valNum) || valNum < 64) {
+                            valNum = 64;
+                        }
+                        val = Math.floor(valNum / 64).toString();
+                    }
 
                     let cmd = '';
                     if (type === 'dropdown') {
@@ -770,7 +779,13 @@ switchport pvid @{{value}}
                 $('#hostname').val(validIPs.join('\n'));
 
                 const hasCommands = generateCommands();
-                $('#submitBtn').prop('disabled', !(validIPs.length > 0 && hasCommands));
+                
+                let hasValidationErrors = false;
+                $('.validation-error-msg:visible').each(function() {
+                    hasValidationErrors = true;
+                });
+
+                $('#submitBtn').prop('disabled', !(validIPs.length > 0 && hasCommands && !hasValidationErrors));
             }
 
             $('input[name="port_mode"]').on('change', function() {
@@ -896,7 +911,11 @@ switchport pvid @{{value}}
                             </div>
                         `;
                     } else {
-                        inputHtml = '<input type="text" class="form-control dynamic-field-value" placeholder="' + _.escape(field.label) + '">';
+                        if (field.label === 'Ingress (1= 64kbps)' || field.label === 'Egress (1= 64kbps)') {
+                            inputHtml = '<input type="number" class="form-control dynamic-field-value" placeholder="' + _.escape(field.label) + '" min="64">';
+                        } else {
+                            inputHtml = '<input type="text" class="form-control dynamic-field-value" placeholder="' + _.escape(field.label) + '">';
+                        }
                     }
 
                     const row = `
@@ -981,6 +1000,31 @@ switchport pvid @{{value}}
                 });
 
                 $container.find('.dynamic-field-value').on('change input', function() {
+                    const $input = $(this);
+                    const $row = $input.closest('.dynamic-field-row');
+                    const label = $row.data('label') || '';
+                    
+                    if (label === 'Ingress (1= 64kbps)' || label === 'Egress (1= 64kbps)') {
+                        const val = $input.val();
+                        let $errorSpan = $row.find('.validation-error-msg');
+                        if ($errorSpan.length === 0) {
+                            $errorSpan = $('<span class="text-danger validation-error-msg" style="display: block; font-size: 11px; margin-top: 5px;"></span>');
+                            $input.after($errorSpan);
+                        }
+
+                        if (val && val.trim() !== '') {
+                            const valNum = parseFloat(val);
+                            if (isNaN(valNum)) {
+                                $errorSpan.text('Value must be a number').show();
+                            } else if (valNum < 64) {
+                                $errorSpan.text('Value cannot be less than 64').show();
+                            } else {
+                                $errorSpan.hide();
+                            }
+                        } else {
+                            $errorSpan.hide();
+                        }
+                    }
                     updateSelectedCount();
                 });
                 $container.find('input[type="checkbox"].dynamic-field-value').on('change', function() {
@@ -1173,6 +1217,13 @@ switchport pvid @{{value}}
                     const val = $(this).find('.dynamic-field-value').val();
                     if (!val || val.trim() === '') {
                         missingFields.push(label);
+                    } else if (label === 'Ingress (1= 64kbps)' || label === 'Egress (1= 64kbps)') {
+                        const valNum = parseFloat(val);
+                        if (isNaN(valNum)) {
+                            missingFields.push(label + ' (Value must be a number)');
+                        } else if (valNum < 64) {
+                            missingFields.push(label + ' (Value cannot be less than 64)');
+                        }
                     }
                 });
 

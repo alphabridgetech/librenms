@@ -1,0 +1,45 @@
+{
+    "name": "Tag traffic to single S-vlan in AS212XTS",
+    "type": "form",
+    "hostname": "",
+    "interfaces": [],
+    "fields": [
+        {
+            "label": "Description",
+            "type": "text",
+            "options": null,
+            "command": "description {{value}}"
+        },
+        {
+            "label": null,
+            "type": "putonlycmd",
+            "options": null,
+            "command": "no spanning-tree"
+        },
+        {
+            "label": null,
+            "type": "putonlycmd",
+            "options": null,
+            "command": "switchport mode dot1q-translating-tunnel"
+        },
+        {
+            "label": "Allowed Vlan",
+            "type": "text",
+            "options": null,
+            "command": "switchport trunk vlan-allowed {{value}}"
+        },
+        {
+            "label": "QinQ",
+            "type": "dynamic_list",
+            "options": null,
+            "command": "switchport dot1q-translating-tunnel mode QinQ translate {{from}} {{to}}"
+        },
+        {
+            "label": null,
+            "type": "putonlycmd",
+            "options": null,
+            "command": "switchport dot1q-tunnel-sub-global"
+        }
+    ],
+    "created_at": "2026-07-08 12:48:05"
+}

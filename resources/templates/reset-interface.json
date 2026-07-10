@@ -1,0 +1,27 @@
+{
+    "name": "Reset Interface",
+    "type": "form",
+    "hostname": "",
+    "interfaces": [],
+    "fields": [
+        {
+            "label": "Reset",
+            "type": "dropdown",
+            "options": "Yes:default interface {{interface}}, No:",
+            "command": null
+        },
+        {
+            "label": null,
+            "type": "putonlycmd",
+            "options": null,
+            "command": "Interface {{interface}}"
+        },
+        {
+            "label": null,
+            "type": "putonlycmd",
+            "options": null,
+            "command": "no shutdown"
+        }
+    ],
+    "created_at": "2026-06-26 18:30:47"
+}
