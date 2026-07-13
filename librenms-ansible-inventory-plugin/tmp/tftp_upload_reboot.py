@@ -44,8 +44,6 @@ try:
     if output.strip().endswith(">"):
         shell.send("enable\n")
         output += read(shell, timeout=2)
-        shell.send(PASSWORD + "\n")
-        output += read(shell, timeout=2)
 
     if not output.strip().endswith("#"):
         print("FAILED: not in enable mode")

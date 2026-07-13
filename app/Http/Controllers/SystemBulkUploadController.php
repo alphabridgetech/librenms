@@ -315,6 +315,9 @@ class SystemBulkUploadController extends Controller
 
         $tftpServer = \DB::table('config')->where('config_name', 'tftp_server_ip')->value('config_value');
         if (empty($tftpServer) || $tftpServer === 'localhost' || $tftpServer === '127.0.0.1') {
+            $tftpServer = request()->getHost();
+        }
+        if (empty($tftpServer) || $tftpServer === 'localhost' || $tftpServer === '127.0.0.1') {
             $tftpServer = parse_url(config('app.url'), PHP_URL_HOST);
         }
         if (empty($tftpServer) || $tftpServer === 'localhost' || $tftpServer === '127.0.0.1') {
