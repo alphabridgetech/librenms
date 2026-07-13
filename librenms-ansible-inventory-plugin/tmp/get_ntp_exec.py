@@ -6,7 +6,7 @@ import json
 
 HOST = "192.168.200.245"
 USER = "admin"
-PASSWORD = "admin@123#"
+PASSWORD = "admin"
 
 def read_until_prompt(shell, prompt_regex, timeout=10):
     buf = ""

@@ -161,15 +161,55 @@ class SystemBulkUploadController extends Controller
     {
         $this->authorize('create', CustomMib::class);
 
-        $request->validate([
+        $validator = Validator::make($request->all(), [
             'selected_devices' => 'required|array',
             'selected_devices.*' => 'exists:devices,device_id',
             'uploads' => 'required|array',
-            'uploads.*' => 'required|file|mimes:bin|max:102400',
         ]);
 
+        $validator->after(function ($validator) use ($request) {
+            $uploads = $request->file('uploads', []);
+            $selectedDevices = $request->input('selected_devices', []);
+            
+            // Get hardware models of selected devices
+            $selectedModels = Device::whereIn('device_id', $selectedDevices)
+                ->pluck('hardware')
+                ->filter()
+                ->unique()
+                ->toArray();
+                
+            foreach ($selectedModels as $model) {
+                if (!isset($uploads[$model]) || !$request->hasFile("uploads.{$model}")) {
+                    $validator->errors()->add("uploads.{$model}", "The upload file for model {$model} is required.");
+                    continue;
+                }
+                
+                $file = $uploads[$model];
+                if (is_null($file) || !$file->isValid()) {
+                    $validator->errors()->add("uploads.{$model}", "The upload file for model {$model} is invalid.");
+                    continue;
+                }
+                
+                // Validate extension name instead of mime type
+                $extension = strtolower($file->getClientOriginalExtension());
+                if ($extension !== 'bin') {
+                    $validator->errors()->add("uploads.{$model}", "The upload file for model {$model} must have a .bin extension.");
+                }
+                
+                // Max file size: 100MB
+                if ($file->getSize() > 102400 * 1024) {
+                    $validator->errors()->add("uploads.{$model}", "The upload file for model {$model} must not be greater than 100MB.");
+                }
+            }
+        });
+
+        if ($validator->fails()) {
+            return back()->withErrors($validator)->withInput();
+        }
+
         $devices = Device::whereIn('device_id', $request->selected_devices)->get();
-        $uploads = $request->file('uploads');
+        // Filter out empty file uploads
+        $uploads = array_filter($request->file('uploads', []));
 
         if (!is_dir($this->tftpPath) || !is_writable($this->tftpPath)) {
             return back()->with('error', 'TFTP directory not writable');
@@ -250,25 +290,55 @@ class SystemBulkUploadController extends Controller
 
     private function runAnsibleFirmwareUpload($device, $filename)
     {
-       
-        $hosts = $this->pluginPath . "/hosts/{$device->hostname}.yml";
+        $this->initAnsible();
+
+        $reqUser = 'admin';
+        $reqPass = 'admin';
+        $reqCommunity = 'public';
+
+        $ansibleUser = (!empty($device->ssh_user)) ? $device->ssh_user : $reqUser;
+        $ansiblePassword = (!empty($device->ssh_pass)) ? $device->ssh_pass : $reqPass;
+        $snmpCommunity = (!empty($device->community)) ? $device->community : $reqCommunity;
+
+        $hostname = 'bridge_' . str_replace('.', '_', $device->hostname);
+        
+        $inventoryDir = $this->pluginPath . "/hosts/";
+        if (!file_exists($inventoryDir)) {
+            mkdir($inventoryDir, 0755, true);
+        }
+        $hosts = $inventoryDir . $hostname . ".yml";
+
+        $inventoryContent = $this->generateInventoryYaml($hostname, $device->hostname, $ansibleUser, $ansiblePassword, $snmpCommunity);
+        file_put_contents($hosts, $inventoryContent);
+
         $playbook = $this->pluginPath . "/playbooks/tftpupload.yml";
 
+        $tftpServer = \DB::table('config')->where('config_name', 'tftp_server_ip')->value('config_value');
+        if (empty($tftpServer) || $tftpServer === 'localhost' || $tftpServer === '127.0.0.1') {
+            $tftpServer = parse_url(config('app.url'), PHP_URL_HOST);
+        }
+        if (empty($tftpServer) || $tftpServer === 'localhost' || $tftpServer === '127.0.0.1') {
+            $tftpServer = '192.168.200.179'; // Fallback host IP
+        }
 
-        $tftpServer = "192.168.200.128"; 
-        $destination_file="switch.bin";    
+        $destination_file = "switch.bin";    
 
         $extraVars = [
             'tftp_server' => $tftpServer,
             'filename' => $filename,
-            
             'destination_file' => $destination_file,
         ];
 
-        $output = $this->runAnsible($playbook, $hosts, $extraVars);
+        $ansibleResult = $this->runAnsible($playbook, $hosts, $extraVars);
+        $output = $ansibleResult['output'];
+        $exitCode = $ansibleResult['exit_code'];
 
-        Log::info("Ansible output for {$device->hostname}: " . $output);
+        Log::warning("Ansible output for {$device->hostname}: " . $output);
 
+        $isFailed = ($exitCode !== 0) || (strpos($output, 'failed=1') !== false) || (strpos($output, 'unreachable=1') !== false) || (strpos($output, 'ERROR:') !== false);
+        if ($isFailed) {
+            throw new \Exception("Ansible task failed with exit code {$exitCode}.");
+        }
     }
 
     public function getUploadedFileContent(Request $request)

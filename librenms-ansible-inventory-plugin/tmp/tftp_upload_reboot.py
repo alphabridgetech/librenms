@@ -2,19 +2,27 @@ import paramiko
 import time
 import sys
 
-HOST = "192.168.200.241"
+HOST = "192.168.200.245"
 USER = "admin"
-PASSWORD = "admin@123#"
+PASSWORD = "admin"
 
-TFTP_SERVER = "192.168.200.151"
-SOURCE_FILE = "192.168.200.241_switch.bin"
+TFTP_SERVER = "192.168.200.179"
+SOURCE_FILE = "192168200245.bin"
 DEST_FILE = "switch.bin"
 
-def read(shell, wait=1):
-    time.sleep(wait)
+def read(shell, timeout=1):
+    start = time.time()
+    while not shell.recv_ready() and (time.time() - start) < timeout:
+        time.sleep(0.05)
     out = ""
-    while shell.recv_ready():
-        out += shell.recv(65535).decode(errors="ignore")
+    try:
+        while shell.recv_ready():
+            data = shell.recv(65535).decode(errors="ignore")
+            if not data:
+                break
+            out += data
+    except Exception:
+        pass
     return out
 
 try:
@@ -30,16 +38,14 @@ try:
     )
 
     shell = ssh.invoke_shell()
-    time.sleep(2)
-    output = read(shell)
+    output = read(shell, timeout=2)
 
     # ENTER ENABLE MODE IF REQUIRED
     if output.strip().endswith(">"):
         shell.send("enable\n")
-        time.sleep(1)
+        output += read(shell, timeout=2)
         shell.send(PASSWORD + "\n")
-        time.sleep(2)
-        output += read(shell)
+        output += read(shell, timeout=2)
 
     if not output.strip().endswith("#"):
         print("FAILED: not in enable mode")
@@ -50,18 +56,18 @@ try:
 
     # COPY FROM TFTP TO FLASH
     shell.send(f"copy tftp:{SOURCE_FILE} flash: {TFTP_SERVER}\n")
-    time.sleep(2)
-    output = read(shell)
+    output += read(shell, timeout=2)
 
     if "Destination file name" in output:
         shell.send(DEST_FILE + "\n")
+        output += read(shell, timeout=2)
 
     # WAIT FOR TRANSFER
     end_time = time.time() + 180
     success = False
 
     while time.time() < end_time:
-        chunk = read(shell, 1)
+        chunk = read(shell, timeout=1)
         if chunk:
             output += chunk
 
@@ -79,21 +85,16 @@ try:
         print(output)
         sys.exit(1)
 
-    # SMALL DELAY BEFORE REBOOT
-    time.sleep(2)
-
     print("=== STARTING REBOOT ===")
 
     # REBOOT COMMAND
     shell.send("reboot\n")
-    time.sleep(2)
-    output += read(shell)
+    output += read(shell, timeout=2)
 
     # HANDLE CONFIRMATION
     if any(x in output.lower() for x in ["(y/n)", "yes/no", "[y/n]", "confirm"]):
         shell.send("y\n")
-        time.sleep(2)
-        output += read(shell)
+        output += read(shell, timeout=2)
 
     print("SUCCESS: Upload + Reboot completed")
     print(output)
