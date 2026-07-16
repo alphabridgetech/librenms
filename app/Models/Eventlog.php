@@ -89,6 +89,59 @@ class Eventlog extends DeviceRelatedModel
         } else {
             $log->save();
         }
+
+        // Real-time Syslog Forwarding
+        if (\App\Facades\LibrenmsConfig::has('eventlog_forward_syslog_host')) {
+            $this->forwardSingleToSyslog($log, $device);
+        }
+    }
+
+    protected function forwardSingleToSyslog(Eventlog $log, Device|int|null $device): void
+    {
+        $ip = \App\Facades\LibrenmsConfig::get('eventlog_forward_syslog_host');
+        $port = (int) \App\Facades\LibrenmsConfig::get('eventlog_forward_syslog_port', 514);
+
+        if (empty($ip)) {
+            return;
+        }
+
+        if (! filter_var($ip, FILTER_VALIDATE_IP)) {
+            // Validate hostname
+            if (! preg_match('/^([a-z0-9]+(-[a-z0-9]+)*\.)+[a-z]{2,}$/i', $ip) && ! preg_match('/^[a-z0-9]+(-[a-z0-9]+)*$/i', $ip)) {
+                return;
+            }
+            $resolved_ip = gethostbyname($ip);
+            if ($resolved_ip === $ip) {
+                return;
+            }
+            $ip = $resolved_ip;
+        }
+
+        if (($socket = socket_create(AF_INET, SOCK_DGRAM, SOL_UDP)) !== false) {
+            $priority = 24 + match ($log->severity) {
+                Severity::Ok => 6,
+                Severity::Info => 6,
+                Severity::Notice => 5,
+                Severity::Warning => 4,
+                Severity::Error => 3,
+                default => 6,
+            };
+
+            $deviceModel = null;
+            if ($device instanceof \App\Models\Device) {
+                $deviceModel = $device;
+            } elseif (is_numeric($device)) {
+                $deviceModel = \App\Models\Device::find($device);
+            }
+
+            $hostname = $deviceModel ? $deviceModel->hostname : 'localhost';
+            $username = $log->username ? " [user: {$log->username}]" : "";
+            $timestamp = Carbon::parse($log->datetime)->format('M d H:i:s');
+            $syslog_msg = "<{$priority}>{$timestamp} {$hostname} telequill_eventlog[{$log->type}]: {$log->message}{$username}";
+
+            socket_sendto($socket, $syslog_msg, strlen($syslog_msg), 0, $ip, $port);
+            socket_close($socket);
+        }
     }
 
     // ---- Define Relationships ----

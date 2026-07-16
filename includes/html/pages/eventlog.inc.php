@@ -69,7 +69,10 @@ $pagetitle[] = 'Eventlog';
         ?>
         '</select>' +
         '</div>&nbsp;&nbsp;' +
-        '<button type="submit" class="btn btn-default">Filter</button>' +
+        '<button type="submit" class="btn btn-default">Filter</button>&nbsp;&nbsp;' +
+        '<button type="button" class="btn btn-primary" data-toggle="modal" data-target="#forwardSyslogModal">' +
+        '<i class="fa fa-cog fa-fw"></i> Syslog Forwarding' +
+        '</button>' +
         '</form>' +
         '</div>'
     );
@@ -108,4 +111,77 @@ $pagetitle[] = 'Eventlog';
         }
     })<?php echo Request::get('eventtype') ? ".val('" . htmlspecialchars(Request::get('eventtype')) . "').trigger('change');" : ''; ?>;
 
+    $(document).on('submit', '#forwardSyslogForm', function (e) {
+        e.preventDefault();
+        var btn = $('#btnForwardSyslog');
+        var alertDiv = $('#forwardSyslogAlert');
+        
+        btn.prop('disabled', true).text('Saving...');
+        alertDiv.hide().removeClass('alert-success alert-danger');
+        
+        $.ajax({
+            url: '<?php echo url('/ajax/table/eventlog/forward'); ?>',
+            method: 'POST',
+            data: $(this).serialize(),
+            success: function (response) {
+                btn.prop('disabled', false).text('Save Configuration');
+                if (response.success) {
+                    alertDiv.addClass('alert-success').text(response.message).show();
+                    setTimeout(function() {
+                        $('#forwardSyslogModal').modal('hide');
+                        alertDiv.hide();
+                    }, 3000);
+                } else {
+                    alertDiv.addClass('alert-danger').text(response.message).show();
+                }
+            },
+            error: function (xhr) {
+                btn.prop('disabled', false).text('Save Configuration');
+                var errorMsg = 'An error occurred while saving configuration.';
+                if (xhr.responseJSON && xhr.responseJSON.message) {
+                    errorMsg = xhr.responseJSON.message;
+                }
+                alertDiv.addClass('alert-danger').text(errorMsg).show();
+            }
+        });
+    });
 </script>
+
+<?php
+$saved_syslog_host = \App\Facades\LibrenmsConfig::get('eventlog_forward_syslog_host', '');
+$saved_syslog_port = \App\Facades\LibrenmsConfig::get('eventlog_forward_syslog_port', 514);
+?>
+
+<!-- Forward to Syslog Modal -->
+<div class="modal fade" id="forwardSyslogModal" tabindex="-1" role="dialog" aria-labelledby="forwardSyslogModalLabel" aria-hidden="true">
+    <div class="modal-dialog" role="document">
+        <div class="modal-content">
+            <div class="modal-header">
+                <button type="button" class="close" data-dismiss="modal" aria-label="Close"><span aria-hidden="true">&times;</span></button>
+                <h4 class="modal-title" id="forwardSyslogModalLabel">Configure Eventlog Syslog Forwarding</h4>
+            </div>
+            <form id="forwardSyslogForm">
+                <?php echo csrf_field() ?>
+                <div class="modal-body">
+                    <div id="forwardSyslogAlert" class="alert" style="display: none;"></div>
+                    
+                    <p class="text-muted">Enter the IP address/hostname and port of your external Syslog server. Once saved, all new event log entries will be forwarded automatically in real-time.</p>
+
+                    <div class="form-group">
+                        <label for="syslog_ip">Syslog Server IP / Hostname</label>
+                        <input type="text" class="form-control" id="syslog_ip" name="syslog_ip" value="<?php echo htmlspecialchars($saved_syslog_host); ?>" placeholder="e.g. 192.168.1.100" required>
+                    </div>
+                    
+                    <div class="form-group">
+                        <label for="syslog_port">Port</label>
+                        <input type="number" class="form-control" id="syslog_port" name="syslog_port" value="<?php echo htmlspecialchars($saved_syslog_port); ?>" min="1" max="65535" required>
+                    </div>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-default" data-dismiss="modal">Close</button>
+                    <button type="submit" class="btn btn-primary" id="btnForwardSyslog">Save Configuration</button>
+                </div>
+            </form>
+        </div>
+    </div>
+</div>

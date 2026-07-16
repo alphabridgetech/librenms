@@ -139,4 +139,35 @@ class EventlogController extends TableController
             default => 'label-default', // Unknown
         };
     }
+
+    public function forward(\Illuminate\Http\Request $request)
+    {
+        $request->validate([
+            'syslog_ip' => 'required|string',
+            'syslog_port' => 'required|integer|between:1,65535',
+        ]);
+
+        $ip = $request->input('syslog_ip');
+        $port = (int) $request->input('syslog_port');
+
+        if (! filter_var($ip, FILTER_VALIDATE_IP)) {
+            // Check if it is a valid hostname
+            if (! preg_match('/^([a-z0-9]+(-[a-z0-9]+)*\.)+[a-z]{2,}$/i', $ip) && ! preg_match('/^[a-z0-9]+(-[a-z0-9]+)*$/i', $ip)) {
+                return response()->json(['success' => false, 'message' => 'Invalid IP address or hostname format.'], 422);
+            }
+            $resolved_ip = gethostbyname($ip);
+            if ($resolved_ip === $ip) {
+                return response()->json(['success' => false, 'message' => 'Hostname found but does not resolve to an IP.'], 422);
+            }
+        }
+
+        // Persist settings to database config table
+        LibrenmsConfig::persist('eventlog_forward_syslog_host', $request->input('syslog_ip'));
+        LibrenmsConfig::persist('eventlog_forward_syslog_port', $port);
+
+        return response()->json([
+            'success' => true,
+            'message' => "Syslog server configuration saved successfully."
+        ]);
+    }
 }
