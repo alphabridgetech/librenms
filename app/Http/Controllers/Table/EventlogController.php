@@ -35,12 +35,16 @@ use LibreNMS\Util\Url;
 
 class EventlogController extends TableController
 {
+    protected $model = Eventlog::class;
+
     public function rules()
     {
         return [
             'device' => 'nullable|int',
             'device_group' => 'nullable|int',
             'eventtype' => 'nullable|string',
+            'start_date' => 'nullable|date_format:Y-m-d',
+            'end_date' => 'nullable|date_format:Y-m-d',
         ];
     }
 
@@ -74,7 +78,35 @@ class EventlogController extends TableController
             ->with('device')
             ->when($request->device_group, function ($query) use ($request) {
                 $query->inDeviceGroup($request->device_group);
+            })
+            ->when($request->start_date, function ($query) use ($request) {
+                $query->where('datetime', '>=', $request->start_date . ' 00:00:00');
+            })
+            ->when($request->end_date, function ($query) use ($request) {
+                $query->where('datetime', '<=', $request->end_date . ' 23:59:59');
             });
+    }
+
+    protected function getExportHeaders()
+    {
+        return [
+            'Timestamp',
+            'Type',
+            'Device',
+            'Message',
+            'User',
+        ];
+    }
+
+    protected function formatExportRow($eventlog)
+    {
+        return [
+            (new Carbon($eventlog->datetime))->setTimezone(session('preferences.timezone') ?? config('app.timezone'))->format(LibrenmsConfig::get('dateformat.compact')),
+            $eventlog->type,
+            $eventlog->device ? $eventlog->device->displayName() : 'unknown',
+            $eventlog->message,
+            $eventlog->username ?: 'System',
+        ];
     }
 
     /**

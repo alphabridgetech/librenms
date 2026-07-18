@@ -8,7 +8,7 @@ PASSWORD = "admin"
 
 TFTP_SERVER = "192.168.200.179"
 FILENAME = "startup-config"
-DEST_FILE = "192.168.200.245_2026-07-16_141039_startup-config"
+DEST_FILE = "192.168.200.245_2026-07-18_142056_startup-config"
 
 def read(shell, wait=1):
     time.sleep(wait)

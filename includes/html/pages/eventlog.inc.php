@@ -20,6 +20,8 @@ $param = [];
 if ($device_id = (int) Request::get('device')) {
     $device = Device::find($device_id);
 }
+$start_date = Request::input('start_date');
+$end_date = Request::input('end_date');
 
 $pagetitle[] = 'Eventlog';
 ?>
@@ -69,7 +71,16 @@ $pagetitle[] = 'Eventlog';
         ?>
         '</select>' +
         '</div>&nbsp;&nbsp;' +
+        '<div class="form-group"><label><strong>From&nbsp;&nbsp;</strong></label>' +
+        '<input type="date" name="start_date" id="start_date" class="form-control input-sm" value="<?php echo htmlspecialchars($start_date ?? ""); ?>">' +
+        '</div>&nbsp;&nbsp;' +
+        '<div class="form-group"><label><strong>To&nbsp;&nbsp;</strong></label>' +
+        '<input type="date" name="end_date" id="end_date" class="form-control input-sm" value="<?php echo htmlspecialchars($end_date ?? ""); ?>">' +
+        '</div>&nbsp;&nbsp;' +
         '<button type="submit" class="btn btn-default">Filter</button>&nbsp;&nbsp;' +
+        '<button type="button" id="btnExportCsv" class="btn btn-success">' +
+        '<i class="fa fa-download fa-fw"></i> Export CSV' +
+        '</button>&nbsp;&nbsp;' +
         '<button type="button" class="btn btn-primary" data-toggle="modal" data-target="#forwardSyslogModal">' +
         '<i class="fa fa-cog fa-fw"></i> Syslog Forwarding' +
         '</button>' +
@@ -144,6 +155,22 @@ $pagetitle[] = 'Eventlog';
                 alertDiv.addClass('alert-danger').text(errorMsg).show();
             }
         });
+    });
+
+    $(document).on('submit', '#result_form', function (e) {
+        e.preventDefault();
+        $("#eventlog").bootgrid("reload");
+    });
+
+    $(document).on('click', '#btnExportCsv', function () {
+        var params = $.param({
+            device: $('#device').val() || '',
+            eventtype: $('#eventtype').val() || '',
+            start_date: $('#start_date').val() || '',
+            end_date: $('#end_date').val() || '',
+            searchPhrase: $('#eventlog-header .search-field').val() || ''
+        });
+        window.location.href = '<?php echo url('/ajax/table/eventlog/export'); ?>?' + params;
     });
 </script>
 

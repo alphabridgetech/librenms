@@ -94,6 +94,23 @@ class Eventlog extends DeviceRelatedModel
         if (\App\Facades\LibrenmsConfig::has('eventlog_forward_syslog_host')) {
             $this->forwardSingleToSyslog($log, $device);
         }
+
+        // Trigger immediate poller run for ports if this is a linkUp/linkDown SNMP trap log
+        if ($type === 'interface' && (str_contains($text, 'SNMP Trap: linkUp') || str_contains($text, 'SNMP Trap: linkDown'))) {
+            $deviceModel = null;
+            if ($device instanceof \App\Models\Device) {
+                $deviceModel = $device;
+            } elseif (is_numeric($device)) {
+                $deviceModel = \App\Models\Device::find($device);
+            }
+
+            if ($deviceModel) {
+                $port = \App\Models\Port::find($reference);
+                $interfaceName = $port ? ($port->ifName ?: $port->ifDescr) : 'unknown';
+                \Illuminate\Support\Facades\Log::info("Triggering immediate ports poll for device: {$deviceModel->hostname}, interface: {$interfaceName} due to event: {$text}");
+                \App\Jobs\PollDevice::dispatchSync($deviceModel->device_id, ['ports' => true]);
+            }
+        }
     }
 
     protected function forwardSingleToSyslog(Eventlog $log, Device|int|null $device): void
