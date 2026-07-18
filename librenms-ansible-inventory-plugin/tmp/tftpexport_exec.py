@@ -8,7 +8,7 @@ PASSWORD = "admin"
 
 TFTP_SERVER = "192.168.200.179"
 FILENAME = "startup-config"
-DEST_FILE = "192.168.200.245_2026-07-16_122850_startup-config"
+DEST_FILE = "192.168.200.245_2026-07-16_141039_startup-config"
 
 def read(shell, wait=1):
     time.sleep(wait)
@@ -37,8 +37,6 @@ try:
     if output.strip().endswith(">"):
         shell.send("enable\n")
         time.sleep(1)
-        shell.send(PASSWORD + "\n")
-        time.sleep(2)
         output += read(shell)
 
     # VERIFY PRIVILEGED MODE
@@ -78,31 +76,44 @@ try:
     time.sleep(1)
     read(shell)
 
-    # FETCH FILE DIRECTLY OVER SSH AND WRITE LOCALLY
-    shell.send(f"show {FILENAME}\n")
-    time.sleep(3)
-    config_output = read(shell, 2)
-
-    # Filter prompt and command echo out of the output
-    lines = config_output.splitlines()
-    config_lines = []
-    started = False
-    for line in lines:
-        if line.strip().startswith("!") or "version" in line.lower() or started:
-            started = True
-            config_lines.append(line)
-            if line.strip() == "end" or (started and line.strip().endswith("#")):
-                break
-
-    if not config_lines:
-        config_lines = lines
-
     import os
     local_dir = "/tftpboot"
-    if os.path.exists(local_dir):
-        local_path = os.path.join(local_dir, DEST_FILE)
-        with open(local_path, "w") as f:
-            f.write("\n".join(config_lines))
+    local_path = os.path.join(local_dir, DEST_FILE) if os.path.exists(local_dir) else None
+    if local_path and (not os.path.exists(local_path) or os.path.getsize(local_path) < 100):
+        # FETCH FILE DIRECTLY OVER SSH AND WRITE LOCALLY
+        config_output = ""
+        if FILENAME == "startup-config":
+            shell.send("show startup-config\n")
+            time.sleep(3)
+            res = read(shell, 2)
+            if "too many parameters" in res.lower() or "invalid input" in res.lower() or "%" in res:
+                shell.send("show config\n")
+                time.sleep(3)
+                res = read(shell, 2)
+            config_output = res
+        else:
+            shell.send(f"show {FILENAME}\n")
+            time.sleep(3)
+            config_output = read(shell, 2)
+
+        # Filter prompt and command echo out of the output
+        lines = config_output.splitlines()
+        config_lines = []
+        started = False
+        for line in lines:
+            if line.strip().startswith("!") or "version" in line.lower() or started:
+                started = True
+                config_lines.append(line)
+                if line.strip() == "end" or (started and line.strip().endswith("#")):
+                    break
+
+        if not config_lines:
+            config_lines = lines
+
+        config_text = "\n".join(config_lines)
+        if "too many parameters" not in config_text.lower() and "invalid input" not in config_text.lower() and "no such file" not in config_text.lower():
+            with open(local_path, "w") as f:
+                f.write(config_text)
 
     print(output)
     print("SUCCESS")
