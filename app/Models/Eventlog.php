@@ -107,7 +107,7 @@ class Eventlog extends DeviceRelatedModel
             if ($deviceModel) {
                 $port = \App\Models\Port::find($reference);
                 $interfaceName = $port ? ($port->ifName ?: $port->ifDescr) : 'unknown';
-                \Illuminate\Support\Facades\Log::info("Triggering immediate ports poll for device: {$deviceModel->hostname}, interface: {$interfaceName} due to event: {$text}");
+                \Illuminate\Support\Facades\Log::warning("Triggering immediate ports poll for device: {$deviceModel->hostname}, interface: {$interfaceName} due to event: {$text}");
                 \App\Jobs\PollDevice::dispatchSync($deviceModel->device_id, ['ports' => true]);
             }
         }

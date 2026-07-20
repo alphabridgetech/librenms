@@ -46,7 +46,9 @@ var eventlog_grid = $("#eventlog").bootgrid({
 });
 
 setInterval(function () {
-    $("#eventlog").bootgrid("reload");
+    if ($("#eventlog").length && $("#eventlog").bootgrid("getCurrentPage") === 1) {
+        $("#eventlog").bootgrid("reload");
+    }
 }, 10000);
 
 </script>
