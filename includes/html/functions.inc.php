@@ -557,7 +557,7 @@ function alert_details($details)
     // Check if we have a diff (alert status changed, worse and better)
     if (isset($details['diff'])) {
         // Add a "title" for the modifications
-        $all_fault_detail .= '<b>Modifications:</b><br>';
+        $all_fault_detail .= '<b>Changes:</b><br>';
 
         // Check if we have added
         if (isset($details['diff']['added'])) {
@@ -578,7 +578,7 @@ function alert_details($details)
         }
 
         // Add a "title" for the complete list
-        $all_fault_detail .= '<br><b>All current items:</b><br>';
+        $all_fault_detail .= '<br><b>All currently down items:</b><br>';
     }
 
     foreach ($details['rule'] ?? [] as $o => $tmp_alerts_rule) {
@@ -594,7 +594,15 @@ function format_alert_details($alert_idx, $tmp_alerts, $type_info = null)
 {
     $fault_detail = '';
     $fallback = true;
-    $fault_detail .= $type_info ? $type_info . '&nbsp;' : '';
+    if ($type_info) {
+        if ($type_info === 'Added') {
+            $fault_detail .= '<span class="label label-danger" style="margin-right: 5px;">Port Down</span> ';
+        } elseif ($type_info === 'Resolved') {
+            $fault_detail .= '<span class="label label-success" style="margin-right: 5px;">Port Up</span> ';
+        } else {
+            $fault_detail .= '<span class="label label-default" style="margin-right: 5px;">' . $type_info . '</span> ';
+        }
+    }
     $fault_detail .= '#' . ($alert_idx + 1) . ':&nbsp;';
     if (isset($tmp_alerts['bill_id'])) {
         $fault_detail .= '<a href="' . Url::generate(['page' => 'bill', 'bill_id' => $tmp_alerts['bill_id']], []) . '">' . $tmp_alerts['bill_name'] . '</a>;&nbsp;';
@@ -608,11 +616,11 @@ function format_alert_details($alert_idx, $tmp_alerts, $type_info = null)
             $fault_detail .= ', Interface ' . Url::portLink($port);
         } else {
             $tmp_alerts = cleanPort($tmp_alerts);
-            $fault_detail .= generate_port_link($tmp_alerts) . ';&nbsp;';
+            $fault_detail .= generate_port_link($tmp_alerts);
         }
         if ((isset($tmp_alerts['ifDescr'])) && (isset($tmp_alerts['ifAlias'])) && ($tmp_alerts['ifDescr'] != $tmp_alerts['ifAlias'])) {
-            // IfAlias has been set, so display it on alarms
-            $fault_detail .= $tmp_alerts['ifAlias'] . '; ';
+            // Display Alias in parentheses for better readability
+            $fault_detail .= ' (' . $tmp_alerts['ifAlias'] . ')';
             unset($tmp_alerts['label']);
         }
         $fallback = false;

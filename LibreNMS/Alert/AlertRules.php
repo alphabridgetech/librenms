@@ -121,10 +121,81 @@ class AlertRules
                     if (! empty($alert_log['details'])) {
                         $details = json_decode(gzuncompress($alert_log['details']), true);
                     }
+                    unset($details['diff']);
+                    
+                    $old_ports = [];
+                    if (isset($details['rule'])) {
+                        foreach ($details['rule'] as $fault) {
+                            if (isset($fault['port_id'])) {
+                                $old_ports[] = $fault['port_id'];
+                            }
+                        }
+                    }
+                    $new_ports = [];
+                    foreach ($qry as $fault) {
+                        if (isset($fault['port_id'])) {
+                            $new_ports[] = $fault['port_id'];
+                        }
+                    }
+
+                    // Find added and resolved ports
+                    $added = [];
+                    foreach ($qry as $fault) {
+                        if (isset($fault['port_id']) && !in_array($fault['port_id'], $old_ports)) {
+                            $added[] = $fault;
+                        }
+                    }
+                    $resolved = [];
+                    if (isset($details['rule'])) {
+                        foreach ($details['rule'] as $fault) {
+                            if (isset($fault['port_id']) && !in_array($fault['port_id'], $new_ports)) {
+                                $resolved[] = $fault;
+                            }
+                        }
+                    }
+
+                    // Determine if the state is Worse, Better, or Changed
+                    $state_change = null;
+                    if (! empty($added) && ! empty($resolved)) {
+                        $state_change = AlertState::CHANGED;
+                    } elseif (! empty($added)) {
+                        $state_change = AlertState::WORSE;
+                    } elseif (! empty($resolved)) {
+                        $state_change = AlertState::BETTER;
+                    }
+
+                    // Log to Eventlog
+                    foreach ($added as $fault) {
+                        $portName = $fault['ifName'] ?? $fault['ifDescr'] ?? 'unknown';
+                        Eventlog::log("Additional port went down: {$portName} (Alert: {$rule['name']})", $device_id, 'alert', Severity::Warning);
+                    }
+                    foreach ($resolved as $fault) {
+                        $portName = $fault['ifName'] ?? $fault['ifDescr'] ?? 'unknown';
+                        Eventlog::log("Port recovered: {$portName} (Alert: {$rule['name']})", $device_id, 'alert', Severity::Ok);
+                    }
+
+                    // Update details array
                     $details['contacts'] = AlertUtil::getContacts($qry);
                     $details['rule'] = $qry;
-                    $details = gzcompress(json_encode($details), 9);
-                    dbUpdate(['details' => $details], 'alert_log', 'id = ?', [$alert_log['id']]);
+                    if (! empty($added)) {
+                        $details['diff']['added'] = $added;
+                    }
+                    if (! empty($resolved)) {
+                        $details['diff']['resolved'] = $resolved;
+                    }
+
+                    if ($state_change !== null) {
+                        // Insert a NEW record into alert_log so it shows in Alert History
+                        $extra = gzcompress(json_encode($details), 9);
+                        if (dbInsert(['state' => $state_change, 'device_id' => $device_id, 'rule_id' => $rule['id'], 'details' => $extra], 'alert_log')) {
+                            // Update the main alerts table to reflect the new sub-state (Worse / Better / Changed)
+                            dbUpdate(['state' => $state_change, 'open' => 1, 'timestamp' => Carbon::now()], 'alerts', 'device_id = ? && rule_id = ?', [$device_id, $rule['id']]);
+                        }
+                    } else {
+                        // If nothing changed, just update the latest details
+                        $compressed_details = gzcompress(json_encode($details), 9);
+                        dbUpdate(['details' => $compressed_details], 'alert_log', 'id = ?', [$alert_log['id']]);
+                    }
                 } else {
                     $extra = gzcompress(json_encode(['contacts' => AlertUtil::getContacts($qry), 'rule' => $qry]), 9);
                     if (dbInsert(['state' => AlertState::ACTIVE, 'device_id' => $device_id, 'rule_id' => $rule['id'], 'details' => $extra], 'alert_log')) {
