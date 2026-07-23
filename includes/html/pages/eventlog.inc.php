@@ -157,6 +157,43 @@ $pagetitle[] = 'Eventlog';
         });
     });
 
+    $(document).on('click', '#btnTestForwardSyslog', function (e) {
+        e.preventDefault();
+        var btn = $(this);
+        var alertDiv = $('#forwardSyslogAlert');
+        var form = $('#forwardSyslogForm');
+        
+        if (!form[0].checkValidity()) {
+            form[0].reportValidity();
+            return;
+        }
+
+        btn.prop('disabled', true).text('Testing...');
+        alertDiv.hide().removeClass('alert-success alert-danger');
+        
+        $.ajax({
+            url: '<?php echo url('/ajax/table/eventlog/forward/test'); ?>',
+            method: 'POST',
+            data: form.serialize(),
+            success: function (response) {
+                btn.prop('disabled', false).text('Test Connection');
+                if (response.success) {
+                    alertDiv.addClass('alert-success').text(response.message).show();
+                } else {
+                    alertDiv.addClass('alert-danger').text(response.message).show();
+                }
+            },
+            error: function (xhr) {
+                btn.prop('disabled', false).text('Test Connection');
+                var errorMsg = 'An error occurred while testing connection.';
+                if (xhr.responseJSON && xhr.responseJSON.message) {
+                    errorMsg = xhr.responseJSON.message;
+                }
+                alertDiv.addClass('alert-danger').text(errorMsg).show();
+            }
+        });
+    });
+
     $(document).on('submit', '#result_form', function (e) {
         e.preventDefault();
         $("#eventlog").bootgrid("reload");
@@ -206,6 +243,7 @@ $saved_syslog_port = \App\Facades\LibrenmsConfig::get('eventlog_forward_syslog_p
                 </div>
                 <div class="modal-footer">
                     <button type="button" class="btn btn-default" data-dismiss="modal">Close</button>
+                    <button type="button" class="btn btn-warning" id="btnTestForwardSyslog">Test Connection</button>
                     <button type="submit" class="btn btn-primary" id="btnForwardSyslog">Save Configuration</button>
                 </div>
             </form>

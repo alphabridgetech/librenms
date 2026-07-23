@@ -441,6 +441,7 @@ Route::middleware(['auth', 'license'])->group(function () {
             Route::post('edit-ports', Table\EditPortsController::class);
             Route::post('eventlog', Table\EventlogController::class);
             Route::post('eventlog/forward', [Table\EventlogController::class, 'forward'])->name('ajax.eventlog.forward');
+            Route::post('eventlog/forward/test', [Table\EventlogController::class, 'testForward'])->name('ajax.eventlog.forward.test');
             Route::get('eventlog/export', [Table\EventlogController::class, 'export']);
             Route::post('fdb-tables', Table\FdbTablesController::class);
             Route::post('graylog', Table\GraylogController::class);

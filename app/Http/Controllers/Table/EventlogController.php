@@ -202,4 +202,51 @@ class EventlogController extends TableController
             'message' => "Syslog server configuration saved successfully."
         ]);
     }
+
+    public function testForward(\Illuminate\Http\Request $request)
+    {
+        $request->validate([
+            'syslog_ip' => 'required|string',
+            'syslog_port' => 'required|integer|between:1,65535',
+        ]);
+
+        $ip = $request->input('syslog_ip');
+        $port = (int) $request->input('syslog_port');
+
+        if (! filter_var($ip, FILTER_VALIDATE_IP)) {
+            // Check if it is a valid hostname
+            if (! preg_match('/^([a-z0-9]+(-[a-z0-9]+)*\.)+[a-z]{2,}$/i', $ip) && ! preg_match('/^[a-z0-9]+(-[a-z0-9]+)*$/i', $ip)) {
+                return response()->json(['success' => false, 'message' => 'Invalid IP address or hostname format.'], 422);
+            }
+            $resolved_ip = gethostbyname($ip);
+            if ($resolved_ip === $ip) {
+                return response()->json(['success' => false, 'message' => 'Hostname found but does not resolve to an IP.'], 422);
+            }
+            $ip = $resolved_ip;
+        }
+
+        if (($socket = socket_create(AF_INET, SOCK_DGRAM, SOL_UDP)) === false) {
+            $errorCode = socket_last_error();
+            $errorMsg = socket_strerror($errorCode);
+            return response()->json(['success' => false, 'message' => "Socket creation failed: $errorMsg"], 500);
+        }
+
+        $priority = 24 + 6; // facility: daemon (3), severity: info (6) => 3 * 8 + 6 = 30
+        $timestamp = Carbon::now()->format('M d H:i:s');
+        $syslog_msg = "<{$priority}>{$timestamp} localhost telequill_eventlog[test]: This is a test syslog message from Telequill.";
+
+        if (socket_sendto($socket, $syslog_msg, strlen($syslog_msg), 0, $ip, $port) === false) {
+            $errorCode = socket_last_error($socket);
+            $errorMsg = socket_strerror($errorCode);
+            socket_close($socket);
+            return response()->json(['success' => false, 'message' => "Failed to send test message: $errorMsg"], 500);
+        }
+
+        socket_close($socket);
+
+        return response()->json([
+            'success' => true,
+            'message' => "Test syslog packet sent successfully to {$request->input('syslog_ip')}:{$port}."
+        ]);
+    }
 }
