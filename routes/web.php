@@ -442,6 +442,8 @@ Route::middleware(['auth', 'license'])->group(function () {
             Route::post('eventlog', Table\EventlogController::class);
             Route::post('eventlog/forward', [Table\EventlogController::class, 'forward'])->name('ajax.eventlog.forward');
             Route::post('eventlog/forward/test', [Table\EventlogController::class, 'testForward'])->name('ajax.eventlog.forward.test');
+            Route::post('eventlog/forward-snmptrap', [Table\EventlogController::class, 'forwardSnmpTrap'])->name('ajax.eventlog.forward-snmptrap');
+            Route::post('eventlog/forward-snmptrap/test', [Table\EventlogController::class, 'testForwardSnmpTrap'])->name('ajax.eventlog.forward-snmptrap.test');
             Route::get('eventlog/export', [Table\EventlogController::class, 'export']);
             Route::post('fdb-tables', Table\FdbTablesController::class);
             Route::post('graylog', Table\GraylogController::class);

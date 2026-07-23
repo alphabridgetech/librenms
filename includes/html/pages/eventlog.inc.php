@@ -83,6 +83,9 @@ $pagetitle[] = 'Eventlog';
         '</button>&nbsp;&nbsp;' +
         '<button type="button" class="btn btn-primary" data-toggle="modal" data-target="#forwardSyslogModal">' +
         '<i class="fa fa-cog fa-fw"></i> Syslog Forwarding' +
+        '</button>&nbsp;&nbsp;' +
+        '<button type="button" class="btn btn-info" data-toggle="modal" data-target="#forwardSnmpTrapModal">' +
+        '<i class="fa fa-cog fa-fw"></i> SNMP Trap Forwarding' +
         '</button>' +
         '</form>' +
         '</div>'
@@ -194,6 +197,78 @@ $pagetitle[] = 'Eventlog';
         });
     });
 
+    $(document).on('submit', '#forwardSnmpTrapForm', function (e) {
+        e.preventDefault();
+        var btn = $('#btnForwardSnmpTrap');
+        var alertDiv = $('#forwardSnmpTrapAlert');
+        
+        btn.prop('disabled', true).text('Saving...');
+        alertDiv.hide().removeClass('alert-success alert-danger');
+        
+        $.ajax({
+            url: '<?php echo url('/ajax/table/eventlog/forward-snmptrap'); ?>',
+            method: 'POST',
+            data: $(this).serialize(),
+            success: function (response) {
+                btn.prop('disabled', false).text('Save Configuration');
+                if (response.success) {
+                    alertDiv.addClass('alert-success').text(response.message).show();
+                    setTimeout(function() {
+                        $('#forwardSnmpTrapModal').modal('hide');
+                        alertDiv.hide();
+                    }, 3000);
+                } else {
+                    alertDiv.addClass('alert-danger').text(response.message).show();
+                }
+            },
+            error: function (xhr) {
+                btn.prop('disabled', false).text('Save Configuration');
+                var errorMsg = 'An error occurred while saving configuration.';
+                if (xhr.responseJSON && xhr.responseJSON.message) {
+                    errorMsg = xhr.responseJSON.message;
+                }
+                alertDiv.addClass('alert-danger').text(errorMsg).show();
+            }
+        });
+    });
+
+    $(document).on('click', '#btnTestForwardSnmpTrap', function (e) {
+        e.preventDefault();
+        var btn = $(this);
+        var alertDiv = $('#forwardSnmpTrapAlert');
+        var form = $('#forwardSnmpTrapForm');
+        
+        if (!form[0].checkValidity()) {
+            form[0].reportValidity();
+            return;
+        }
+
+        btn.prop('disabled', true).text('Testing...');
+        alertDiv.hide().removeClass('alert-success alert-danger');
+        
+        $.ajax({
+            url: '<?php echo url('/ajax/table/eventlog/forward-snmptrap/test'); ?>',
+            method: 'POST',
+            data: form.serialize(),
+            success: function (response) {
+                btn.prop('disabled', false).text('Test Connection');
+                if (response.success) {
+                    alertDiv.addClass('alert-success').text(response.message).show();
+                } else {
+                    alertDiv.addClass('alert-danger').text(response.message).show();
+                }
+            },
+            error: function (xhr) {
+                btn.prop('disabled', false).text('Test Connection');
+                var errorMsg = 'An error occurred while testing connection.';
+                if (xhr.responseJSON && xhr.responseJSON.message) {
+                    errorMsg = xhr.responseJSON.message;
+                }
+                alertDiv.addClass('alert-danger').text(errorMsg).show();
+            }
+        });
+    });
+
     $(document).on('submit', '#result_form', function (e) {
         e.preventDefault();
         $("#eventlog").bootgrid("reload");
@@ -245,6 +320,46 @@ $saved_syslog_port = \App\Facades\LibrenmsConfig::get('eventlog_forward_syslog_p
                     <button type="button" class="btn btn-default" data-dismiss="modal">Close</button>
                     <button type="button" class="btn btn-warning" id="btnTestForwardSyslog">Test Connection</button>
                     <button type="submit" class="btn btn-primary" id="btnForwardSyslog">Save Configuration</button>
+                </div>
+            </form>
+        </div>
+    </div>
+</div>
+
+<?php
+$saved_snmptrap_host = \App\Facades\LibrenmsConfig::get('snmptrap_forward_host', '');
+$saved_snmptrap_port = \App\Facades\LibrenmsConfig::get('snmptrap_forward_port', 162);
+?>
+
+<!-- Forward to SNMP Trap Modal -->
+<div class="modal fade" id="forwardSnmpTrapModal" tabindex="-1" role="dialog" aria-labelledby="forwardSnmpTrapModalLabel" aria-hidden="true">
+    <div class="modal-dialog" role="document">
+        <div class="modal-content">
+            <div class="modal-header">
+                <button type="button" class="close" data-dismiss="modal" aria-label="Close"><span aria-hidden="true">&times;</span></button>
+                <h4 class="modal-title" id="forwardSnmpTrapModalLabel">Configure SNMP Trap Forwarding</h4>
+            </div>
+            <form id="forwardSnmpTrapForm">
+                <?php echo csrf_field() ?>
+                <div class="modal-body">
+                    <div id="forwardSnmpTrapAlert" class="alert" style="display: none;"></div>
+                    
+                    <p class="text-muted">Enter the IP address/hostname and port of your external SNMP Trap server/receiver. Once saved, all incoming SNMP traps will be forwarded automatically in real-time.</p>
+
+                    <div class="form-group">
+                        <label for="snmptrap_ip">SNMP Trap Server IP / Hostname</label>
+                        <input type="text" class="form-control" id="snmptrap_ip" name="snmptrap_ip" value="<?php echo htmlspecialchars($saved_snmptrap_host); ?>" placeholder="e.g. 192.168.1.100" required>
+                    </div>
+                    
+                    <div class="form-group">
+                        <label for="snmptrap_port">Port</label>
+                        <input type="number" class="form-control" id="snmptrap_port" name="snmptrap_port" value="<?php echo htmlspecialchars($saved_snmptrap_port); ?>" min="1" max="65535" required>
+                    </div>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-default" data-dismiss="modal">Close</button>
+                    <button type="button" class="btn btn-warning" id="btnTestForwardSnmpTrap">Test Connection</button>
+                    <button type="submit" class="btn btn-primary" id="btnForwardSnmpTrap">Save Configuration</button>
                 </div>
             </form>
         </div>

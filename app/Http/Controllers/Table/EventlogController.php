@@ -249,4 +249,81 @@ class EventlogController extends TableController
             'message' => "Test syslog packet sent successfully to {$request->input('syslog_ip')}:{$port}."
         ]);
     }
+
+    public function forwardSnmpTrap(\Illuminate\Http\Request $request)
+    {
+        $request->validate([
+            'snmptrap_ip' => 'required|string',
+            'snmptrap_port' => 'required|integer|between:1,65535',
+        ]);
+
+        $ip = $request->input('snmptrap_ip');
+        $port = (int) $request->input('snmptrap_port');
+
+        if (! filter_var($ip, FILTER_VALIDATE_IP)) {
+            // Check if it is a valid hostname
+            if (! preg_match('/^([a-z0-9]+(-[a-z0-9]+)*\.)+[a-z]{2,}$/i', $ip) && ! preg_match('/^[a-z0-9]+(-[a-z0-9]+)*$/i', $ip)) {
+                return response()->json(['success' => false, 'message' => 'Invalid IP address or hostname format.'], 422);
+            }
+            $resolved_ip = gethostbyname($ip);
+            if ($resolved_ip === $ip) {
+                return response()->json(['success' => false, 'message' => 'Hostname found but does not resolve to an IP.'], 422);
+            }
+        }
+
+        // Persist settings to database config table
+        LibrenmsConfig::persist('snmptrap_forward_host', $request->input('snmptrap_ip'));
+        LibrenmsConfig::persist('snmptrap_forward_port', $port);
+
+        return response()->json([
+            'success' => true,
+            'message' => "SNMP Trap server configuration saved successfully."
+        ]);
+    }
+
+    public function testForwardSnmpTrap(\Illuminate\Http\Request $request)
+    {
+        $request->validate([
+            'snmptrap_ip' => 'required|string',
+            'snmptrap_port' => 'required|integer|between:1,65535',
+        ]);
+
+        $ip = $request->input('snmptrap_ip');
+        $port = (int) $request->input('snmptrap_port');
+
+        if (! filter_var($ip, FILTER_VALIDATE_IP)) {
+            // Check if it is a valid hostname
+            if (! preg_match('/^([a-z0-9]+(-[a-z0-9]+)*\.)+[a-z]{2,}$/i', $ip) && ! preg_match('/^[a-z0-9]+(-[a-z0-9]+)*$/i', $ip)) {
+                return response()->json(['success' => false, 'message' => 'Invalid IP address or hostname format.'], 422);
+            }
+            $resolved_ip = gethostbyname($ip);
+            if ($resolved_ip === $ip) {
+                return response()->json(['success' => false, 'message' => 'Hostname found but does not resolve to an IP.'], 422);
+            }
+            $ip = $resolved_ip;
+        }
+
+        if (($socket = socket_create(AF_INET, SOCK_DGRAM, SOL_UDP)) === false) {
+            $errorCode = socket_last_error();
+            $errorMsg = socket_strerror($errorCode);
+            return response()->json(['success' => false, 'message' => "Socket creation failed: $errorMsg"], 500);
+        }
+
+        // Test SNMP Trap Text representation
+        $test_trap = "localhost\nUDP: [127.0.0.1]:54321->[127.0.0.1]:162\nDISMAN-EVENT-MIB::sysUpTimeInstance 1:0:00:00.00\nSNMPv2-MIB::snmpTrapOID.0 SNMPv2-SMI::enterprises.9.9.41.2.0.1\n";
+
+        if (socket_sendto($socket, $test_trap, strlen($test_trap), 0, $ip, $port) === false) {
+            $errorCode = socket_last_error($socket);
+            $errorMsg = socket_strerror($errorCode);
+            socket_close($socket);
+            return response()->json(['success' => false, 'message' => "Failed to send test SNMP Trap: $errorMsg"], 500);
+        }
+
+        socket_close($socket);
+
+        return response()->json([
+            'success' => true,
+            'message' => "Test SNMP trap packet sent successfully to {$request->input('snmptrap_ip')}:{$port}."
+        ]);
+    }
 }
