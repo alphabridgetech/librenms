@@ -190,6 +190,14 @@ class AlertRules
                         if (dbInsert(['state' => $state_change, 'device_id' => $device_id, 'rule_id' => $rule['id'], 'details' => $extra], 'alert_log')) {
                             // Update the main alerts table to reflect the new sub-state (Worse / Better / Changed)
                             dbUpdate(['state' => $state_change, 'open' => 1, 'timestamp' => Carbon::now()], 'alerts', 'device_id = ? && rule_id = ?', [$device_id, $rule['id']]);
+
+                            (new \LibreNMS\Alert\Transport\Snmpforwarding())->deliverAlert([
+                                'device_id' => $device_id,
+                                'rule_id'   => $rule['id'],
+                                'name'      => $rule['name'],
+                                'state'     => $state_change,
+                                'severity'  => $rule['severity'] ?? 'critical',
+                            ]);
                         }
                     } else {
                         // If nothing changed, just update the latest details
@@ -205,6 +213,14 @@ class AlertRules
                             dbUpdate(['state' => AlertState::ACTIVE, 'open' => 1, 'timestamp' => Carbon::now()], 'alerts', 'device_id = ? && rule_id = ?', [$device_id, $rule['id']]);
                         }
                         Log::info(PHP_EOL . 'Status: %rALERT%n', ['color' => true]);
+
+                        (new \LibreNMS\Alert\Transport\Snmpforwarding())->deliverAlert([
+                            'device_id' => $device_id,
+                            'rule_id'   => $rule['id'],
+                            'name'      => $rule['name'],
+                            'state'     => AlertState::ACTIVE,
+                            'severity'  => $rule['severity'] ?? 'critical',
+                        ]);
                     }
                 }
             } else {
@@ -219,6 +235,14 @@ class AlertRules
                         }
 
                         Log::info(PHP_EOL . 'Status: %gOK%n', ['color' => true]);
+
+                        (new \LibreNMS\Alert\Transport\Snmpforwarding())->deliverAlert([
+                            'device_id' => $device_id,
+                            'rule_id'   => $rule['id'],
+                            'name'      => $rule['name'],
+                            'state'     => AlertState::RECOVERED,
+                            'severity'  => $rule['severity'] ?? 'critical',
+                        ]);
                     }
                 }
             }

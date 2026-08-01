@@ -304,11 +304,11 @@ $saved_syslog_port = \App\Facades\LibrenmsConfig::get('eventlog_forward_syslog_p
                 <div class="modal-body">
                     <div id="forwardSyslogAlert" class="alert" style="display: none;"></div>
                     
-                    <p class="text-muted">Enter the IP address/hostname and port of your external Syslog server. Once saved, all new event log entries will be forwarded automatically in real-time.</p>
+                    <p class="text-muted">Enter the IP address(es)/hostname(s) (separated by commas) and port of your external Syslog server(s). Once saved, all new event log entries will be forwarded to all configured servers automatically in real-time.</p>
 
                     <div class="form-group">
-                        <label for="syslog_ip">Syslog Server IP / Hostname</label>
-                        <input type="text" class="form-control" id="syslog_ip" name="syslog_ip" value="<?php echo htmlspecialchars($saved_syslog_host); ?>" placeholder="e.g. 192.168.1.100" required>
+                        <label for="syslog_ip">Syslog Server IP(s) / Hostname(s)</label>
+                        <input type="text" class="form-control" id="syslog_ip" name="syslog_ip" value="<?php echo htmlspecialchars($saved_syslog_host); ?>" placeholder="e.g. 192.168.1.100, 192.168.1.101" required>
                     </div>
                     
                     <div class="form-group">
@@ -344,11 +344,11 @@ $saved_snmptrap_port = \App\Facades\LibrenmsConfig::get('snmptrap_forward_port',
                 <div class="modal-body">
                     <div id="forwardSnmpTrapAlert" class="alert" style="display: none;"></div>
                     
-                    <p class="text-muted">Enter the IP address/hostname and port of your external SNMP Trap server/receiver. Once saved, all incoming SNMP traps will be forwarded automatically in real-time.</p>
+                    <p class="text-muted">Enter the IP address(es)/hostname(s) (separated by commas) and port of your external SNMP Trap server(s)/receiver(s). Once saved, all incoming SNMP traps will be forwarded to all configured servers automatically in real-time.</p>
 
                     <div class="form-group">
-                        <label for="snmptrap_ip">SNMP Trap Server IP / Hostname</label>
-                        <input type="text" class="form-control" id="snmptrap_ip" name="snmptrap_ip" value="<?php echo htmlspecialchars($saved_snmptrap_host); ?>" placeholder="e.g. 192.168.1.100" required>
+                        <label for="snmptrap_ip">SNMP Trap Server IP(s) / Hostname(s)</label>
+                        <input type="text" class="form-control" id="snmptrap_ip" name="snmptrap_ip" value="<?php echo htmlspecialchars($saved_snmptrap_host); ?>" placeholder="e.g. 192.168.1.100, 192.168.1.101" required>
                     </div>
                     
                     <div class="form-group">

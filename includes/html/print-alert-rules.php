@@ -174,6 +174,7 @@ $start = (($page_number - 1) * $results);
         <th data-column-id="Rule">Rule</th>
         <th data-column-id="Severity">Severity</th>
         <th data-column-id="Status">Status</th>
+        <th data-column-id="SnmpForward">SNMP Forward</th>
         <th data-column-id="Enabled">Enabled</th>
         <th data-column-id="Action" style="width:86px;">Action</th>
     </tr>
@@ -394,6 +395,24 @@ foreach ($rule_list as $rule) {
         echo "<div data-toggle='popover' data-content='Some Alerts for " . htmlentities($rule['name'] ?? '') . " are acknowledged' class='fa fa-fw fa-2x fa-sticky-note text-info' aria-hidden='true'></div>";
     }
     echo '</td>';
+
+    // SNMP Trap Forwarding Toggle
+    $rule_disabled = (bool) $rule['disabled'];
+    $snmp_forward_enabled = (bool)($rule_extra['snmp_forward'] ?? false);
+    $snmp_btn_class = $snmp_forward_enabled ? 'btn-success' : 'btn-default';
+    $snmp_icon_class = $snmp_forward_enabled ? 'fa-paper-plane' : 'fa-paper-plane-o';
+    $snmp_label = $snmp_forward_enabled ? 'ON' : 'OFF';
+    $snmp_msg = $rule_disabled
+        ? 'Rule is disabled. Enable rule first to change SNMP Forwarding.'
+        : ($snmp_forward_enabled ? 'SNMP Trap Forwarding Enabled (Click to disable)' : 'SNMP Trap Forwarding Disabled (Click to enable)');
+    $disabled_attr = $rule_disabled ? "disabled='disabled'" : '';
+
+    echo '<td>';
+    echo "<button type='button' id='btn-snmp-toggle-" . $rule['id'] . "' class='btn btn-xs " . $snmp_btn_class . " btn-toggle-snmp' data-rule_id='" . $rule['id'] . "' data-enabled='" . ($snmp_forward_enabled ? '1' : '0') . "' " . $disabled_attr . " data-toggle='popover' data-placement='top' data-content='" . $snmp_msg . "'>";
+    echo "<i class='fa fa-fw " . $snmp_icon_class . "' aria-hidden='true'></i> " . $snmp_label;
+    echo "</button>";
+    echo '</td>';
+
     // Enabled
 
     $enabled_popover = 'top';
@@ -493,6 +512,9 @@ $('input[name="alert-rule"]').on('switchChange.bootstrapSwitch',  function(event
                     $('#on-off-checkbox-' + alert_id).attr('data-content', alert_name + ' is ON');
                     $('#rule_id_' + alert_id).removeClass('active');
                     $('#rule_id_' + alert_id).addClass(orig_class);
+
+                    var is_snmp_on = $('#btn-snmp-toggle-' + alert_id).data('enabled') == 1;
+                    $('#btn-snmp-toggle-' + alert_id).prop('disabled', false).attr('data-content', is_snmp_on ? 'SNMP Trap Forwarding Enabled (Click to disable)' : 'SNMP Trap Forwarding Disabled (Click to enable)');
                 } else {
                     $('#alert-rule-' + alert_id).removeClass('fa-' + orig_state);
                     $('#alert-rule-' + alert_id).addClass('fa-pause');
@@ -502,6 +524,8 @@ $('input[name="alert-rule"]').on('switchChange.bootstrapSwitch',  function(event
                     $('#on-off-checkbox-' + alert_id).attr('data-content', alert_name + ' is OFF');
                     $('#rule_id_' + alert_id).removeClass('warning');
                     $('#rule_id_' + alert_id).addClass('active');
+
+                    $('#btn-snmp-toggle-' + alert_id).prop('disabled', true).attr('data-content', 'Rule is disabled. Enable rule first to change SNMP Forwarding.');
                 }
             } else {
                 $("#message").html('<div class="alert alert-info">This alert could not be updated.</div>');
@@ -511,6 +535,47 @@ $('input[name="alert-rule"]').on('switchChange.bootstrapSwitch',  function(event
         error: function () {
             $("#message").html('<div class="alert alert-info">This alert could not be updated.</div>');
             $('#' + alert_id).bootstrapSwitch('toggleState', true);
+        }
+    });
+});
+
+$(document).on('click', '.btn-toggle-snmp', function (e) {
+    e.preventDefault();
+    var btn = $(this);
+    var rule_id = btn.data("rule_id");
+    var current_state = btn.data("enabled") == 1;
+    var new_state = !current_state;
+
+    btn.prop('disabled', true);
+    $.ajax({
+        type: 'PUT',
+        url: '<?php echo route('alert-rule.toggle-snmp', ':rule_id'); ?>'.replace(':rule_id', rule_id),
+        data: {
+            _token: '<?php echo csrf_token(); ?>',
+            state: new_state ? 1 : 0
+        },
+        dataType: "json",
+        success: function (response) {
+            btn.prop('disabled', false);
+            if (response.status === 200) {
+                var is_on = response.snmp_forward;
+                btn.data("enabled", is_on ? 1 : 0);
+                if (is_on) {
+                    btn.removeClass('btn-default').addClass('btn-success');
+                    btn.html('<i class="fa fa-fw fa-paper-plane" aria-hidden="true"></i> ON');
+                    btn.attr('data-content', 'SNMP Trap Forwarding Enabled (Click to disable)');
+                } else {
+                    btn.removeClass('btn-success').addClass('btn-default');
+                    btn.html('<i class="fa fa-fw fa-paper-plane-o" aria-hidden="true"></i> OFF');
+                    btn.attr('data-content', 'SNMP Trap Forwarding Disabled (Click to enable)');
+                }
+            } else {
+                $("#message").html('<div class="alert alert-danger">SNMP Forwarding state could not be updated.</div>');
+            }
+        },
+        error: function () {
+            btn.prop('disabled', false);
+            $("#message").html('<div class="alert alert-danger">An error occurred while updating SNMP Forwarding state.</div>');
         }
     });
 });

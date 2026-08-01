@@ -103,6 +103,29 @@ class AlertRuleController extends Controller
         return response()->json(['status' => $success ? 200 : 422], $success ? 200 : 422);
     }
 
+    public function toggleSnmp(Request $request, AlertRule $alertRule): JsonResponse
+    {
+        if ($alertRule->disabled) {
+            return response()->json([
+                'status' => 'error',
+                'message' => 'Cannot change SNMP forwarding status for a disabled alert rule.',
+            ], 422);
+        }
+
+        $extra = $alertRule->extra ?? [];
+        $current = $extra['snmp_forward'] ?? false;
+        $newState = $request->has('state') ? $request->boolean('state') : ! $current;
+
+        $extra['snmp_forward'] = $newState;
+        $alertRule->extra = $extra;
+        $success = $alertRule->save();
+
+        return response()->json([
+            'status' => $success ? 200 : 422,
+            'snmp_forward' => $newState,
+        ], $success ? 200 : 422);
+    }
+
     /**
      * Remove the specified resource from storage.
      */
@@ -196,7 +219,9 @@ class AlertRuleController extends Controller
             'invert',
             'acknowledgement',
             'recovery',
+            'snmp_forward',
         ]);
+        $extra['snmp_forward'] = $request->boolean('snmp_forward', false);
         $extra['count'] ??= '-1';
         $extra['options'] = ['override_query' => $overrideQuery];
         $extra['delay'] = Time::durationToSeconds($request->validated('delay') ?? '');

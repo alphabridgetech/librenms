@@ -27,18 +27,22 @@ $text = stream_get_contents(STDIN);
 // Real-time SNMP Trap Forwarding
 try {
     if (\App\Facades\LibrenmsConfig::has('snmptrap_forward_host')) {
-        $ip = \App\Facades\LibrenmsConfig::get('snmptrap_forward_host');
+        $rawHosts = \App\Facades\LibrenmsConfig::get('snmptrap_forward_host');
         $port = (int) \App\Facades\LibrenmsConfig::get('snmptrap_forward_port', 162);
-        if (!empty($ip)) {
-            if (!filter_var($ip, FILTER_VALIDATE_IP)) {
-                $resolved_ip = gethostbyname($ip);
-                if ($resolved_ip !== $ip) {
-                    $ip = $resolved_ip;
+        if (! empty($rawHosts)) {
+            $targetHosts = array_filter(array_map('trim', preg_split('/[\s,]+/', $rawHosts)));
+            foreach ($targetHosts as $ip) {
+                $targetIp = $ip;
+                if (! filter_var($targetIp, FILTER_VALIDATE_IP)) {
+                    $resolved_ip = gethostbyname($targetIp);
+                    if ($resolved_ip !== $targetIp) {
+                        $targetIp = $resolved_ip;
+                    }
                 }
-            }
-            if (($socket = socket_create(AF_INET, SOCK_DGRAM, SOL_UDP)) !== false) {
-                socket_sendto($socket, $text, strlen($text), 0, $ip, $port);
-                socket_close($socket);
+                if (($socket = socket_create(AF_INET, SOCK_DGRAM, SOL_UDP)) !== false) {
+                    socket_sendto($socket, $text, strlen($text), 0, $targetIp, $port);
+                    socket_close($socket);
+                }
             }
         }
     }

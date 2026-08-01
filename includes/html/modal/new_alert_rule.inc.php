@@ -123,6 +123,12 @@ if (Auth::user()->hasGlobalAdmin()) {
                                     </div>
                                 </div>
                                 <div class="form-group form-inline">
+                                    <label for='snmp_forward' class='col-sm-3 col-md-2 control-label' title="Forward SNMP traps for this rule.">SNMP Forward </label>
+                                    <div class='col-sm-2' title="Forward SNMP traps for this rule.">
+                                        <input type='checkbox' name='snmp_forward' id='snmp_forward'>
+                                    </div>
+                                </div>
+                                <div class="form-group form-inline">
                                     <label for='maps' class='col-sm-3 col-md-2 control-label' title="Restricts this alert rule to the selected devices, groups and locations.">Match devices, groups and locations list </label>
                                     <div class="col-sm-7" style="width: 56%;">
                                         <select id="maps" name="maps[]" class="form-control" multiple="multiple"></select>
@@ -328,6 +334,7 @@ if (Auth::user()->hasGlobalAdmin()) {
                 $("#invert").bootstrapSwitch('state', <?=$default_invert_rule_match?>);
                 $("#recovery").bootstrapSwitch('state', <?=$default_recovery_alerts?>);
                 $("#acknowledgement").bootstrapSwitch('state', <?=$default_acknowledgement_alerts?>);
+                $("#snmp_forward").bootstrapSwitch('state', false);
                 $("#override_query").bootstrapSwitch('state', false);
                 $("#invert_map").bootstrapSwitch('state', <?=$default_invert_map?>);
                 $(this).find("input[type=text]").val("");
@@ -414,6 +421,9 @@ if (Auth::user()->hasGlobalAdmin()) {
                 if (typeof extra.acknowledgement == 'undefined') {
                     extra.acknowledgement = '<?=$default_acknowledgement_alerts?>';
                 }
+                if (typeof extra.snmp_forward == 'undefined') {
+                    extra.snmp_forward = false;
+                }
 
                 if (typeof extra.options == 'undefined') {
                     extra.options = new Array();
@@ -423,6 +433,7 @@ if (Auth::user()->hasGlobalAdmin()) {
                 }
                 $("[name='recovery']").bootstrapSwitch('state', extra.recovery);
                 $("[name='acknowledgement']").bootstrapSwitch('state', extra.acknowledgement);
+                $("[name='snmp_forward']").bootstrapSwitch('state', extra.snmp_forward);
 
                 if (rule.invert_map == 1) {
                     $("[name='invert_map']").bootstrapSwitch('state', true);
