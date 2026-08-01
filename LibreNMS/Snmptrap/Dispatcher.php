@@ -70,6 +70,15 @@ class Dispatcher
             $rules->runRules($trap->getDevice()->device_id);
         }
 
+        // Trigger background poller for the device IP
+        if ($trap->getDevice()) {
+            $deviceModel = $trap->getDevice();
+            $targetIp = $deviceModel->ip ?: $deviceModel->hostname ?: $deviceModel->device_id;
+            $pollerPath = base_path('poller.php');
+            $cmd = sprintf('php %s -h %s > /dev/null 2>&1 &', escapeshellarg($pollerPath), escapeshellarg($targetIp));
+            exec($cmd);
+        }
+
         return ! $fallback;
     }
 }

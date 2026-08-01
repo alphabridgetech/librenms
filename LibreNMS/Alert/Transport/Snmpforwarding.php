@@ -75,6 +75,8 @@ class Snmpforwarding extends Transport
             $severityVal = '0';
         }
 
+        $fullRuleName = $ruleName . ' (State: ' . $stateText . ')';
+
         $uptimeTicks = ($device && $device->uptime > 0) ? (int) ($device->uptime * 100) : 0;
         $timestamp = Carbon::now()->format('Y M j H:i:s ');
 
@@ -100,7 +102,7 @@ class Snmpforwarding extends Transport
                 escapeshellarg('SNMPv2-SMI::enterprises.58158.9.188.3'), escapeshellarg('admin'),
                 escapeshellarg('SNMPv2-SMI::enterprises.58158.9.188.4'), escapeshellarg($timestamp),
                 escapeshellarg('SNMPv2-SMI::enterprises.58158.9.188.5'), escapeshellarg($severityVal),
-                escapeshellarg('SNMPv2-SMI::enterprises.58158.9.188.6'), escapeshellarg($ruleName)
+                escapeshellarg('SNMPv2-SMI::enterprises.58158.9.188.6'), escapeshellarg($fullRuleName)
             );
 
             $output = [];
@@ -108,7 +110,7 @@ class Snmpforwarding extends Transport
             exec($cmd, $output, $retval);
 
             if ($retval !== 0) {
-                \Log::error("Failed to execute snmptrap for alert rule '$ruleName' to host '$host'. Exit code: $retval. Output: " . implode("\n", $output));
+                \Log::error("Failed to execute snmptrap for alert rule '$fullRuleName' to host '$host'. Exit code: $retval. Output: " . implode("\n", $output));
             } else {
                 $anySuccess = true;
             }
@@ -130,13 +132,21 @@ class Snmpforwarding extends Transport
                 'SNMPv2-SMI::enterprises.58158.9.188.3' => 'admin',
                 'SNMPv2-SMI::enterprises.58158.9.188.4' => (string) $timestamp,
                 'SNMPv2-SMI::enterprises.58158.9.188.5' => (string) $severityVal,
-                'SNMPv2-SMI::enterprises.58158.9.188.6' => (string) $ruleName,
+                'SNMPv2-SMI::enterprises.58158.9.188.6' => (string) $fullRuleName,
             ], JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE);
 
             $eventlogMessage = 'SNMPv2-SMI::enterprises.58158.9.188.6.1.0.6 ' . $jsonPayload;
 
-            $logSeverity = Severity::Error;
+            $logSeverity = ($stateVal === '0') ? Severity::Ok : Severity::Error;
             Eventlog::log($eventlogMessage, $device_id, 'trap', $logSeverity);
+
+            // Execute poller immediately for the device IP
+            $targetIp = ! empty($deviceIp) ? $deviceIp : $device_id;
+            if (! empty($targetIp)) {
+                $pollerPath = base_path('poller.php');
+                $cmd = sprintf('php %s -h %s > /dev/null 2>&1 &', escapeshellarg($pollerPath), escapeshellarg($targetIp));
+                exec($cmd);
+            }
 
             return true;
         }
