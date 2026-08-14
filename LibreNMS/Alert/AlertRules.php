@@ -197,6 +197,7 @@ class AlertRules
                                 'name'      => $rule['name'],
                                 'state'     => $state_change,
                                 'severity'  => $rule['severity'] ?? 'critical',
+                                'faults'    => !empty($added) ? $added : (!empty($resolved) ? $resolved : $qry),
                             ]);
                         }
                     } else {
@@ -220,6 +221,7 @@ class AlertRules
                             'name'      => $rule['name'],
                             'state'     => AlertState::ACTIVE,
                             'severity'  => $rule['severity'] ?? 'critical',
+                            'faults'    => $qry,
                         ]);
                     }
                 }
@@ -242,6 +244,7 @@ class AlertRules
                             'name'      => $rule['name'],
                             'state'     => AlertState::RECOVERED,
                             'severity'  => $rule['severity'] ?? 'critical',
+                            'faults'    => $qry,
                         ]);
                     }
                 }
