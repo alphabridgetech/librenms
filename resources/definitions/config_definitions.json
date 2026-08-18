@@ -171,6 +171,14 @@
       "order": 3,
       "type": "integer"
     },
+    "rrd_backup_purge_days": {
+      "default": 30,
+      "units": "days",
+      "group": "system",
+      "section": "cleanup",
+      "order": 15,
+      "type": "integer"
+    },
     "alerts.bgp.whitelist": {
       "type": "array"
     },

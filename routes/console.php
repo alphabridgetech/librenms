@@ -466,3 +466,43 @@ Schedule::command('backup:database')
     ->dailyAt($dbBackupTime)
     ->onOneServer()
     ->appendOutputTo(config('log_dir', storage_path('logs')) . '/db_backups.log');
+
+Artisan::command('backup:rrd', function () {
+    /** @var Illuminate\Console\Command $this */
+    $destination = 'local';
+    $retentionDays = 30;
+
+    try {
+        $destination = \DB::table('config')->where('config_name', 'rrd_backup_destination')->value('config_value') ?: 'local';
+        $retentionDays = (int)\DB::table('config')->where('config_name', 'rrd_backup_purge_days')->value('config_value') ?: 30;
+    } catch (\Exception $e) {
+        $this->error("Failed to read RRD backup config: " . $e->getMessage());
+    }
+
+    $this->info("Starting daily automated RRD backup to destination: {$destination}");
+
+    $exitCode = Artisan::call('rrd:backup-manual', [
+        '--destination' => $destination,
+        '--retention' => $retentionDays,
+    ]);
+
+    $output = Artisan::output();
+    if ($exitCode === 0) {
+        $this->info("Daily automated RRD backup completed successfully.");
+    } else {
+        $this->error("Daily automated RRD backup failed: " . $output);
+    }
+})->purpose('Backup RRD files daily and cleanup old backup files');
+
+$rrdBackupTime = '02:30';
+try {
+    $rrdBackupTime = \DB::table('config')->where('config_name', 'rrd_backup_time')->value('config_value') ?: '02:30';
+} catch (\Exception $e) {
+    // Fallback to default
+}
+
+Schedule::command('backup:rrd')
+    ->dailyAt($rrdBackupTime)
+    ->onOneServer()
+    ->appendOutputTo(config('log_dir', storage_path('logs')) . '/rrd_backups.log');
+
