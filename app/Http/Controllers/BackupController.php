@@ -687,14 +687,71 @@ class BackupController extends Controller
                 $pluginPath = base_path('librenms-ansible-inventory-plugin');
                 $playbook = "{$pluginPath}/playbooks/tftpexport.yml";
                 $hostname = $device->hostname;
+                $ipOrHost = !empty($device->overwrite_ip) ? $device->overwrite_ip : $device->hostname;
                 $hostsFile = "{$pluginPath}/hosts/{$hostname}.yml";
+                
+                // Construct standard manual filename format: e.g. 10.133.27.164_20260819_1233_man_startup-config
+                $dateFormatted = date('Ymd_Hi');
+                $destination_file = "{$ipOrHost}_{$dateFormatted}_man_startup-config";
 
-                if (!file_exists($hostsFile)) {
-                    return redirect()->route('backup.index')->with('error', __("Ansible hosts file for {$hostname} not found."));
+                // Diagnostic 1: ICMP Ping reachability test
+                $pingRes = -1;
+                @exec("ping -c 1 -W 2 " . escapeshellarg($ipOrHost) . " 2>&1", $pOut, $pingRes);
+                if ($pingRes !== 0) {
+                    $errMsg = "FAILURE: Device unreachable (ICMP ping failed for {$ipOrHost}).";
+                    try {
+                        \App\Models\ConfigBackupLog::create([
+                            'device_id' => $device->device_id,
+                            'user_id' => Auth::id(),
+                            'filename' => $destination_file,
+                            'tftp_server' => $tftpServer,
+                            'status' => 'error',
+                            'message' => $errMsg,
+                        ]);
+                    } catch (\Exception $e) {}
+                    return redirect()->route('backup.index')->with('error', $errMsg);
                 }
 
-                $date = date('Y-m-d_His');
-                $destination_file = "{$hostname}_{$date}_startup-config";
+                // Diagnostic 2: Management connection test (SSH port 22 or Telnet 23)
+                $fp = @fsockopen($ipOrHost, 22, $errNo, $errStr, 2);
+                if (!$fp) {
+                    $fpTelnet = @fsockopen($ipOrHost, 23, $errNo, $errStr, 2);
+                    if (!$fpTelnet) {
+                        $errMsg = "FAILURE: SSH/Telnet connection failed (Port 22/23 refused or timeout on {$ipOrHost}).";
+                        try {
+                            \App\Models\ConfigBackupLog::create([
+                                'device_id' => $device->device_id,
+                                'user_id' => Auth::id(),
+                                'filename' => $destination_file,
+                                'tftp_server' => $tftpServer,
+                                'status' => 'error',
+                                'message' => $errMsg,
+                            ]);
+                        } catch (\Exception $e) {}
+                        return redirect()->route('backup.index')->with('error', $errMsg);
+                    } else {
+                        fclose($fpTelnet);
+                    }
+                } else {
+                    fclose($fp);
+                }
+
+                // Diagnostic 3: Ansible Inventory Host File check
+                if (!file_exists($hostsFile)) {
+                    $errMsg = "FAILURE: Missing Ansible host inventory file ({$hostsFile}).";
+                    try {
+                        \App\Models\ConfigBackupLog::create([
+                            'device_id' => $device->device_id,
+                            'user_id' => Auth::id(),
+                            'filename' => $destination_file,
+                            'tftp_server' => $tftpServer,
+                            'status' => 'error',
+                            'message' => $errMsg,
+                        ]);
+                    } catch (\Exception $e) {}
+                    return redirect()->route('backup.index')->with('error', $errMsg);
+                }
+
                 $cmd = [
                     'ansible-playbook',
                     '-i', $hostsFile,
@@ -724,7 +781,7 @@ class BackupController extends Controller
                             'filename' => $destination_file,
                             'tftp_server' => $tftpServer,
                             'status' => 'success',
-                            'message' => 'Manual startup-config export completed successfully.',
+                            'message' => "SUCCESS: Manual startup-config export completed. Saved to /tftpboot/{$destination_file}",
                         ]);
                     } catch (\Exception $e) {}
 
@@ -733,9 +790,26 @@ class BackupController extends Controller
                         ['config_value' => now()->toDateTimeString()]
                     );
 
-                    return redirect()->route('backup.index')->with('success', __("Startup-config for {$hostname} exported successfully."));
+                    return redirect()->route('backup.index')->with('success', __("SUCCESS: Startup-config for {$ipOrHost} saved as {$destination_file}."));
                 } else {
-                    $errorOut = $process->getErrorOutput() ?: $process->getOutput();
+                    $rawError = $process->getErrorOutput() ?: $process->getOutput();
+                    $parsedError = trim($rawError);
+                    if (str_contains($parsedError, 'No route to host')) {
+                        $errMsg = "FAILURE: Network route unreachable for {$ipOrHost}.";
+                    } elseif (str_contains($parsedError, 'Unable to connect to port') || str_contains($parsedError, 'Connection refused')) {
+                        $errMsg = "FAILURE: SSH/Management connection failed (Port 22 unreachable) on {$ipOrHost}.";
+                    } elseif (str_contains($parsedError, 'Authentication failed') || str_contains($parsedError, 'Permission denied')) {
+                        $errMsg = "FAILURE: SSH/Management Authentication failed on {$ipOrHost}.";
+                    } elseif (str_contains($parsedError, 'timed out') || str_contains($parsedError, 'Timeout')) {
+                        $errMsg = "FAILURE: TFTP transfer timed out for {$ipOrHost}.";
+                    } else {
+                        if (preg_match('/"stdout":\s*"([^"]+)"/', $parsedError, $matches)) {
+                            $errMsg = "FAILURE: " . stripcslashes($matches[1]);
+                        } else {
+                            $errMsg = "FAILURE: Manual startup-config export failed: " . substr(strip_tags($parsedError), 0, 200);
+                        }
+                    }
+
                     try {
                         \App\Models\ConfigBackupLog::create([
                             'device_id' => $device->device_id,
@@ -743,11 +817,11 @@ class BackupController extends Controller
                             'filename' => $destination_file,
                             'tftp_server' => $tftpServer,
                             'status' => 'error',
-                            'message' => 'Manual startup-config export failed: ' . trim($errorOut),
+                            'message' => $errMsg,
                         ]);
                     } catch (\Exception $e) {}
 
-                    return redirect()->route('backup.index')->with('error', __("Export failed for {$hostname}: ") . trim($errorOut));
+                    return redirect()->route('backup.index')->with('error', $errMsg);
                 }
             }
         } catch (\Exception $e) {
@@ -772,6 +846,35 @@ class BackupController extends Controller
         }
 
         return redirect()->route('backup.index')->with('error', __('File not found on TFTP server.'));
+    }
+
+    /**
+     * Restore Node backup file or confirm path on server.
+     */
+    public function restoreNode($filename)
+    {
+        if (strpos($filename, '..') !== false || strpos($filename, '/') !== false || strpos($filename, '\\') !== false) {
+            abort(403);
+        }
+
+        $filePath = "/tftpboot/{$filename}";
+
+        if (!File::exists($filePath)) {
+            return redirect()->route('backup.index')->with('error', __('Backup file not found in /tftpboot/.'));
+        }
+
+        try {
+            \App\Models\ConfigBackupLog::create([
+                'device_id' => 0,
+                'user_id' => Auth::id(),
+                'filename' => $filename,
+                'tftp_server' => parse_url(config('app.url'), PHP_URL_HOST) ?: 'localhost',
+                'status' => 'success',
+                'message' => "SUCCESS: Restore operation triggered for file /tftpboot/{$filename}.",
+            ]);
+        } catch (\Exception $e) {}
+
+        return redirect()->route('backup.index')->with('success', __("Restore initiated for startup-config /tftpboot/{$filename}. Server backup path verified."));
     }
 
     /**

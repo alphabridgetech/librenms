@@ -22,6 +22,7 @@ html/images/custom/*
 html/images/custommap/*
 librenms-ansible-inventory-plugin/hosts/*
 librenms-ansible-inventory-plugin/tmp/*
+!librenms-ansible-inventory-plugin/tmp/.gitignore
 librenms-ansible-inventory-plugin/output/*
 includes/custom/*
 junk

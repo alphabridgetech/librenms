@@ -182,6 +182,12 @@
                                                         <a href="{{ route('backup.node.download', ['filename' => $backup['name']]) }}" class="btn btn-xs btn-success">
                                                             <i class="fa fa-download"></i> Download
                                                         </a>
+                                                        <form action="{{ route('backup.node.restore', ['filename' => $backup['name']]) }}" method="POST" style="display:inline;" onsubmit="return confirm('Initiate restore for startup-config {{ $backup['name'] }} from /tftpboot?');">
+                                                            @csrf
+                                                            <button type="submit" class="btn btn-xs btn-info">
+                                                                <i class="fa fa-undo"></i> Restore
+                                                            </button>
+                                                        </form>
                                                         <form action="{{ route('backup.node.delete', ['filename' => $backup['name']]) }}" method="POST" style="display:inline;" onsubmit="return confirm('Are you sure you want to delete {{ $backup['name'] }}?');">
                                                             @csrf
                                                             @method('DELETE')

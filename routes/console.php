@@ -256,27 +256,75 @@ Artisan::command('backup:startup-configs', function () {
 
     foreach ($devices as $device) {
         $hostname = $device->hostname;
+        $ipOrHost = !empty($device->overwrite_ip) ? $device->overwrite_ip : $device->hostname;
         $hostsFile = "{$pluginPath}/hosts/{$hostname}.yml";
 
-        if (!file_exists($hostsFile)) {
-            $this->warn("Skipping device {$hostname}: hosts definition file not found.");
+        // Construct standard automated filename format: e.g. 10.133.27.164_20260819_1230_auto_startup-config
+        $dateFormatted = date('Ymd_Hi');
+        $destination_file = "{$ipOrHost}_{$dateFormatted}_auto_startup-config";
+
+        // Diagnostic 1: ICMP Ping reachability test
+        $pingRes = -1;
+        @exec("ping -c 1 -W 2 " . escapeshellarg($ipOrHost) . " 2>&1", $pOut, $pingRes);
+        if ($pingRes !== 0) {
+            $errMsg = "FAILURE: Device unreachable (ICMP ping failed for {$ipOrHost}).";
+            $this->warn("Skipping device {$ipOrHost}: {$errMsg}");
             try {
                 \App\Models\ConfigBackupLog::create([
                     'device_id' => $device->device_id,
                     'user_id' => null,
-                    'filename' => "{$hostname}_" . date('Y-m-d') . "_startup-config",
+                    'filename' => $destination_file,
                     'tftp_server' => $tftpServer,
                     'status' => 'error',
-                    'message' => "Skipped: Ansible inventory host file ({$hostsFile}) not found.",
+                    'message' => $errMsg,
                 ]);
             } catch (\Exception $e) {}
             continue;
         }
 
-        $date = date('Y-m-d');
-        $destination_file = "{$hostname}_{$date}_startup-config";
+        // Diagnostic 2: SSH / Management connection test
+        $fp = @fsockopen($ipOrHost, 22, $errNo, $errStr, 2);
+        if (!$fp) {
+            $fpTelnet = @fsockopen($ipOrHost, 23, $errNo, $errStr, 2);
+            if (!$fpTelnet) {
+                $errMsg = "FAILURE: SSH/Telnet connection failed (Port 22/23 refused or timeout on {$ipOrHost}).";
+                $this->warn("Skipping device {$ipOrHost}: {$errMsg}");
+                try {
+                    \App\Models\ConfigBackupLog::create([
+                        'device_id' => $device->device_id,
+                        'user_id' => null,
+                        'filename' => $destination_file,
+                        'tftp_server' => $tftpServer,
+                        'status' => 'error',
+                        'message' => $errMsg,
+                    ]);
+                } catch (\Exception $e) {}
+                continue;
+            } else {
+                fclose($fpTelnet);
+            }
+        } else {
+            fclose($fp);
+        }
+
+        // Diagnostic 3: Ansible Inventory Host File check
+        if (!file_exists($hostsFile)) {
+            $errMsg = "FAILURE: Missing Ansible host inventory file ({$hostsFile}).";
+            $this->warn("Skipping device {$ipOrHost}: {$errMsg}");
+            try {
+                \App\Models\ConfigBackupLog::create([
+                    'device_id' => $device->device_id,
+                    'user_id' => null,
+                    'filename' => $destination_file,
+                    'tftp_server' => $tftpServer,
+                    'status' => 'error',
+                    'message' => $errMsg,
+                ]);
+            } catch (\Exception $e) {}
+            continue;
+        }
         
-        $this->info("Exporting startup-config for {$hostname} to {$destination_file}...");
+        $this->info("Exporting startup-config for {$ipOrHost} to {$destination_file}...");
 
         $cmd = [
             'ansible-playbook',
@@ -296,7 +344,7 @@ Artisan::command('backup:startup-configs', function () {
             $process->run();
 
             if ($process->isSuccessful()) {
-                $this->info("Successfully backed up {$hostname}.");
+                $this->info("Successfully backed up {$ipOrHost}.");
                 
                 // Sync file locally if it was uploaded to a remote TFTP server
                 $localPath = "/tftpboot/{$destination_file}";
@@ -312,13 +360,31 @@ Artisan::command('backup:startup-configs', function () {
                         'filename' => $destination_file,
                         'tftp_server' => $tftpServer,
                         'status' => 'success',
-                        'message' => "Daily automated backup completed successfully.",
+                        'message' => "SUCCESS: Daily automated backup completed. Saved to /tftpboot/{$destination_file}",
                     ]);
                 } catch (\Exception $e) {
                     $this->warn("Could not log automated backup to DB: " . $e->getMessage());
                 }
             } else {
-                $this->error("Failed to back up {$hostname}: " . $process->getErrorOutput());
+                $rawError = $process->getErrorOutput() ?: $process->getOutput();
+                $parsedError = trim($rawError);
+                if (str_contains($parsedError, 'No route to host')) {
+                    $errMsg = "FAILURE: Network route unreachable for {$ipOrHost}.";
+                } elseif (str_contains($parsedError, 'Unable to connect to port') || str_contains($parsedError, 'Connection refused')) {
+                    $errMsg = "FAILURE: SSH/Management connection failed (Port 22 unreachable) on {$ipOrHost}.";
+                } elseif (str_contains($parsedError, 'Authentication failed') || str_contains($parsedError, 'Permission denied')) {
+                    $errMsg = "FAILURE: SSH/Management Authentication failed on {$ipOrHost}.";
+                } elseif (str_contains($parsedError, 'timed out') || str_contains($parsedError, 'Timeout')) {
+                    $errMsg = "FAILURE: TFTP transfer timed out for {$ipOrHost}.";
+                } else {
+                    if (preg_match('/"stdout":\s*"([^"]+)"/', $parsedError, $matches)) {
+                        $errMsg = "FAILURE: " . stripcslashes($matches[1]);
+                    } else {
+                        $errMsg = "FAILURE: Daily automated backup failed: " . substr(strip_tags($parsedError), 0, 200);
+                    }
+                }
+
+                $this->error("Failed to back up {$ipOrHost}: {$errMsg}");
                 try {
                     \App\Models\ConfigBackupLog::create([
                         'device_id' => $device->device_id,
@@ -326,14 +392,15 @@ Artisan::command('backup:startup-configs', function () {
                         'filename' => $destination_file,
                         'tftp_server' => $tftpServer,
                         'status' => 'error',
-                        'message' => "Daily automated backup failed: " . $process->getErrorOutput(),
+                        'message' => $errMsg,
                     ]);
                 } catch (\Exception $e) {
                     $this->warn("Could not log automated backup error to DB: " . $e->getMessage());
                 }
             }
         } catch (\Symfony\Component\Process\Exception\ProcessTimedOutException $e) {
-            $this->error("Failed to back up {$hostname} due to timeout (120s).");
+            $errMsg = "FAILURE: Process timed out after 120 seconds for {$ipOrHost}.";
+            $this->error($errMsg);
             try {
                 \App\Models\ConfigBackupLog::create([
                     'device_id' => $device->device_id,
@@ -341,13 +408,14 @@ Artisan::command('backup:startup-configs', function () {
                     'filename' => $destination_file,
                     'tftp_server' => $tftpServer,
                     'status' => 'error',
-                    'message' => "Daily automated backup failed: Process timed out after 120 seconds.",
+                    'message' => $errMsg,
                 ]);
             } catch (\Exception $dbEx) {
                 $this->warn("Could not log automated backup timeout to DB: " . $dbEx->getMessage());
             }
         } catch (\Exception $e) {
-            $this->error("Failed to back up {$hostname} due to exception: " . $e->getMessage());
+            $errMsg = "FAILURE: Exception encountered: " . $e->getMessage();
+            $this->error($errMsg);
             try {
                 \App\Models\ConfigBackupLog::create([
                     'device_id' => $device->device_id,
@@ -355,7 +423,7 @@ Artisan::command('backup:startup-configs', function () {
                     'filename' => $destination_file,
                     'tftp_server' => $tftpServer,
                     'status' => 'error',
-                    'message' => "Daily automated backup failed with exception: " . $e->getMessage(),
+                    'message' => $errMsg,
                 ]);
             } catch (\Exception $dbEx) {
                 $this->warn("Could not log automated backup exception to DB: " . $dbEx->getMessage());

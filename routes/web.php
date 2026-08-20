@@ -278,6 +278,7 @@ Route::middleware(['auth', 'license'])->group(function () {
     Route::post('/backup/node/schedule', [BackupController::class, 'saveNodeSchedule'])->name('backup.node.save-schedule')->middleware('can:admin');
     Route::get('/backup/node/download/{filename}', [BackupController::class, 'downloadNode'])->name('backup.node.download')->middleware('can:admin');
     Route::delete('/backup/node/delete/{filename}', [BackupController::class, 'destroyNode'])->name('backup.node.delete')->middleware('can:admin');
+    Route::post('/backup/node/restore/{filename}', [BackupController::class, 'restoreNode'])->name('backup.node.restore')->middleware('can:admin');
 
     Route::get('about', [AboutController::class, 'index'])->name('about');
     Route::delete('reporting', [AboutController::class, 'clearReportingData'])->name('reporting.clear');
