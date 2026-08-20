@@ -47,6 +47,20 @@ if (isset($vars['device_group']) && is_numeric($vars['device_group'])) {
     $param[] = $vars['device_group'];
 }
 
+if (isset($vars['date_range']) && is_numeric($vars['date_range']) && (int)$vars['date_range'] > 0) {
+    $where .= ' AND `E`.`time_logged` >= DATE_SUB(NOW(), INTERVAL ? DAY)';
+    $param[] = (int)$vars['date_range'];
+} else {
+    if (!empty($vars['date_from'])) {
+        $where .= ' AND `E`.`time_logged` >= ?';
+        $param[] = $vars['date_from'] . ' 00:00:00';
+    }
+    if (!empty($vars['date_to'])) {
+        $where .= ' AND `E`.`time_logged` <= ?';
+        $param[] = $vars['date_to'] . ' 23:59:59';
+    }
+}
+
 if (! Auth::user()->hasGlobalRead()) {
     $device_ids = Permissions::devicesForUser()->toArray() ?: [0];
     $where .= ' AND `E`.`device_id` IN ' . dbGenPlaceholders(count($device_ids));

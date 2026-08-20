@@ -76,6 +76,10 @@ if (isset($_POST['min_severity'])) {
     $_POST['min_severity'] = '';
 }
 
+$date_range_val = htmlspecialchars($_POST['date_range'] ?? '');
+$date_from_val = htmlspecialchars($_POST['date_from'] ?? '');
+$date_to_val = htmlspecialchars($_POST['date_to'] ?? '');
+
 $common_output[] = '
 <div class="table-responsive">
     <table id="alertlog" class="table table-hover table-condensed table-striped">
@@ -101,7 +105,7 @@ $common_output[] = '
         rowCount: [50, 100, 250, -1],
         templates: {
             header: \'<div id="{{ctx.id}}" class="{{css.header}}"><div class="row"> \
-                <div class="col-sm-8 actionBar"><span class="pull-left"> \
+                <div class="col-sm-12 actionBar" style="margin-bottom: 10px;"><span class="pull-left"> \
                 <form method="post" action="" class="form-inline" role="form" id="result_form"> \
                 ' . csrf_field() . ' \
             <input type=hidden name="hostname" id="hostname"> \
@@ -112,7 +116,7 @@ if (isset($vars['fromdevice']) && ! $vars['fromdevice']) {
                 <label> \
                 <strong>Device&nbsp;</strong> \
                 </label> \
-                <select name="device_id" id="device_id" class="form-control input-sm" style="min-width: 175px;"></select> \
+                <select name="device_id" id="device_id" class="form-control input-sm" style="min-width: 150px;"></select> \
                </div> \
                ';
 }
@@ -145,16 +149,45 @@ $common_output[] = '<div class="form-group"> \
                <option value="1">Ok, warning and critical</option> \
                </select> \
                </div> \
-               <button type="submit" class="btn btn-default input-sm">Filter</button> \
+               <div class="form-group"> \
+               <label> \
+               <strong>&nbsp;Date Range&nbsp;</strong> \
+               </label> \
+               <select name="date_range" id="date_range" class="form-control input-sm"> \
+               <option value="" ' . ($date_range_val == '' ? 'selected' : '') . '>All Time</option> \
+               <option value="1" ' . ($date_range_val == '1' ? 'selected' : '') . '>Last 24 Hours (1 Day)</option> \
+               <option value="7" ' . ($date_range_val == '7' ? 'selected' : '') . '>Last 7 Days</option> \
+               <option value="14" ' . ($date_range_val == '14' ? 'selected' : '') . '>Last 14 Days</option> \
+               <option value="30" ' . ($date_range_val == '30' ? 'selected' : '') . '>Last 30 Days</option> \
+               <option value="90" ' . ($date_range_val == '90' ? 'selected' : '') . '>Last 90 Days</option> \
+               </select> \
+               </div> \
+               <div class="form-group"> \
+               <label> \
+               <strong>&nbsp;From&nbsp;</strong> \
+               </label> \
+               <input type="date" name="date_from" id="date_from" class="form-control input-sm" style="max-width: 140px;" value="' . $date_from_val . '"> \
+               </div> \
+               <div class="form-group"> \
+               <label> \
+               <strong>&nbsp;To&nbsp;</strong> \
+               </label> \
+               <input type="date" name="date_to" id="date_to" class="form-control input-sm" style="max-width: 140px;" value="' . $date_to_val . '"> \
+               </div> \
+               <button type="submit" class="btn btn-primary input-sm">Filter</button> \
+               <button type="button" id="clear_filters" class="btn btn-default input-sm" style="margin-left: 5px;"><i class="fa fa-refresh"></i> Clear Filter</button> \
                </form></span></div> \
-               <div class="col-sm-4 actionBar"><p class="{{css.search}}"></p><p class="{{css.actions}}"></p></div></div></div>\'
+               <div class="col-sm-12 actionBar"><p class="{{css.search}}"></p><p class="{{css.actions}}"></p></div></div></div>\'
         },
         post: function () {
             return {
                 id: "alertlog",
                 device_id: \'' . htmlspecialchars($device_id ?: '') . '\',
-                state: \'' . htmlspecialchars($_POST['state']) . '\',
-                min_severity: \'' . htmlspecialchars($_POST['min_severity']) . '\'
+                state: $(\'#state\').val() || \'' . htmlspecialchars($_POST['state']) . '\',
+                min_severity: $(\'#min_severity\').val() || \'' . htmlspecialchars($_POST['min_severity']) . '\',
+                date_range: $(\'#date_range\').val(),
+                date_from: $(\'#date_from\').val(),
+                date_to: $(\'#date_to\').val()
             };
         },
         url: "ajax_table.php"
@@ -204,6 +237,20 @@ $common_output[] = '<div class="form-group"> \
                 }
             });
         });
+    });
+
+    $(document).on("click", "#clear_filters", function(e) {
+        e.preventDefault();
+        if ($("#device_id").length) {
+            $("#device_id").val(null).trigger("change");
+        }
+        $("#state").val("-1");
+        $("#min_severity").val("");
+        $("#date_range").val("");
+        $("#date_from").val("");
+        $("#date_to").val("");
+        $(".search-field").val("");
+        $("#alertlog").bootgrid("reload");
     });
 
     init_select2("#device_id", "device", {}, ' . $device_selected . ' , "All Devices");
