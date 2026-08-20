@@ -211,6 +211,33 @@ Schedule::command(MaintenanceCleanupNetworks::class, [])
 
 Artisan::command('backup:startup-configs', function () {
     /** @var Illuminate\Console\Command $this */
+    $intervalDays = 1;
+    $lastRun = null;
+    try {
+        $intervalDays = (int)(\DB::table('config')->where('config_name', 'node_backup_interval_days')->value('config_value') ?: 1);
+        $lastRun = \DB::table('config')->where('config_name', 'node_backup_last_run')->value('config_value');
+    } catch (\Exception $e) {}
+
+    if ($lastRun) {
+        $lastRunDate = \Carbon\Carbon::parse($lastRun);
+        $daysSinceLast = \Carbon\Carbon::now()->diffInDays($lastRunDate);
+        if ($daysSinceLast < $intervalDays) {
+            $msg = "Skipping node startup-config backup: Interval is set to {$intervalDays} day(s), but last run was {$daysSinceLast} day(s) ago on {$lastRun}.";
+            $this->info($msg);
+            try {
+                \App\Models\ConfigBackupLog::create([
+                    'device_id' => 0,
+                    'user_id' => null,
+                    'filename' => 'N/A',
+                    'tftp_server' => 'N/A',
+                    'status' => 'skipped',
+                    'message' => $msg,
+                ]);
+            } catch (\Exception $ex) {}
+            return 0;
+        }
+    }
+
     $tftpServer = \DB::table('config')->where('config_name', 'tftp_server_ip')->value('config_value');
     
     if (empty($tftpServer) || $tftpServer === 'localhost' || $tftpServer === '127.0.0.1') {
@@ -222,7 +249,7 @@ Artisan::command('backup:startup-configs', function () {
     }
 
     $devices = \App\Models\Device::where('disabled', 0)->get();
-    $this->info("Starting daily startup-config backups for " . $devices->count() . " devices using TFTP server: " . $tftpServer);
+    $this->info("Starting startup-config backups for " . $devices->count() . " devices (Interval: {$intervalDays} day(s)) using TFTP server: " . $tftpServer);
 
     $pluginPath = base_path('librenms-ansible-inventory-plugin');
     $playbook = "{$pluginPath}/playbooks/tftpexport.yml";
@@ -233,6 +260,16 @@ Artisan::command('backup:startup-configs', function () {
 
         if (!file_exists($hostsFile)) {
             $this->warn("Skipping device {$hostname}: hosts definition file not found.");
+            try {
+                \App\Models\ConfigBackupLog::create([
+                    'device_id' => $device->device_id,
+                    'user_id' => null,
+                    'filename' => "{$hostname}_" . date('Y-m-d') . "_startup-config",
+                    'tftp_server' => $tftpServer,
+                    'status' => 'error',
+                    'message' => "Skipped: Ansible inventory host file ({$hostsFile}) not found.",
+                ]);
+            } catch (\Exception $e) {}
             continue;
         }
 
@@ -355,14 +392,13 @@ Artisan::command('backup:startup-configs', function () {
         }
     }
 
-    // 2. Delete database log entries older than threshold
+    // Save last run timestamp
     try {
-        $thresholdDate = date('Y-m-d H:i:s', $thresholdTime);
-        $deletedLogsCount = \App\Models\ConfigBackupLog::where('created_at', '<', $thresholdDate)->delete();
-        $this->info("Deleted {$deletedLogsCount} old backup log records from database.");
-    } catch (\Exception $e) {
-        $this->error("Failed to delete old log records: " . $e->getMessage());
-    }
+        \DB::table('config')->updateOrInsert(
+            ['config_name' => 'node_backup_last_run'],
+            ['config_value' => \Carbon\Carbon::now()->toDateTimeString()]
+        );
+    } catch (\Exception $e) {}
 })->purpose('Backup startup-configs daily for all active network devices');
 
 $backupTime = '01:30';
@@ -385,53 +421,53 @@ Artisan::command('backup:database', function () {
     /** @var Illuminate\Console\Command $this */
     $destination = 'local';
     $retentionDays = 30;
+    $intervalDays = 1;
+    $lastRun = null;
 
     try {
         $destination = \DB::table('config')->where('config_name', 'db_backup_destination')->value('config_value') ?: 'local';
-        $retentionDays = (int)\DB::table('config')->where('config_name', 'db_backup_retention_days')->value('config_value') ?: 30;
+        $retentionDays = (int)(\DB::table('config')->where('config_name', 'db_backup_retention_days')->value('config_value') ?: 30);
+        $intervalDays = max(1, (int)(\DB::table('config')->where('config_name', 'db_backup_interval_days')->value('config_value') ?: 1));
+        $lastRun = \DB::table('config')->where('config_name', 'db_backup_last_run')->value('config_value');
     } catch (\Exception $e) {
         $this->error("Failed to read DB backup config: " . $e->getMessage());
     }
 
-    $this->info("Starting daily automated database backup to destination: {$destination}");
+    // Check if dynamic day interval requirement is met
+    if (!empty($lastRun)) {
+        try {
+            $lastRunDay = \Carbon\Carbon::parse($lastRun)->startOfDay();
+            $today = now()->startOfDay();
+            $daysSince = (int)$lastRunDay->diffInDays($today);
 
-    $exitCode = Artisan::call('db:backup-manual', [
-        '--destination' => $destination
-    ]);
+            if ($daysSince < $intervalDays) {
+                $daysLeft = $intervalDays - $daysSince;
+                $skipReason = "Database backup skipped: Configured interval is every {$intervalDays} day(s). Last backup ran on " . \Carbon\Carbon::parse($lastRun)->format('Y-m-d H:i:s') . " ({$daysSince} day(s) ago). Next backup due in {$daysLeft} day(s).";
+                $this->info($skipReason);
 
-    $output = Artisan::output();
-    $status = ($exitCode === 0) ? 'success' : 'error';
+                try {
+                    \App\Models\BackupLog::create([
+                        'user_id' => null,
+                        'action' => 'skipped',
+                        'filename' => 'Database Backup',
+                        'destination' => $destination,
+                        'status' => 'skipped',
+                        'message' => $skipReason,
+                    ]);
+                } catch (\Exception $ex) {
+                    $this->warn("Could not log skipped backup: " . $ex->getMessage());
+                }
 
-    // Try to extract filename from output or guess it
-    $filename = "Unknown";
-    if (preg_match('/Target path: (.*)/', $output, $matches)) {
-        $filename = basename($matches[1]);
+                return 0;
+            }
+        } catch (\Exception $e) {
+            $this->warn("Error evaluating last DB backup run date: " . $e->getMessage());
+        }
     }
 
-    try {
-        \App\Models\BackupLog::create([
-            'user_id' => null, // null means automated/system
-            'action' => 'create',
-            'filename' => $filename,
-            'destination' => $destination,
-            'status' => $status,
-            'message' => ($status === 'error') ? $output : 'Daily automated backup completed successfully.',
-        ]);
-    } catch (\Exception $e) {
-        $this->warn("Could not log automated backup: " . $e->getMessage());
-    }
+    $this->info("Starting automated database backup (Interval: {$intervalDays} day(s)) to destination: {$destination}");
 
-    if ($exitCode === 0) {
-        $this->info("Daily automated backup completed successfully.");
-    } else {
-        $this->error("Daily automated backup failed: " . $output);
-    }
-
-    // Retention / Cleanup
-    $this->info("Cleaning up database backups older than {$retentionDays} days...");
-    $thresholdTime = time() - ($retentionDays * 24 * 60 * 60);
     $basePath = '';
-
     switch ($destination) {
         case 'external':
             $basePath = '/mnt/external';
@@ -444,6 +480,89 @@ Artisan::command('backup:database', function () {
             $basePath = storage_path('app/backups');
             break;
     }
+
+    // Pre-flight validation on target path
+    if (!file_exists($basePath)) {
+        try {
+            mkdir($basePath, 0755, true);
+        } catch (\Exception $e) {
+            $failMsg = "Database backup failed: Destination directory ({$basePath}) does not exist and could not be created. Reason: " . $e->getMessage();
+            $this->error($failMsg);
+            try {
+                \App\Models\BackupLog::create([
+                    'user_id' => null,
+                    'action' => 'create',
+                    'filename' => 'Database Backup',
+                    'destination' => $destination,
+                    'status' => 'error',
+                    'message' => $failMsg,
+                ]);
+            } catch (\Exception $ex) {}
+            return 1;
+        }
+    }
+
+    if (!is_writable($basePath)) {
+        $failMsg = "Database backup failed: Destination directory ({$basePath}) is not writable.";
+        $this->error($failMsg);
+        try {
+            \App\Models\BackupLog::create([
+                'user_id' => null,
+                'action' => 'create',
+                'filename' => 'Database Backup',
+                'destination' => $destination,
+                'status' => 'error',
+                'message' => $failMsg,
+            ]);
+        } catch (\Exception $ex) {}
+        return 1;
+    }
+
+    $exitCode = Artisan::call('db:backup-manual', [
+        '--destination' => $destination
+    ]);
+
+    $output = Artisan::output();
+    $status = ($exitCode === 0) ? 'success' : 'error';
+
+    $filename = "Unknown";
+    if (preg_match('/Target path: (.*)/', $output, $matches)) {
+        $filename = basename($matches[1]);
+    }
+
+    $logMessage = ($status === 'success')
+        ? "Automated database backup completed successfully (Interval: {$intervalDays} day(s))."
+        : "Automated database backup failed. Reason: " . trim($output);
+
+    try {
+        \App\Models\BackupLog::create([
+            'user_id' => null, // automated system task
+            'action' => 'create',
+            'filename' => $filename,
+            'destination' => $destination,
+            'status' => $status,
+            'message' => $logMessage,
+        ]);
+    } catch (\Exception $e) {
+        $this->warn("Could not log automated backup: " . $e->getMessage());
+    }
+
+    if ($exitCode === 0) {
+        try {
+            \DB::table('config')->updateOrInsert(
+                ['config_name' => 'db_backup_last_run'],
+                ['config_value' => now()->toDateTimeString()]
+            );
+        } catch (\Exception $e) {}
+
+        $this->info("Daily automated backup completed successfully.");
+    } else {
+        $this->error("Daily automated backup failed: " . $output);
+    }
+
+    // Retention / Cleanup
+    $this->info("Cleaning up database backups older than {$retentionDays} days...");
+    $thresholdTime = time() - ($retentionDays * 24 * 60 * 60);
 
     if (file_exists($basePath) && is_dir($basePath)) {
         $files = scandir($basePath);
@@ -471,15 +590,123 @@ Artisan::command('backup:rrd', function () {
     /** @var Illuminate\Console\Command $this */
     $destination = 'local';
     $retentionDays = 30;
+    $intervalDays = 1;
+    $lastRun = null;
 
     try {
         $destination = \DB::table('config')->where('config_name', 'rrd_backup_destination')->value('config_value') ?: 'local';
-        $retentionDays = (int)\DB::table('config')->where('config_name', 'rrd_backup_purge_days')->value('config_value') ?: 30;
+        $retentionDays = (int)(\DB::table('config')->where('config_name', 'rrd_backup_purge_days')->value('config_value') ?: 30);
+        $intervalDays = max(1, (int)(\DB::table('config')->where('config_name', 'rrd_backup_interval_days')->value('config_value') ?: 1));
+        $lastRun = \DB::table('config')->where('config_name', 'rrd_backup_last_run')->value('config_value');
     } catch (\Exception $e) {
         $this->error("Failed to read RRD backup config: " . $e->getMessage());
     }
 
-    $this->info("Starting daily automated RRD backup to destination: {$destination}");
+    // Check if dynamic day interval requirement is met
+    if (!empty($lastRun)) {
+        try {
+            $lastRunDay = \Carbon\Carbon::parse($lastRun)->startOfDay();
+            $today = now()->startOfDay();
+            $daysSince = (int)$lastRunDay->diffInDays($today);
+
+            if ($daysSince < $intervalDays) {
+                $daysLeft = $intervalDays - $daysSince;
+                $skipReason = "RRD backup skipped: Configured interval is every {$intervalDays} day(s). Last backup ran on " . \Carbon\Carbon::parse($lastRun)->format('Y-m-d H:i:s') . " ({$daysSince} day(s) ago). Next backup due in {$daysLeft} day(s).";
+                $this->info($skipReason);
+
+                try {
+                    \App\Models\BackupLog::create([
+                        'user_id' => null,
+                        'action' => 'skipped',
+                        'filename' => 'RRD Files',
+                        'destination' => $destination,
+                        'status' => 'skipped',
+                        'message' => $skipReason,
+                    ]);
+                } catch (\Exception $ex) {
+                    $this->warn("Could not log skipped RRD backup: " . $ex->getMessage());
+                }
+
+                return 0;
+            }
+        } catch (\Exception $e) {
+            $this->warn("Error evaluating last RRD backup run date: " . $e->getMessage());
+        }
+    }
+
+    $this->info("Starting automated RRD backup (Interval: {$intervalDays} day(s)) to destination: {$destination}");
+
+    // Check source RRD dir
+    $rrdDir = \LibreNMS\Config::get('rrd_dir');
+    if (empty($rrdDir) || !file_exists($rrdDir)) {
+        $rrdDir = base_path('rrd');
+    }
+
+    if (!file_exists($rrdDir)) {
+        $failMsg = "RRD backup failed: Source RRD directory ({$rrdDir}) does not exist.";
+        $this->error($failMsg);
+        try {
+            \App\Models\BackupLog::create([
+                'user_id' => null,
+                'action' => 'create',
+                'filename' => 'RRD Files',
+                'destination' => $destination,
+                'status' => 'error',
+                'message' => $failMsg,
+            ]);
+        } catch (\Exception $ex) {}
+        return 1;
+    }
+
+    $basePath = '';
+    switch ($destination) {
+        case 'external':
+            $basePath = '/mnt/external/rrd';
+            break;
+        case 'network':
+            $basePath = '/mnt/network/rrd';
+            break;
+        case 'local':
+        default:
+            $basePath = storage_path('app/backups/rrd');
+            break;
+    }
+
+    if (!file_exists($basePath)) {
+        try {
+            mkdir($basePath, 0755, true);
+        } catch (\Exception $e) {
+            $failMsg = "RRD backup failed: Destination directory ({$basePath}) does not exist and could not be created. Reason: " . $e->getMessage();
+            $this->error($failMsg);
+            try {
+                \App\Models\BackupLog::create([
+                    'user_id' => null,
+                    'action' => 'create',
+                    'filename' => 'RRD Files',
+                    'destination' => $destination,
+                    'status' => 'error',
+                    'message' => $failMsg,
+                ]);
+            } catch (\Exception $ex) {}
+            return 1;
+        }
+    }
+
+    if (!is_writable($basePath)) {
+        $failMsg = "RRD backup failed: Destination directory ({$basePath}) is not writable.";
+        $this->error($failMsg);
+        try {
+            \App\Models\BackupLog::create([
+                'user_id' => null,
+                'action' => 'create',
+                'filename' => 'RRD Files',
+                'destination' => $destination,
+                'status' => 'error',
+                'message' => $failMsg,
+            ]);
+        } catch (\Exception $ex) {}
+        return 1;
+    }
 
     $exitCode = Artisan::call('rrd:backup-manual', [
         '--destination' => $destination,
@@ -487,7 +714,40 @@ Artisan::command('backup:rrd', function () {
     ]);
 
     $output = Artisan::output();
+    $status = ($exitCode === 0) ? 'success' : 'error';
+
+    $filename = "Unknown";
+    if (preg_match('/Target path: (.*)/', $output, $matches)) {
+        $filename = basename($matches[1]);
+    } else {
+        $filename = "RRD Files";
+    }
+
+    $logMessage = ($status === 'success')
+        ? "Automated RRD backup completed successfully (Interval: {$intervalDays} day(s))."
+        : "Automated RRD backup failed. Reason: " . trim($output);
+
+    try {
+        \App\Models\BackupLog::create([
+            'user_id' => null,
+            'action' => 'create',
+            'filename' => (str_starts_with($filename, 'RRD') ? $filename : 'RRD: ' . $filename),
+            'destination' => $destination,
+            'status' => $status,
+            'message' => $logMessage,
+        ]);
+    } catch (\Exception $e) {
+        $this->warn("Could not log automated RRD backup: " . $e->getMessage());
+    }
+
     if ($exitCode === 0) {
+        try {
+            \DB::table('config')->updateOrInsert(
+                ['config_name' => 'rrd_backup_last_run'],
+                ['config_value' => now()->toDateTimeString()]
+            );
+        } catch (\Exception $e) {}
+
         $this->info("Daily automated RRD backup completed successfully.");
     } else {
         $this->error("Daily automated RRD backup failed: " . $output);

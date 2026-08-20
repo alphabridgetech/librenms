@@ -273,6 +273,12 @@ Route::middleware(['auth', 'license'])->group(function () {
     Route::post('/backup/rrd/restore/{filename}', [BackupController::class, 'restoreRrd'])->name('backup.rrd.restore')->middleware('can:admin');
     Route::post('/backup/rrd/schedule', [BackupController::class, 'saveRrdSchedule'])->name('backup.rrd.save-schedule')->middleware('can:admin');
 
+    // Node / Device Startup-Config Backup routes
+    Route::post('/backup/node/run', [BackupController::class, 'storeNode'])->name('backup.node.run')->middleware('can:admin');
+    Route::post('/backup/node/schedule', [BackupController::class, 'saveNodeSchedule'])->name('backup.node.save-schedule')->middleware('can:admin');
+    Route::get('/backup/node/download/{filename}', [BackupController::class, 'downloadNode'])->name('backup.node.download')->middleware('can:admin');
+    Route::delete('/backup/node/delete/{filename}', [BackupController::class, 'destroyNode'])->name('backup.node.delete')->middleware('can:admin');
+
     Route::get('about', [AboutController::class, 'index'])->name('about');
     Route::delete('reporting', [AboutController::class, 'clearReportingData'])->name('reporting.clear');
     Route::get('authlog', [UserController::class, 'authlog']);

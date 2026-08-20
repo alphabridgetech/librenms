@@ -7,7 +7,7 @@
 @section('content')
     <div class="container">
         <div class="page-header">
-            <h1><i class="fa fa-database text-primary"></i> Backup Management <small>Database & RRD Files</small></h1>
+            <h1><i class="fa fa-database text-primary"></i> Backup Management <small>Database, RRD & Node Startup-Configs</small></h1>
         </div>
 
         @if (session('success'))
@@ -25,6 +25,11 @@
         <!-- Navigation Tabs -->
         <ul class="nav nav-tabs" id="backupTabs" style="margin-bottom: 20px;">
             <li class="active">
+                <a href="#node-backup" data-toggle="tab">
+                    <i class="fa fa-server text-success"></i> <strong>Node Startup-Configs</strong>
+                </a>
+            </li>
+            <li>
                 <a href="#rrd-backup" data-toggle="tab">
                     <i class="fa fa-area-chart text-info"></i> <strong>RRD Files Backup</strong>
                 </a>
@@ -42,8 +47,174 @@
         </ul>
 
         <div class="tab-content">
+            <!-- ================= NODE / DEVICE STARTUP-CONFIGS TAB ================= -->
+            <div class="tab-pane fade in active" id="node-backup">
+                <div class="row">
+                    <div class="col-md-6">
+                        <div class="panel panel-default">
+                            <div class="panel-heading">
+                                <h5 class="panel-title"><i class="fa fa-play-circle text-success"></i> Run Manual Node Backup</h5>
+                            </div>
+                            <div class="panel-body">
+                                <p>Export startup-config from network devices/nodes to the central TFTP server (<code>/tftpboot</code>).</p>
+                                
+                                <form action="{{ route('backup.node.run') }}" method="POST">
+                                    @csrf
+                                    <div class="form-group">
+                                        <label for="device_id">Target Device / Node:</label>
+                                        <select name="device_id" id="device_id" class="form-control" required>
+                                            <option value="all">All Active Devices / Nodes ({{ count($devices) }} devices)</option>
+                                            @foreach ($devices as $dev)
+                                                <option value="{{ $dev->device_id }}">
+                                                    {{ $dev->hostname }} {{ $dev->sysName ? '('.$dev->sysName.')' : '' }}
+                                                </option>
+                                            @endforeach
+                                        </select>
+                                    </div>
+
+                                    <div class="form-group">
+                                        <label for="tftp_server_ip">TFTP Server IP:</label>
+                                        <input type="text" name="tftp_server_ip" id="tftp_server_ip" class="form-control" value="{{ $node_tftp_server_ip }}" required>
+                                    </div>
+                                    
+                                    <div class="form-group">
+                                        <button type="submit" class="btn btn-success btn-block" onclick="this.disabled=true; this.innerText='Exporting Startup-Config...'; this.form.submit();">
+                                            <i class="fa fa-download fa-fw"></i> Export Node Startup-Config
+                                        </button>
+                                    </div>
+                                </form>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="col-md-6">
+                        <div class="panel panel-success">
+                            <div class="panel-heading">
+                                <h5 class="panel-title"><i class="fa fa-clock-o"></i> Automated Node Backup Schedule</h5>
+                            </div>
+                            <div class="panel-body">
+                                <form action="{{ route('backup.node.save-schedule') }}" method="POST">
+                                    @csrf
+                                    <div class="row">
+                                        <div class="col-md-6">
+                                            <div class="form-group">
+                                                <label for="node_backup_time">Execution Time:</label>
+                                                <input type="time" name="node_backup_time" id="node_backup_time" class="form-control" value="{{ $node_backup_time }}" required>
+                                            </div>
+                                        </div>
+                                        <div class="col-md-6">
+                                            <div class="form-group">
+                                                <label for="node_backup_interval_days">Backup Interval (Days):</label>
+                                                <input type="number" name="node_backup_interval_days" id="node_backup_interval_days" class="form-control" value="{{ $node_backup_interval_days }}" min="1" required>
+                                                <small class="text-muted">Run every N days (e.g., 7 for 7 days).</small>
+                                            </div>
+                                        </div>
+                                    </div>
+                                    <div class="row">
+                                        <div class="col-md-6">
+                                            <div class="form-group">
+                                                <label for="node_tftp_server_ip">TFTP Server IP:</label>
+                                                <input type="text" name="node_tftp_server_ip" id="node_tftp_server_ip" class="form-control" value="{{ $node_tftp_server_ip }}" required>
+                                            </div>
+                                        </div>
+                                        <div class="col-md-6">
+                                            <div class="form-group">
+                                                <label for="node_backup_retention_days">Retention Period (Days):</label>
+                                                <input type="number" name="node_backup_retention_days" id="node_backup_retention_days" class="form-control" value="{{ $node_backup_retention_days }}" min="1" required>
+                                            </div>
+                                        </div>
+                                    </div>
+                                    <div class="form-group" style="margin-top: 15px; margin-bottom: 0;">
+                                        <button type="submit" class="btn btn-success btn-block">
+                                            <i class="fa fa-floppy-o fa-fw"></i> Save Node Schedule Settings
+                                        </button>
+                                    </div>
+                                </form>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="row" style="margin-top: 15px;">
+                    <div class="col-md-12">
+                        <div class="panel panel-default">
+                            <div class="panel-heading">
+                                <h5 class="panel-title"><i class="fa fa-file-code-o text-success"></i> Saved Node Startup Configurations (/tftpboot)</h5>
+                            </div>
+                            <div class="panel-body">
+                                @if (count($nodeBackups) > 0)
+                                    <!-- Controls Bar -->
+                                    <div class="row" style="margin-bottom: 12px;">
+                                        <div class="col-sm-6 col-md-5">
+                                            <div class="input-group input-group-sm">
+                                                <span class="input-group-addon"><i class="fa fa-search"></i></span>
+                                                <input type="text" id="nodeSearchInput" class="form-control" placeholder="Search config files by name or date...">
+                                            </div>
+                                        </div>
+                                        <div class="col-sm-6 col-md-7 text-right">
+                                            <label style="font-weight: normal; margin-bottom: 0; line-height: 30px;">Show:
+                                                <select id="nodeEntriesSelect" class="form-control input-sm" style="display: inline-block; width: auto; margin-left: 5px;">
+                                                    <option value="10" selected>10</option>
+                                                    <option value="25">25</option>
+                                                    <option value="50">50</option>
+                                                    <option value="all">All</option>
+                                                </select>
+                                            </label>
+                                        </div>
+                                    </div>
+
+                                    <table class="table table-striped table-hover" id="nodeBackupTable">
+                                        <thead>
+                                            <tr>
+                                                <th>Config Filename</th>
+                                                <th>File Size</th>
+                                                <th>Created At</th>
+                                                <th>Actions</th>
+                                            </tr>
+                                        </thead>
+                                        <tbody>
+                                            @foreach ($nodeBackups as $backup)
+                                                <tr>
+                                                    <td><code>{{ $backup['name'] }}</code></td>
+                                                    <td><span class="badge bg-green">{{ $backup['size'] }}</span></td>
+                                                    <td>{{ $backup['date'] }}</td>
+                                                    <td>
+                                                        <a href="{{ route('backup.node.download', ['filename' => $backup['name']]) }}" class="btn btn-xs btn-success">
+                                                            <i class="fa fa-download"></i> Download
+                                                        </a>
+                                                        <form action="{{ route('backup.node.delete', ['filename' => $backup['name']]) }}" method="POST" style="display:inline;" onsubmit="return confirm('Are you sure you want to delete {{ $backup['name'] }}?');">
+                                                            @csrf
+                                                            @method('DELETE')
+                                                            <button type="submit" class="btn btn-xs btn-danger">
+                                                                <i class="fa fa-trash"></i> Delete
+                                                            </button>
+                                                        </form>
+                                                    </td>
+                                                </tr>
+                                            @endforeach
+                                        </tbody>
+                                    </table>
+
+                                    <!-- Pagination Footer -->
+                                    <div class="row" style="margin-top: 10px;">
+                                        <div class="col-sm-6" style="line-height: 30px;">
+                                            <span id="nodePaginationInfo" class="text-muted small"></span>
+                                        </div>
+                                        <div class="col-sm-6 text-right">
+                                            <div id="nodePaginationBtns"></div>
+                                        </div>
+                                    </div>
+                                @else
+                                    <p class="text-muted">No node startup configuration files found in <code>/tftpboot/</code>.</p>
+                                @endif
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
             <!-- ================= RRD BACKUP TAB ================= -->
-            <div class="tab-pane fade in active" id="rrd-backup">
+            <div class="tab-pane fade" id="rrd-backup">
                 <div class="row">
                     <div class="col-md-6">
                         <div class="panel panel-default">
@@ -75,14 +246,19 @@
                     <div class="col-md-6">
                         <div class="panel panel-info">
                             <div class="panel-heading">
-                                <h5 class="panel-title"><i class="fa fa-clock-o"></i> Daily Automated RRD Backup Schedule</h5>
+                                <h5 class="panel-title"><i class="fa fa-clock-o"></i> Automated RRD Backup Schedule</h5>
                             </div>
                             <div class="panel-body">
                                 <form action="{{ route('backup.rrd.save-schedule') }}" method="POST">
                                     @csrf
                                     <div class="form-group">
-                                        <label for="rrd_backup_time">Daily Backup Execution Time:</label>
+                                        <label for="rrd_backup_time">Execution Time:</label>
                                         <input type="time" name="rrd_backup_time" id="rrd_backup_time" class="form-control" value="{{ $rrd_backup_time }}" required>
+                                    </div>
+                                    <div class="form-group">
+                                        <label for="rrd_backup_interval_days">Backup Interval (Days):</label>
+                                        <input type="number" name="rrd_backup_interval_days" id="rrd_backup_interval_days" class="form-control" value="{{ $rrd_backup_interval_days }}" min="1" required>
+                                        <small class="text-muted">Specify how many days between backups (e.g. set 7 to run backup every 7 days, or 1 for daily).</small>
                                     </div>
                                     <div class="form-group">
                                         <label for="rrd_backup_destination">Backup Destination:</label>
@@ -113,7 +289,27 @@
                             </div>
                             <div class="panel-body">
                                 @if (count($rrdBackups) > 0)
-                                    <table class="table table-striped table-hover">
+                                    <!-- Controls Bar -->
+                                    <div class="row" style="margin-bottom: 12px;">
+                                        <div class="col-sm-6 col-md-5">
+                                            <div class="input-group input-group-sm">
+                                                <span class="input-group-addon"><i class="fa fa-search"></i></span>
+                                                <input type="text" id="rrdSearchInput" class="form-control" placeholder="Search RRD backups...">
+                                            </div>
+                                        </div>
+                                        <div class="col-sm-6 col-md-7 text-right">
+                                            <label style="font-weight: normal; margin-bottom: 0; line-height: 30px;">Show:
+                                                <select id="rrdEntriesSelect" class="form-control input-sm" style="display: inline-block; width: auto; margin-left: 5px;">
+                                                    <option value="10" selected>10</option>
+                                                    <option value="25">25</option>
+                                                    <option value="50">50</option>
+                                                    <option value="all">All</option>
+                                                </select>
+                                            </label>
+                                        </div>
+                                    </div>
+
+                                    <table class="table table-striped table-hover" id="rrdBackupTable">
                                         <thead>
                                             <tr>
                                                 <th>Archive Filename</th>
@@ -150,6 +346,16 @@
                                             @endforeach
                                         </tbody>
                                     </table>
+
+                                    <!-- Pagination Footer -->
+                                    <div class="row" style="margin-top: 10px;">
+                                        <div class="col-sm-6" style="line-height: 30px;">
+                                            <span id="rrdPaginationInfo" class="text-muted small"></span>
+                                        </div>
+                                        <div class="col-sm-6 text-right">
+                                            <div id="rrdPaginationBtns"></div>
+                                        </div>
+                                    </div>
                                 @else
                                     <p class="text-muted">No RRD file backups found in <code>storage/app/backups/rrd/</code>.</p>
                                 @endif
@@ -226,19 +432,26 @@
                     <div class="col-md-12">
                         <div class="panel panel-info">
                             <div class="panel-heading">
-                                <h5 class="panel-title"><i class="fa fa-clock-o"></i> Daily Database Backup Schedule</h5>
+                                <h5 class="panel-title"><i class="fa fa-clock-o"></i> Automated Database Backup Schedule</h5>
                             </div>
                             <div class="panel-body">
                                 <form action="{{ route('backup.save-schedule') }}" method="POST">
                                     @csrf
                                     <div class="row">
-                                        <div class="col-md-4">
+                                        <div class="col-md-3">
                                             <div class="form-group">
                                                 <label for="db_backup_time">Execution Time:</label>
                                                 <input type="time" name="db_backup_time" id="db_backup_time" class="form-control" value="{{ $db_backup_time }}" required>
                                             </div>
                                         </div>
-                                        <div class="col-md-4">
+                                        <div class="col-md-3">
+                                            <div class="form-group">
+                                                <label for="db_backup_interval_days">Backup Interval (Days):</label>
+                                                <input type="number" name="db_backup_interval_days" id="db_backup_interval_days" class="form-control" value="{{ $db_backup_interval_days }}" min="1" required>
+                                                <small class="text-muted">Run every N days (e.g. 7 for 7 days).</small>
+                                            </div>
+                                        </div>
+                                        <div class="col-md-3">
                                             <div class="form-group">
                                                 <label for="db_backup_destination">Backup Destination:</label>
                                                 <select name="db_backup_destination" id="db_backup_destination" class="form-control" required>
@@ -246,7 +459,7 @@
                                                 </select>
                                             </div>
                                         </div>
-                                        <div class="col-md-4">
+                                        <div class="col-md-3">
                                             <div class="form-group">
                                                 <label for="db_backup_retention_days">Retention Period (Days):</label>
                                                 <input type="number" name="db_backup_retention_days" id="db_backup_retention_days" class="form-control" value="{{ $db_backup_retention_days }}" min="1" required>
@@ -272,7 +485,27 @@
                             </div>
                             <div class="panel-body">
                                 @if (count($backups) > 0)
-                                    <table class="table table-striped table-hover">
+                                    <!-- Controls Bar -->
+                                    <div class="row" style="margin-bottom: 12px;">
+                                        <div class="col-sm-6 col-md-5">
+                                            <div class="input-group input-group-sm">
+                                                <span class="input-group-addon"><i class="fa fa-search"></i></span>
+                                                <input type="text" id="dbSearchInput" class="form-control" placeholder="Search database backups...">
+                                            </div>
+                                        </div>
+                                        <div class="col-sm-6 col-md-7 text-right">
+                                            <label style="font-weight: normal; margin-bottom: 0; line-height: 30px;">Show:
+                                                <select id="dbEntriesSelect" class="form-control input-sm" style="display: inline-block; width: auto; margin-left: 5px;">
+                                                    <option value="10" selected>10</option>
+                                                    <option value="25">25</option>
+                                                    <option value="50">50</option>
+                                                    <option value="all">All</option>
+                                                </select>
+                                            </label>
+                                        </div>
+                                    </div>
+
+                                    <table class="table table-striped table-hover" id="dbBackupTable">
                                         <thead>
                                             <tr>
                                                 <th>Filename</th>
@@ -288,7 +521,7 @@
                                                     <td><span class="badge bg-green">{{ $backup['size'] }}</span></td>
                                                     <td>{{ $backup['date'] }}</td>
                                                     <td>
-                                                        <a href="{{ route('backup.download', ['filename' => $backup['name']]) }}" class="btn btn-xs btn-success">
+                                                        <a href="{{ route('backup.download', ['filename' => $backup['filename'] ?? $backup['name']]) }}" class="btn btn-xs btn-success">
                                                             <i class="fa fa-download"></i> Download
                                                         </a>
                                                         <form action="{{ route('backup.restore', ['filename' => $backup['name']]) }}" method="POST" style="display:inline;" onsubmit="return confirm('WARNING: This will overwrite your current database. Proceed?');">
@@ -309,6 +542,16 @@
                                             @endforeach
                                         </tbody>
                                     </table>
+
+                                    <!-- Pagination Footer -->
+                                    <div class="row" style="margin-top: 10px;">
+                                        <div class="col-sm-6" style="line-height: 30px;">
+                                            <span id="dbPaginationInfo" class="text-muted small"></span>
+                                        </div>
+                                        <div class="col-sm-6 text-right">
+                                            <div id="dbPaginationBtns"></div>
+                                        </div>
+                                    </div>
                                 @else
                                     <p class="text-muted">No database backups found in <code>storage/app/backups/</code>.</p>
                                 @endif
@@ -322,42 +565,200 @@
             <div class="tab-pane fade" id="backup-logs">
                 <div class="row">
                     <div class="col-md-12">
-                        <div class="panel panel-info">
+                        <!-- Node Config Backup Logs -->
+                        <div class="panel panel-success">
                             <div class="panel-heading">
-                                <h5 class="panel-title"><i class="fa fa-history"></i> Backup & Restore Activity Logs</h5>
+                                <h5 class="panel-title"><i class="fa fa-server"></i> Node Startup-Config Backup Activity Logs</h5>
+                            </div>
+                            <div class="panel-body">
+                                @if (isset($nodeLogs) && $nodeLogs->count() > 0)
+                                    <!-- Controls Bar -->
+                                    <div class="row" style="margin-bottom: 12px;">
+                                        <div class="col-sm-5 col-md-4">
+                                            <div class="input-group input-group-sm">
+                                                <span class="input-group-addon"><i class="fa fa-search"></i></span>
+                                                <input type="text" id="nodeLogsSearchInput" class="form-control" placeholder="Search by device, user, reason, file...">
+                                            </div>
+                                        </div>
+                                        <div class="col-sm-4 col-md-4">
+                                            <select id="nodeLogsStatusSelect" class="form-control input-sm">
+                                                <option value="all">-- All Statuses --</option>
+                                                <option value="success">Success</option>
+                                                <option value="error">Error / Failed</option>
+                                                <option value="skipped">Skipped</option>
+                                            </select>
+                                        </div>
+                                        <div class="col-sm-3 col-md-4 text-right">
+                                            <label style="font-weight: normal; margin-bottom: 0; line-height: 30px;">Show:
+                                                <select id="nodeLogsEntriesSelect" class="form-control input-sm" style="display: inline-block; width: auto; margin-left: 5px;">
+                                                    <option value="10" selected>10</option>
+                                                    <option value="25">25</option>
+                                                    <option value="50">50</option>
+                                                    <option value="100">100</option>
+                                                    <option value="all">All</option>
+                                                </select>
+                                            </label>
+                                        </div>
+                                    </div>
+
+                                    <table class="table table-condensed table-striped table-hover" id="nodeLogsTable">
+                                        <thead>
+                                            <tr>
+                                                <th>Device / Hostname</th>
+                                                <th>User</th>
+                                                <th>Filename</th>
+                                                <th>TFTP Server</th>
+                                                <th>Status</th>
+                                                <th>Reason / Message Details</th>
+                                                <th>Time</th>
+                                            </tr>
+                                        </thead>
+                                        <tbody>
+                                            @foreach ($nodeLogs as $nlog)
+                                                <tr data-status="{{ strtolower($nlog->status) }}">
+                                                    <td><strong>{{ $nlog->device->hostname ?? ($nlog->device_id ? 'Device #'.$nlog->device_id : 'All Active Devices') }}</strong></td>
+                                                    <td>{{ $nlog->user->username ?? 'System (Automated)' }}</td>
+                                                    <td><code>{{ $nlog->filename }}</code></td>
+                                                    <td>{{ $nlog->tftp_server ?? 'N/A' }}</td>
+                                                    <td>
+                                                        @if ($nlog->status == 'success')
+                                                            <span class="label label-success"><i class="fa fa-check"></i> SUCCESS</span>
+                                                        @elseif ($nlog->status == 'skipped')
+                                                            <span class="label label-warning"><i class="fa fa-clock-o"></i> SKIPPED</span>
+                                                        @else
+                                                            <span class="label label-danger"><i class="fa fa-times"></i> {{ strtoupper($nlog->status) }}</span>
+                                                        @endif
+                                                    </td>
+                                                    <td>
+                                                        @if ($nlog->message)
+                                                            <span class="{{ $nlog->status == 'error' ? 'text-danger' : ($nlog->status == 'skipped' ? 'text-warning' : 'text-muted') }}">
+                                                                {{ $nlog->message }}
+                                                            </span>
+                                                        @else
+                                                            <span class="text-muted">-</span>
+                                                        @endif
+                                                    </td>
+                                                    <td><small>{{ $nlog->created_at ? $nlog->created_at->diffForHumans() : 'N/A' }}</small></td>
+                                                </tr>
+                                            @endforeach
+                                        </tbody>
+                                    </table>
+
+                                    <!-- Pagination Footer -->
+                                    <div class="row" style="margin-top: 10px;">
+                                        <div class="col-sm-6" style="line-height: 30px;">
+                                            <span id="nodeLogsPaginationInfo" class="text-muted small"></span>
+                                        </div>
+                                        <div class="col-sm-6 text-right">
+                                            <div id="nodeLogsPaginationBtns"></div>
+                                        </div>
+                                    </div>
+                                @else
+                                    <p class="text-muted">No node config backup activity logs found.</p>
+                                @endif
+                            </div>
+                        </div>
+
+                        <!-- System DB & RRD Backup Logs -->
+                        <div class="panel panel-info" style="margin-top: 20px;">
+                            <div class="panel-heading">
+                                <h5 class="panel-title"><i class="fa fa-database"></i> Database & RRD Backup Activity Logs</h5>
                             </div>
                             <div class="panel-body">
                                 @if ($logs->count() > 0)
-                                    <table class="table table-condensed table-striped">
+                                    <!-- Controls Bar -->
+                                    <div class="row" style="margin-bottom: 12px;">
+                                        <div class="col-sm-5 col-md-4">
+                                            <div class="input-group input-group-sm">
+                                                <span class="input-group-addon"><i class="fa fa-search"></i></span>
+                                                <input type="text" id="sysLogsSearchInput" class="form-control" placeholder="Search by user, action, filename, reason...">
+                                            </div>
+                                        </div>
+                                        <div class="col-sm-4 col-md-4">
+                                            <select id="sysLogsStatusSelect" class="form-control input-sm">
+                                                <option value="all">-- All Statuses --</option>
+                                                <option value="success">Success</option>
+                                                <option value="error">Error / Failed</option>
+                                                <option value="skipped">Skipped</option>
+                                            </select>
+                                        </div>
+                                        <div class="col-sm-3 col-md-4 text-right">
+                                            <label style="font-weight: normal; margin-bottom: 0; line-height: 30px;">Show:
+                                                <select id="sysLogsEntriesSelect" class="form-control input-sm" style="display: inline-block; width: auto; margin-left: 5px;">
+                                                    <option value="10" selected>10</option>
+                                                    <option value="25">25</option>
+                                                    <option value="50">50</option>
+                                                    <option value="100">100</option>
+                                                    <option value="all">All</option>
+                                                </select>
+                                            </label>
+                                        </div>
+                                    </div>
+
+                                    <table class="table table-condensed table-striped table-hover" id="sysLogsTable">
                                         <thead>
                                             <tr>
                                                 <th>User</th>
                                                 <th>Action</th>
-                                                <th>Filename</th>
+                                                <th>Filename / Subject</th>
                                                 <th>Destination</th>
                                                 <th>Status</th>
+                                                <th>Reason / Message Details</th>
                                                 <th>Time</th>
                                             </tr>
                                         </thead>
                                         <tbody>
                                             @foreach ($logs as $log)
-                                                <tr>
-                                                    <td>{{ $log->user->username ?? 'System' }}</td>
-                                                    <td><span class="label label-{{ $log->action == 'delete' ? 'danger' : ($log->action == 'create' ? 'primary' : 'success') }}">{{ strtoupper($log->action) }}</span></td>
+                                                <tr data-status="{{ strtolower($log->status) }}">
+                                                    <td>{{ $log->user->username ?? 'System (Automated)' }}</td>
+                                                    <td>
+                                                        @php
+                                                            $lblClass = 'default';
+                                                            if ($log->action == 'delete') $lblClass = 'danger';
+                                                            elseif ($log->action == 'create') $lblClass = 'primary';
+                                                            elseif ($log->action == 'restore') $lblClass = 'success';
+                                                            elseif ($log->action == 'skipped') $lblClass = 'warning';
+                                                            elseif ($log->action == 'download') $lblClass = 'info';
+                                                        @endphp
+                                                        <span class="label label-{{ $lblClass }}">{{ strtoupper($log->action) }}</span>
+                                                    </td>
                                                     <td><code>{{ $log->filename }}</code></td>
                                                     <td>{{ $log->destination ?? 'N/A' }}</td>
                                                     <td>
-                                                        <span class="text-{{ $log->status == 'success' ? 'success' : 'danger' }}">
-                                                            <i class="fa fa-{{ $log->status == 'success' ? 'check-circle' : 'exclamation-circle' }}"></i> {{ strtoupper($log->status) }}
-                                                        </span>
+                                                        @if ($log->status == 'success')
+                                                            <span class="label label-success"><i class="fa fa-check"></i> SUCCESS</span>
+                                                        @elseif ($log->status == 'skipped')
+                                                            <span class="label label-warning"><i class="fa fa-clock-o"></i> SKIPPED</span>
+                                                        @else
+                                                            <span class="label label-danger"><i class="fa fa-times"></i> {{ strtoupper($log->status) }}</span>
+                                                        @endif
                                                     </td>
-                                                    <td>{{ $log->created_at->diffForHumans() }}</td>
+                                                    <td>
+                                                        @if ($log->message)
+                                                            <span class="{{ $log->status == 'error' ? 'text-danger' : ($log->status == 'skipped' ? 'text-warning' : 'text-muted') }}">
+                                                                {{ $log->message }}
+                                                            </span>
+                                                        @else
+                                                            <span class="text-muted">-</span>
+                                                        @endif
+                                                    </td>
+                                                    <td><small>{{ $log->created_at ? $log->created_at->diffForHumans() : 'N/A' }}</small></td>
                                                 </tr>
                                             @endforeach
                                         </tbody>
                                     </table>
+
+                                    <!-- Pagination Footer -->
+                                    <div class="row" style="margin-top: 10px;">
+                                        <div class="col-sm-6" style="line-height: 30px;">
+                                            <span id="sysLogsPaginationInfo" class="text-muted small"></span>
+                                        </div>
+                                        <div class="col-sm-6 text-right">
+                                            <div id="sysLogsPaginationBtns"></div>
+                                        </div>
+                                    </div>
                                 @else
-                                    <p class="text-muted">No activity logs found.</p>
+                                    <p class="text-muted">No system backup activity logs found.</p>
                                 @endif
                             </div>
                         </div>
@@ -372,4 +773,209 @@
             </div>
         </div>
     </div>
+
+    <!-- Client-Side Search, Status Filter & Dynamic Pagination Script -->
+    <script>
+        document.addEventListener('DOMContentLoaded', function() {
+            function initTablePaginationAndFilter(config) {
+                var table = document.getElementById(config.tableId);
+                if (!table) return;
+
+                var tbody = table.querySelector('tbody');
+                if (!tbody) return;
+
+                var allRows = Array.from(tbody.querySelectorAll('tr'));
+                var searchInput = document.getElementById(config.searchInputId);
+                var statusSelect = document.getElementById(config.statusSelectId);
+                var entriesSelect = document.getElementById(config.entriesSelectId);
+                var paginationInfo = document.getElementById(config.paginationInfoId);
+                var paginationBtns = document.getElementById(config.paginationBtnsId);
+
+                var currentPage = 1;
+
+                function render() {
+                    var searchTerm = searchInput ? searchInput.value.toLowerCase().trim() : '';
+                    var statusFilter = statusSelect ? statusSelect.value.toLowerCase().trim() : 'all';
+                    var pageSize = entriesSelect ? (entriesSelect.value === 'all' ? allRows.length : parseInt(entriesSelect.value)) : 10;
+
+                    // Filter rows
+                    var filteredRows = allRows.filter(function(row) {
+                        var text = row.textContent.toLowerCase();
+                        var matchesSearch = !searchTerm || text.indexOf(searchTerm) > -1;
+                        
+                        var matchesStatus = true;
+                        if (statusFilter && statusFilter !== 'all') {
+                            var rowStatus = row.getAttribute('data-status') || text;
+                            matchesStatus = rowStatus.indexOf(statusFilter) > -1;
+                        }
+
+                        return matchesSearch && matchesStatus;
+                    });
+
+                    var totalRows = filteredRows.length;
+                    var totalPages = Math.ceil(totalRows / pageSize) || 1;
+
+                    if (currentPage > totalPages) currentPage = totalPages;
+                    if (currentPage < 1) currentPage = 1;
+
+                    var startIdx = (currentPage - 1) * pageSize;
+                    var endIdx = startIdx + pageSize;
+
+                    // Hide all rows, show active page slice
+                    allRows.forEach(function(row) {
+                        row.style.display = 'none';
+                    });
+
+                    filteredRows.slice(startIdx, endIdx).forEach(function(row) {
+                        row.style.display = '';
+                    });
+
+                    // Update info text
+                    if (paginationInfo) {
+                        if (totalRows === 0) {
+                            paginationInfo.textContent = 'Showing 0 to 0 of 0 entries';
+                        } else {
+                            var startDisplay = startIdx + 1;
+                            var endDisplay = Math.min(endIdx, totalRows);
+                            paginationInfo.textContent = 'Showing ' + startDisplay + ' to ' + endDisplay + ' of ' + totalRows + ' entries';
+                        }
+                    }
+
+                    // Render pagination buttons
+                    if (paginationBtns) {
+                        paginationBtns.innerHTML = '';
+
+                        var ul = document.createElement('ul');
+                        ul.className = 'pagination pagination-sm';
+                        ul.style.margin = '0';
+
+                        // Prev button
+                        var prevLi = document.createElement('li');
+                        if (currentPage === 1) prevLi.className = 'disabled';
+                        var prevA = document.createElement('a');
+                        prevA.href = '#';
+                        prevA.innerHTML = '&laquo; Prev';
+                        prevA.addEventListener('click', function(e) {
+                            e.preventDefault();
+                            if (currentPage > 1) {
+                                currentPage--;
+                                render();
+                            }
+                        });
+                        prevLi.appendChild(prevA);
+                        ul.appendChild(prevLi);
+
+                        // Page numbers
+                        var maxButtons = 5;
+                        var startPage = Math.max(1, currentPage - Math.floor(maxButtons / 2));
+                        var endPage = Math.min(totalPages, startPage + maxButtons - 1);
+                        if (endPage - startPage < maxButtons - 1) {
+                            startPage = Math.max(1, endPage - maxButtons + 1);
+                        }
+
+                        for (var i = startPage; i <= endPage; i++) {
+                            (function(p) {
+                                var li = document.createElement('li');
+                                if (p === currentPage) li.className = 'active';
+                                var a = document.createElement('a');
+                                a.href = '#';
+                                a.textContent = p;
+                                a.addEventListener('click', function(e) {
+                                    e.preventDefault();
+                                    currentPage = p;
+                                    render();
+                                });
+                                li.appendChild(a);
+                                ul.appendChild(li);
+                            })(i);
+                        }
+
+                        // Next button
+                        var nextLi = document.createElement('li');
+                        if (currentPage === totalPages) nextLi.className = 'disabled';
+                        var nextA = document.createElement('a');
+                        nextA.href = '#';
+                        nextA.innerHTML = 'Next &raquo;';
+                        nextA.addEventListener('click', function(e) {
+                            e.preventDefault();
+                            if (currentPage < totalPages) {
+                                currentPage++;
+                                render();
+                            }
+                        });
+                        nextLi.appendChild(nextA);
+                        ul.appendChild(nextLi);
+
+                        paginationBtns.appendChild(ul);
+                    }
+                }
+
+                if (searchInput) {
+                    searchInput.addEventListener('input', function() {
+                        currentPage = 1;
+                        render();
+                    });
+                }
+
+                if (statusSelect) {
+                    statusSelect.addEventListener('change', function() {
+                        currentPage = 1;
+                        render();
+                    });
+                }
+
+                if (entriesSelect) {
+                    entriesSelect.addEventListener('change', function() {
+                        currentPage = 1;
+                        render();
+                    });
+                }
+
+                render();
+            }
+
+            // Initialize pagination and filtering for all backup & log tables
+            initTablePaginationAndFilter({
+                tableId: 'nodeBackupTable',
+                searchInputId: 'nodeSearchInput',
+                entriesSelectId: 'nodeEntriesSelect',
+                paginationInfoId: 'nodePaginationInfo',
+                paginationBtnsId: 'nodePaginationBtns'
+            });
+
+            initTablePaginationAndFilter({
+                tableId: 'nodeLogsTable',
+                searchInputId: 'nodeLogsSearchInput',
+                statusSelectId: 'nodeLogsStatusSelect',
+                entriesSelectId: 'nodeLogsEntriesSelect',
+                paginationInfoId: 'nodeLogsPaginationInfo',
+                paginationBtnsId: 'nodeLogsPaginationBtns'
+            });
+
+            initTablePaginationAndFilter({
+                tableId: 'sysLogsTable',
+                searchInputId: 'sysLogsSearchInput',
+                statusSelectId: 'sysLogsStatusSelect',
+                entriesSelectId: 'sysLogsEntriesSelect',
+                paginationInfoId: 'sysLogsPaginationInfo',
+                paginationBtnsId: 'sysLogsPaginationBtns'
+            });
+
+            initTablePaginationAndFilter({
+                tableId: 'rrdBackupTable',
+                searchInputId: 'rrdSearchInput',
+                entriesSelectId: 'rrdEntriesSelect',
+                paginationInfoId: 'rrdPaginationInfo',
+                paginationBtnsId: 'rrdPaginationBtns'
+            });
+
+            initTablePaginationAndFilter({
+                tableId: 'dbBackupTable',
+                searchInputId: 'dbSearchInput',
+                entriesSelectId: 'dbEntriesSelect',
+                paginationInfoId: 'dbPaginationInfo',
+                paginationBtnsId: 'dbPaginationBtns'
+            });
+        });
+    </script>
 @endsection
