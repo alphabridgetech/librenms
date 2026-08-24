@@ -568,6 +568,8 @@
 
                         <li><a href="{{ url('alert-log') }}"><i class="fa fa-file-text fa-fw fa-lg"
                                                                 aria-hidden="true"></i> {{ __('Alert History') }}</a></li>
+                        <li><a href="{{ route('alerts.archive.index') }}"><i class="fa fa-archive fa-fw fa-lg"
+                                                                aria-hidden="true"></i> {{ __('Alarm History Archive') }}</a></li>
                         <li><a href="{{ url('alert-stats') }}"><i class="fa fa-bar-chart fa-fw fa-lg"
                                                                   aria-hidden="true"></i> {{ __('Statistics') }}</a></li>
                         @admin

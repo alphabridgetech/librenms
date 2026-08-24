@@ -40,6 +40,11 @@
                 </a>
             </li>
             <li>
+                <a href="#alarm-archive" data-toggle="tab">
+                    <i class="fa fa-archive text-warning"></i> <strong>Alarm History Archive</strong>
+                </a>
+            </li>
+            <li>
                 <a href="#backup-logs" data-toggle="tab">
                     <i class="fa fa-history text-muted"></i> <strong>Activity Logs</strong>
                 </a>
@@ -771,11 +776,175 @@
                     </div>
                 </div>
             </div>
+
+            <!-- ================= ALARM HISTORY ARCHIVE TAB ================= -->
+            <div class="tab-pane fade" id="alarm-archive">
+                <div class="row" style="margin-bottom: 15px;">
+                    <div class="col-md-8">
+                        <h4><i class="fa fa-archive text-warning"></i> Alarm History Archive <small>Export, Buffer & Manage Historical Alert Logs</small></h4>
+                    </div>
+                    <div class="col-md-4 text-right">
+                        <form action="{{ route('alerts.archive.store') }}" method="POST" style="display:inline;">
+                            @csrf
+                            <button type="submit" class="btn btn-success">
+                                <i class="fa fa-archive"></i> Archive Now
+                            </button>
+                        </form>
+                    </div>
+                </div>
+
+                <div class="row">
+                    <!-- Left Column: Archive Files Table -->
+                    <div class="col-md-8">
+                        <div class="panel panel-default">
+                            <div class="panel-heading">
+                                <strong><i class="fa fa-file-text-o"></i> Archived Alarm History Files</strong>
+                            </div>
+                            <div class="panel-body">
+                                <div class="table-responsive">
+                                    <table class="table table-hover table-striped">
+                                        <thead>
+                                            <tr>
+                                                <th>Filename</th>
+                                                <th>Records</th>
+                                                <th>File Size</th>
+                                                <th>Coverage Window</th>
+                                                <th>Created At</th>
+                                                <th style="width: 220px;">Actions</th>
+                                            </tr>
+                                        </thead>
+                                        <tbody>
+                                            @forelse ($alarmArchives as $archive)
+                                                <tr>
+                                                    <td><code>{{ $archive->filename }}</code></td>
+                                                    <td><span class="badge bg-blue">{{ number_format($archive->line_count) }} lines</span></td>
+                                                    <td><span class="badge bg-green">{{ $archive->file_size }}</span></td>
+                                                    <td>
+                                                        <small class="text-muted">
+                                                            {{ $archive->start_date ? \Carbon\Carbon::parse($archive->start_date)->format('M d, H:i') : 'N/A' }} 
+                                                            &rarr; 
+                                                            {{ $archive->end_date ? \Carbon\Carbon::parse($archive->end_date)->format('M d, H:i') : 'N/A' }}
+                                                        </small>
+                                                    </td>
+                                                    <td>{{ $archive->created_at->format('Y-m-d H:i') }}</td>
+                                                    <td>
+                                                        <button type="button" class="btn btn-xs btn-info btn-view-archive" data-id="{{ $archive->id }}" data-filename="{{ $archive->filename }}">
+                                                            <i class="fa fa-eye"></i> View/Read
+                                                        </button>
+                                                        <a href="{{ route('alerts.archive.download', $archive->id) }}" class="btn btn-xs btn-success">
+                                                            <i class="fa fa-download"></i> Download
+                                                        </a>
+                                                        <form action="{{ route('alerts.archive.destroy', $archive->id) }}" method="POST" style="display:inline;" onsubmit="return confirm('Are you sure you want to delete archive {{ $archive->filename }}?');">
+                                                            @csrf
+                                                            @method('DELETE')
+                                                            <button type="submit" class="btn btn-xs btn-danger">
+                                                                <i class="fa fa-trash"></i>
+                                                            </button>
+                                                        </form>
+                                                    </td>
+                                                </tr>
+                                            @empty
+                                                <tr>
+                                                    <td colspan="6" class="text-center text-muted">
+                                                        <em>No historical alarm archives found. Click "Archive Now" above to generate a new archive file.</em>
+                                                    </td>
+                                                </tr>
+                                            @endforelse
+                                        </tbody>
+                                    </table>
+                                </div>
+                                @if ($alarmArchives->hasPages())
+                                    <div class="pull-right">
+                                        {{ $alarmArchives->appends(request()->query())->links() }}
+                                    </div>
+                                @endif
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Right Column: Threshold & Dynamic Schedule Settings -->
+                    <div class="col-md-4">
+                        <div class="panel panel-default">
+                            <div class="panel-heading">
+                                <strong><i class="fa fa-cogs"></i> Archival Threshold & Schedule Settings</strong>
+                            </div>
+                            <div class="panel-body">
+                                <form action="{{ route('alerts.archive.settings') }}" method="POST">
+                                    @csrf
+                                    <div class="form-group">
+                                        <label for="max_lines">Max Lines per File</label>
+                                        <input type="number" name="max_lines" id="max_lines" class="form-control" value="{{ $alarm_max_lines }}" min="100" max="50000" required>
+                                        <span class="help-block small">Buffer line limit before splitting into a new file.</span>
+                                    </div>
+
+                                    <div class="form-group">
+                                        <label for="max_size_mb">Max File Size (MB)</label>
+                                        <input type="number" step="0.5" name="max_size_mb" id="max_size_mb" class="form-control" value="{{ $alarm_max_size_mb }}" min="1" max="500" required>
+                                        <span class="help-block small">Maximum file size threshold for archive files.</span>
+                                    </div>
+
+                                    <div class="form-group">
+                                        <label for="purge_days">Purge Archives Older Than (Days)</label>
+                                        <input type="number" name="purge_days" id="purge_days" class="form-control" value="{{ $alarm_purge_days }}" min="1" max="3650" required>
+                                        <span class="help-block small">Auto-purge archive files older than specified days.</span>
+                                    </div>
+
+                                    <div class="form-group">
+                                        <label for="archive_time">Daily Scheduled Archival Time (24h)</label>
+                                        <input type="time" name="archive_time" id="archive_time" class="form-control" value="{{ $alarm_archive_time }}" required>
+                                        <span class="help-block small">Dynamic schedule time for automated daily alarm log rotation.</span>
+                                    </div>
+
+                                    <button type="submit" class="btn btn-primary btn-block">
+                                        <i class="fa fa-save"></i> Save Settings
+                                    </button>
+                                </form>
+                            </div>
+                            <div class="panel-footer small text-muted">
+                                <strong>Last Run:</strong> {{ $alarm_last_run }}<br>
+                                <strong>Scheduled Daily At:</strong> {{ $alarm_archive_time }}<br>
+                                <strong>Storage Path:</strong> <code>/opt/librenms/storage/app/backups/alarm_archives/</code>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
         </div>
 
         <div class="row" style="margin-top: 15px;">
             <div class="col-md-12">
                 <a href="{{ route('home') }}" class="btn btn-default"><i class="fa fa-arrow-left"></i> Back to Home</a>
+            </div>
+        </div>
+    </div>
+
+    <!-- Modal for RCA Log File Reader View -->
+    <div class="modal fade" id="viewArchiveModal" tabindex="-1" role="dialog" aria-labelledby="viewArchiveModalLabel">
+        <div class="modal-dialog modal-lg" role="document" style="width: 90%;">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <button type="button" class="close" data-dismiss="modal" aria-label="Close"><span aria-hidden="true">&times;</span></button>
+                    <h4 class="modal-title" id="viewArchiveModalLabel">
+                        <i class="fa fa-file-text-o text-info"></i> Archive File Reader: <span id="modalFilename"></span>
+                    </h4>
+                </div>
+                <div class="modal-body" style="max-height: 550px; overflow-y: auto;">
+                    <div id="modalLoading" class="text-center" style="padding: 30px;">
+                        <i class="fa fa-spinner fa-spin fa-2x"></i> <p>Loading archive content...</p>
+                    </div>
+                    <div id="modalContentWrapper" style="display: none;">
+                        <div class="alert alert-info small" style="margin-bottom: 10px;">
+                            Displaying log records for RCA troubleshooting. Total file records: <strong id="modalTotalLines"></strong> | File Size: <strong id="modalFileSize"></strong>
+                        </div>
+                        <table class="table table-bordered table-striped table-condensed small" id="archiveContentTable">
+                            <thead id="archiveTableHeader"></thead>
+                            <tbody id="archiveTableBody"></tbody>
+                        </table>
+                    </div>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-default" data-dismiss="modal">Close</button>
+                </div>
             </div>
         </div>
     </div>
@@ -981,6 +1150,56 @@
                 entriesSelectId: 'dbEntriesSelect',
                 paginationInfoId: 'dbPaginationInfo',
                 paginationBtnsId: 'dbPaginationBtns'
+            });
+
+            $(document).on('click', '.btn-view-archive', function() {
+                var archiveId = $(this).data('id');
+                var filename = $(this).data('filename');
+
+                $('#modalFilename').text(filename);
+                $('#modalLoading').show();
+                $('#modalContentWrapper').hide();
+                $('#viewArchiveModal').modal('show');
+
+                $.ajax({
+                    url: '/alerts/archive/view/' + archiveId,
+                    type: 'GET',
+                    success: function(response) {
+                        $('#modalLoading').hide();
+                        $('#modalTotalLines').text(response.total_lines);
+                        $('#modalFileSize').text(response.file_size);
+
+                        var thead = '';
+                        var tbody = '';
+
+                        if (response.data && response.data.length > 0) {
+                            var headerRow = response.data[0];
+                            thead += '<tr>';
+                            $.each(headerRow, function(idx, col) {
+                                thead += '<th>' + $('<div>').text(col).html() + '</th>';
+                            });
+                            thead += '</tr>';
+
+                            for (var i = 1; i < response.data.length; i++) {
+                                tbody += '<tr>';
+                                $.each(response.data[i], function(idx, col) {
+                                    tbody += '<td>' + $('<div>').text(col).html() + '</td>';
+                                });
+                                tbody += '</tr>';
+                            }
+                        } else {
+                            tbody = '<tr><td colspan="7" class="text-center">No data found in archive file.</td></tr>';
+                        }
+
+                        $('#archiveTableHeader').html(thead);
+                        $('#archiveTableBody').html(tbody);
+                        $('#modalContentWrapper').show();
+                    },
+                    error: function() {
+                        $('#modalLoading').hide();
+                        alert('Failed to load archive file contents.');
+                    }
+                });
             });
         });
     </script>

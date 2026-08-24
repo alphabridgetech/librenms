@@ -126,6 +126,14 @@ class BackupController extends Controller
         $node_backup_retention_days = \DB::table('config')->where('config_name', 'backup_retention_days')->value('config_value') ?: 30;
         $node_backup_interval_days = \DB::table('config')->where('config_name', 'node_backup_interval_days')->value('config_value') ?: 1;
 
+        // Alarm History Archive Data
+        $alarmArchives = \App\Models\AlarmArchive::latest()->paginate(20);
+        $alarm_max_lines = \DB::table('config')->where('config_name', 'alarm_archive_max_lines')->value('config_value') ?: 5000;
+        $alarm_max_size_mb = \DB::table('config')->where('config_name', 'alarm_archive_max_size_mb')->value('config_value') ?: 10;
+        $alarm_purge_days = \DB::table('config')->where('config_name', 'alarm_archive_purge_days')->value('config_value') ?: 90;
+        $alarm_archive_time = \DB::table('config')->where('config_name', 'alarm_archive_time')->value('config_value') ?: '03:00';
+        $alarm_last_run = \DB::table('config')->where('config_name', 'alarm_archive_last_run')->value('config_value') ?: 'Never';
+
         return view('backup.index', compact(
             'backups', 
             'rrdBackups', 
@@ -144,7 +152,13 @@ class BackupController extends Controller
             'node_backup_time',
             'node_tftp_server_ip',
             'node_backup_retention_days',
-            'node_backup_interval_days'
+            'node_backup_interval_days',
+            'alarmArchives',
+            'alarm_max_lines',
+            'alarm_max_size_mb',
+            'alarm_purge_days',
+            'alarm_archive_time',
+            'alarm_last_run'
         ));
     }
 

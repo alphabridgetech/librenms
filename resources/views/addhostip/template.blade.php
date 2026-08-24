@@ -272,6 +272,12 @@ switchport pvid @{{value}}
                 allowClear: true
             });
 
+            $('#load_template').select2({
+                placeholder: "{{ __('-- Select Template --') }}",
+                allowClear: true,
+                width: '100%'
+            });
+
             function getTemplateVariables(templateStr) {
                 const vars = [];
                 const regex = /\{\{([^}]+)\}\}/g;

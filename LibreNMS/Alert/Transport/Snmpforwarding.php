@@ -91,7 +91,7 @@ class Snmpforwarding extends Transport
             };
         }
 
-        // Determine Object Type (PTP/CTP/Equipment/Port/Link)
+        // Determine Object Type (PTP/CTP/Manage Element/Port/Link)
         $ruleLower = strtolower($ruleName . ' ' . ($alert_data['type'] ?? ''));
         if (str_contains($ruleLower, 'ptp') || str_contains($ruleLower, 'clock') || str_contains($ruleLower, 'timing')) {
             $objectType = 'PTP';
@@ -103,7 +103,7 @@ class Snmpforwarding extends Transport
             $objectType = 'Link';
         } else {
             // Default for device down / equipment alarms
-            $objectType = 'Equipment';
+            $objectType = 'Manage Element';
         }
 
         // Extract faulted entity details & IF-MIB interface attributes
@@ -283,7 +283,7 @@ class Snmpforwarding extends Transport
 
         $varbinds['SNMPv2-SMI::enterprises.58158.9.188.3'] = (string) $stateText;
         $varbinds['SNMPv2-SMI::enterprises.58158.9.188.4'] = (string) $objectType;
-        $varbinds['SNMPv2-SMI::enterprises.58158.9.188.5'] = (string) $severityText;
+        $varbinds['d'] = (string) $severityText;
         $varbinds['SNMPv2-SMI::enterprises.58158.9.188.6'] = (string) $timestamp;
         $varbinds['SNMPv2-SMI::enterprises.58158.9.188.7'] = (string) $fullRuleName;
 

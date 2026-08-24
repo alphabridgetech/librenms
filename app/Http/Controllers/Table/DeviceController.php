@@ -151,6 +151,11 @@ class DeviceController extends TableController
     {
         $status = $this->getStatus($device);
 
+        $hardwareText = htmlspecialchars((string) Rewrite::ciscoHardware($device));
+        if (!empty($device->serial)) {
+            $hardwareText .= '<br /><small class="text-muted"><i class="fa fa-barcode"></i> S/N: ' . htmlspecialchars((string) $device->serial) . '</small>';
+        }
+
         return [
             'extra' => $this->getLabel($device),
             'status' => $status,
@@ -158,7 +163,7 @@ class DeviceController extends TableController
             'icon' => '<img src="' . asset($device->icon) . '" title="' . pathinfo($device->icon, PATHINFO_FILENAME) . '">',
             'hostname' => $this->getHostname($device, $status),
             'metrics' => $this->getMetrics($device),
-            'hardware' => htmlspecialchars(Rewrite::ciscoHardware($device)),
+            'hardware' => $hardwareText,
             'os' => $this->getOsText($device),
             'uptime' => (! $device->status && ! $device->last_polled) ? __('Never polled') : Time::formatInterval($device->status ? $device->uptime : (int) $device->downSince()->diffInSeconds(null, true), true),
             'location' => htmlspecialchars($this->getLocation($device)),
@@ -224,10 +229,11 @@ class DeviceController extends TableController
      */
     private function getOsText($device)
     {
-        $os_text = htmlspecialchars(LibrenmsConfig::getOsSetting($device->os, 'text'));
+        $os_name = LibrenmsConfig::getOsSetting($device->os, 'text', $device->os);
+        $os_text = '<strong>' . htmlspecialchars((string) $os_name) . '</strong>';
 
-        if ($this->isDetailed()) {
-            $os_text .= '<br />' . htmlspecialchars($device->version . ($device->features ? " ($device->features)" : ''));
+        if (!empty($device->version) || !empty($device->features)) {
+            $os_text .= '<br /><small class="text-muted"><i class="fa fa-code-fork"></i> Ver: ' . htmlspecialchars((string) ($device->version ?: 'N/A')) . ($device->features ? " (" . htmlspecialchars((string) $device->features) . ")" : '') . '</small>';
         }
 
         return $os_text;
@@ -310,7 +316,7 @@ class DeviceController extends TableController
             ],
         ];
 
-        if (\Auth::user()->hasGlobalAdmin()) {
+        if (\Auth::user() && \Auth::user()->hasGlobalAdmin()) {
             $actions[0][] = [
                 'title' => 'Edit device',
                 'href' => Url::deviceUrl($device, ['tab' => 'edit']),

@@ -280,6 +280,14 @@ Route::middleware(['auth', 'license'])->group(function () {
     Route::delete('/backup/node/delete/{filename}', [BackupController::class, 'destroyNode'])->name('backup.node.delete')->middleware('can:admin');
     Route::post('/backup/node/restore/{filename}', [BackupController::class, 'restoreNode'])->name('backup.node.restore')->middleware('can:admin');
 
+    // Alarm History Archive routes
+    Route::get('/alerts/archive', [\App\Http\Controllers\AlarmArchiveController::class, 'index'])->name('alerts.archive.index');
+    Route::post('/alerts/archive/run', [\App\Http\Controllers\AlarmArchiveController::class, 'store'])->name('alerts.archive.store')->middleware('can:admin');
+    Route::get('/alerts/archive/download/{id}', [\App\Http\Controllers\AlarmArchiveController::class, 'download'])->name('alerts.archive.download')->middleware('can:admin');
+    Route::get('/alerts/archive/view/{id}', [\App\Http\Controllers\AlarmArchiveController::class, 'view'])->name('alerts.archive.view');
+    Route::delete('/alerts/archive/delete/{id}', [\App\Http\Controllers\AlarmArchiveController::class, 'destroy'])->name('alerts.archive.destroy')->middleware('can:admin');
+    Route::post('/alerts/archive/settings', [\App\Http\Controllers\AlarmArchiveController::class, 'saveSettings'])->name('alerts.archive.settings')->middleware('can:admin');
+
     Route::get('about', [AboutController::class, 'index'])->name('about');
     Route::delete('reporting', [AboutController::class, 'clearReportingData'])->name('reporting.clear');
     Route::get('authlog', [UserController::class, 'authlog']);

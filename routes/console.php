@@ -834,3 +834,17 @@ Schedule::command('backup:rrd')
     ->onOneServer()
     ->appendOutputTo(config('log_dir', storage_path('logs')) . '/rrd_backups.log');
 
+$alarmArchiveTime = '03:00';
+try {
+    $alarmArchiveTime = \DB::table('config')->where('config_name', 'alarm_archive_time')->value('config_value') ?: '03:00';
+} catch (\Exception $e) {
+    // Fallback to default
+}
+
+Schedule::command('alarm:archive')
+    ->dailyAt($alarmArchiveTime)
+    ->onOneServer()
+    ->appendOutputTo(config('log_dir', storage_path('logs')) . '/alarm_archive.log');
+
+
+

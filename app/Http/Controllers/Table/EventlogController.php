@@ -386,7 +386,7 @@ class EventlogController extends TableController
                 escapeshellarg('SNMPv2-SMI::enterprises.58158.9.188.1'), escapeshellarg('127.0.0.1'),
                 escapeshellarg('SNMPv2-SMI::enterprises.58158.9.188.2'), escapeshellarg('LibreNMS-Server'),
                 escapeshellarg('SNMPv2-SMI::enterprises.58158.9.188.3'), escapeshellarg('ACTIVE'),
-                escapeshellarg('SNMPv2-SMI::enterprises.58158.9.188.4'), escapeshellarg('Equipment'),
+                escapeshellarg('SNMPv2-SMI::enterprises.58158.9.188.4'), escapeshellarg('Manage Element'),
                 escapeshellarg('SNMPv2-SMI::enterprises.58158.9.188.5'), escapeshellarg('Info'),
                 escapeshellarg('SNMPv2-SMI::enterprises.58158.9.188.6'), escapeshellarg(date('Y M j H:i:s ')),
                 escapeshellarg('SNMPv2-SMI::enterprises.58158.9.188.7'), escapeshellarg('Test SNMP Trap Connection')
