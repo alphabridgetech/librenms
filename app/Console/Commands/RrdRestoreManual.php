@@ -37,10 +37,13 @@ class RrdRestoreManual extends Command
             return 1;
         }
 
-        $backupPath = storage_path('app/backups/rrd/' . $filename);
+        $backupPath = '/tftpboot/rrd/' . $filename;
+        if (!File::exists($backupPath)) {
+            $backupPath = storage_path('app/backups/rrd/' . $filename);
+        }
 
         if (!File::exists($backupPath)) {
-            $this->error("Backup file not found: {$backupPath}");
+            $this->error("Backup file not found in /tftpboot/rrd or storage/app/backups/rrd: {$filename}");
             return 1;
         }
 

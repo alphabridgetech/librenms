@@ -5,10 +5,10 @@ import sys
 import re
 import json
 
-HOST = "192.168.200.245"
+HOST = "192.168.200.244"
 USER = "admin"
-PASSWORD = "admin@123#"
-OUTPUT_FILE = "/opt/librenms/librenms-ansible-inventory-plugin/output/192.168.200.245_getlldpinterface.yml"
+PASSWORD = "admin"
+OUTPUT_FILE = "/opt/librenms/librenms-ansible-inventory-plugin/output/192.168.200.244_getlldpinterface.yml"
 
 TOTAL_PORTS = 28
 

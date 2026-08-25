@@ -55,17 +55,80 @@ class AlarmArchiveController extends Controller
     }
 
     /**
+     * Upload an alarm archive CSV file.
+     */
+    public function upload(Request $request)
+    {
+        $request->validate([
+            'archive_file' => 'required|file',
+        ]);
+
+        $file = $request->file('archive_file');
+        $filename = $file->getClientOriginalName();
+
+        if (strtolower($file->getClientOriginalExtension()) !== 'csv') {
+            return redirect()->back()->with('error', __('Only .csv alarm archive files are allowed.'));
+        }
+
+        try {
+            $targetDir = '/tftpboot/alarms';
+            if (!File::exists($targetDir)) {
+                File::makeDirectory($targetDir, 0777, true);
+            }
+
+            $targetPath = $targetDir . '/' . $filename;
+            $file->move($targetDir, $filename);
+            @chmod($targetPath, 0777);
+
+            $bytes = File::exists($targetPath) ? File::size($targetPath) : 0;
+            $sizeFormatted = number_format($bytes / 1024, 2) . ' KB';
+            if ($bytes >= 1048576) {
+                $sizeFormatted = number_format($bytes / 1048576, 2) . ' MB';
+            }
+
+            $lineCount = 0;
+            if (File::exists($targetPath) && ($handle = fopen($targetPath, 'r')) !== false) {
+                while (fgets($handle) !== false) {
+                    $lineCount++;
+                }
+                fclose($handle);
+            }
+
+            AlarmArchive::create([
+                'filename' => $filename,
+                'file_path' => $targetPath,
+                'file_size' => $sizeFormatted,
+                'line_count' => max(0, $lineCount - 1), // exclude header if present
+                'start_date' => now(),
+                'end_date' => now(),
+            ]);
+
+            return redirect()->back()->with('success', __('Alarm history archive uploaded successfully to /tftpboot/alarms/'));
+        } catch (\Exception $e) {
+            return redirect()->back()->with('error', __('An error occurred while uploading alarm archive: ') . $e->getMessage());
+        }
+    }
+
+    /**
      * Download specified archive file securely.
      */
     public function download($id)
     {
         $archive = AlarmArchive::findOrFail($id);
+        $filePath = $archive->file_path;
 
-        if (!File::exists($archive->file_path)) {
-            return redirect()->back()->with('error', __('File not found on server at ') . $archive->file_path);
+        if (!File::exists($filePath)) {
+            // Fallback checks
+            if (File::exists('/tftpboot/alarms/' . $archive->filename)) {
+                $filePath = '/tftpboot/alarms/' . $archive->filename;
+            } elseif (File::exists(storage_path('app/backups/alarm_archives/' . $archive->filename))) {
+                $filePath = storage_path('app/backups/alarm_archives/' . $archive->filename);
+            } else {
+                return redirect()->back()->with('error', __('File not found on server at ') . $archive->file_path);
+            }
         }
 
-        return response()->download($archive->file_path, $archive->filename, [
+        return response()->download($filePath, $archive->filename, [
             'Content-Type' => 'text/csv',
         ]);
     }
@@ -76,13 +139,20 @@ class AlarmArchiveController extends Controller
     public function view($id)
     {
         $archive = AlarmArchive::findOrFail($id);
+        $filePath = $archive->file_path;
 
-        if (!File::exists($archive->file_path)) {
-            return response()->json(['error' => 'Archive file not found on server.'], 404);
+        if (!File::exists($filePath)) {
+            if (File::exists('/tftpboot/alarms/' . $archive->filename)) {
+                $filePath = '/tftpboot/alarms/' . $archive->filename;
+            } elseif (File::exists(storage_path('app/backups/alarm_archives/' . $archive->filename))) {
+                $filePath = storage_path('app/backups/alarm_archives/' . $archive->filename);
+            } else {
+                return response()->json(['error' => 'Archive file not found on server.'], 404);
+            }
         }
 
         $lines = [];
-        $handle = fopen($archive->file_path, 'r');
+        $handle = fopen($filePath, 'r');
         if ($handle) {
             $lineCount = 0;
             while (($data = fgetcsv($handle)) !== false && $lineCount < 500) {
@@ -106,9 +176,14 @@ class AlarmArchiveController extends Controller
     public function destroy($id)
     {
         $archive = AlarmArchive::findOrFail($id);
+        $filePath = $archive->file_path;
 
-        if (File::exists($archive->file_path)) {
-            File::delete($archive->file_path);
+        if (File::exists($filePath)) {
+            File::delete($filePath);
+        } elseif (File::exists('/tftpboot/alarms/' . $archive->filename)) {
+            File::delete('/tftpboot/alarms/' . $archive->filename);
+        } elseif (File::exists(storage_path('app/backups/alarm_archives/' . $archive->filename))) {
+            File::delete(storage_path('app/backups/alarm_archives/' . $archive->filename));
         }
 
         $filename = $archive->filename;

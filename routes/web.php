@@ -268,6 +268,7 @@ Route::middleware(['auth', 'license'])->group(function () {
 
     // RRD Backup routes
     Route::post('/backup/rrd/run', [BackupController::class, 'storeRrd'])->name('backup.rrd.run')->middleware('can:admin');
+    Route::post('/backup/rrd/upload', [BackupController::class, 'uploadRrd'])->name('backup.rrd.upload')->middleware('can:admin');
     Route::get('/backup/rrd/download/{filename}', [BackupController::class, 'downloadRrd'])->name('backup.rrd.download')->middleware('can:admin');
     Route::delete('/backup/rrd/delete/{filename}', [BackupController::class, 'destroyRrd'])->name('backup.rrd.delete')->middleware('can:admin');
     Route::post('/backup/rrd/restore/{filename}', [BackupController::class, 'restoreRrd'])->name('backup.rrd.restore')->middleware('can:admin');
@@ -275,6 +276,7 @@ Route::middleware(['auth', 'license'])->group(function () {
 
     // Node / Device Startup-Config Backup routes
     Route::post('/backup/node/run', [BackupController::class, 'storeNode'])->name('backup.node.run')->middleware('can:admin');
+    Route::post('/backup/node/upload', [BackupController::class, 'uploadNode'])->name('backup.node.upload')->middleware('can:admin');
     Route::post('/backup/node/schedule', [BackupController::class, 'saveNodeSchedule'])->name('backup.node.save-schedule')->middleware('can:admin');
     Route::get('/backup/node/download/{filename}', [BackupController::class, 'downloadNode'])->name('backup.node.download')->middleware('can:admin');
     Route::delete('/backup/node/delete/{filename}', [BackupController::class, 'destroyNode'])->name('backup.node.delete')->middleware('can:admin');
@@ -283,6 +285,7 @@ Route::middleware(['auth', 'license'])->group(function () {
     // Alarm History Archive routes
     Route::get('/alerts/archive', [\App\Http\Controllers\AlarmArchiveController::class, 'index'])->name('alerts.archive.index');
     Route::post('/alerts/archive/run', [\App\Http\Controllers\AlarmArchiveController::class, 'store'])->name('alerts.archive.store')->middleware('can:admin');
+    Route::post('/alerts/archive/upload', [\App\Http\Controllers\AlarmArchiveController::class, 'upload'])->name('alerts.archive.upload')->middleware('can:admin');
     Route::get('/alerts/archive/download/{id}', [\App\Http\Controllers\AlarmArchiveController::class, 'download'])->name('alerts.archive.download')->middleware('can:admin');
     Route::get('/alerts/archive/view/{id}', [\App\Http\Controllers\AlarmArchiveController::class, 'view'])->name('alerts.archive.view');
     Route::delete('/alerts/archive/delete/{id}', [\App\Http\Controllers\AlarmArchiveController::class, 'destroy'])->name('alerts.archive.destroy')->middleware('can:admin');

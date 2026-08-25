@@ -55,20 +55,20 @@
             <!-- ================= NODE / DEVICE STARTUP-CONFIGS TAB ================= -->
             <div class="tab-pane fade in active" id="node-backup">
                 <div class="row">
-                    <div class="col-md-6">
+                    <div class="col-md-4">
                         <div class="panel panel-default">
                             <div class="panel-heading">
                                 <h5 class="panel-title"><i class="fa fa-play-circle text-success"></i> Run Manual Node Backup</h5>
                             </div>
                             <div class="panel-body">
-                                <p>Export startup-config from network devices/nodes to the central TFTP server (<code>/tftpboot</code>).</p>
+                                <p>Export startup-config from network devices to central TFTP server (<code>/tftpboot/node/</code>).</p>
                                 
                                 <form action="{{ route('backup.node.run') }}" method="POST">
                                     @csrf
                                     <div class="form-group">
                                         <label for="device_id">Target Device / Node:</label>
-                                        <select name="device_id" id="device_id" class="form-control" required>
-                                            <option value="all">All Active Devices / Nodes ({{ count($devices) }} devices)</option>
+                                        <select name="device_id" id="device_id" class="form-control input-sm" required>
+                                            <option value="all">All Active Devices ({{ count($devices) }} devices)</option>
                                             @foreach ($devices as $dev)
                                                 <option value="{{ $dev->device_id }}">
                                                     {{ $dev->hostname }} {{ $dev->sysName ? '('.$dev->sysName.')' : '' }}
@@ -79,11 +79,11 @@
 
                                     <div class="form-group">
                                         <label for="tftp_server_ip">TFTP Server IP:</label>
-                                        <input type="text" name="tftp_server_ip" id="tftp_server_ip" class="form-control" value="{{ $node_tftp_server_ip }}" required>
+                                        <input type="text" name="tftp_server_ip" id="tftp_server_ip" class="form-control input-sm" value="{{ $node_tftp_server_ip }}" required>
                                     </div>
                                     
-                                    <div class="form-group">
-                                        <button type="submit" class="btn btn-success btn-block" onclick="this.disabled=true; this.innerText='Exporting Startup-Config...'; this.form.submit();">
+                                    <div class="form-group" style="margin-bottom: 0;">
+                                        <button type="submit" class="btn btn-success btn-block btn-sm" onclick="this.disabled=true; this.innerText='Exporting Startup-Config...'; this.form.submit();">
                                             <i class="fa fa-download fa-fw"></i> Export Node Startup-Config
                                         </button>
                                     </div>
@@ -92,10 +92,35 @@
                         </div>
                     </div>
 
-                    <div class="col-md-6">
+                    <div class="col-md-4">
+                        <div class="panel panel-info">
+                            <div class="panel-heading">
+                                <h5 class="panel-title"><i class="fa fa-upload text-info"></i> Upload Node Config</h5>
+                            </div>
+                            <div class="panel-body">
+                                <p>Upload a node startup-config file manually to <code>/tftpboot/node/</code>.</p>
+
+                                <form action="{{ route('backup.node.upload') }}" method="POST" enctype="multipart/form-data">
+                                    @csrf
+                                    <div class="form-group">
+                                        <label for="node_backup_file">Select Config File:</label>
+                                        <input type="file" name="backup_file" id="node_backup_file" class="form-control input-sm" required>
+                                    </div>
+
+                                    <div class="form-group" style="margin-top: 55px; margin-bottom: 0;">
+                                        <button type="submit" class="btn btn-info btn-block btn-sm">
+                                            <i class="fa fa-upload fa-fw"></i> Upload Node Config
+                                        </button>
+                                    </div>
+                                </form>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="col-md-4">
                         <div class="panel panel-success">
                             <div class="panel-heading">
-                                <h5 class="panel-title"><i class="fa fa-clock-o"></i> Automated Node Backup Schedule</h5>
+                                <h5 class="panel-title"><i class="fa fa-clock-o"></i> Automated Schedule</h5>
                             </div>
                             <div class="panel-body">
                                 <form action="{{ route('backup.node.save-schedule') }}" method="POST">
@@ -104,34 +129,33 @@
                                         <div class="col-md-6">
                                             <div class="form-group">
                                                 <label for="node_backup_time">Execution Time:</label>
-                                                <input type="time" name="node_backup_time" id="node_backup_time" class="form-control" value="{{ $node_backup_time }}" required>
+                                                <input type="time" name="node_backup_time" id="node_backup_time" class="form-control input-sm" value="{{ $node_backup_time }}" required>
                                             </div>
                                         </div>
                                         <div class="col-md-6">
                                             <div class="form-group">
-                                                <label for="node_backup_interval_days">Backup Interval (Days):</label>
-                                                <input type="number" name="node_backup_interval_days" id="node_backup_interval_days" class="form-control" value="{{ $node_backup_interval_days }}" min="1" required>
-                                                <small class="text-muted">Run every N days (e.g., 7 for 7 days).</small>
+                                                <label for="node_backup_interval_days">Interval (Days):</label>
+                                                <input type="number" name="node_backup_interval_days" id="node_backup_interval_days" class="form-control input-sm" value="{{ $node_backup_interval_days }}" min="1" required>
                                             </div>
                                         </div>
                                     </div>
                                     <div class="row">
                                         <div class="col-md-6">
                                             <div class="form-group">
-                                                <label for="node_tftp_server_ip">TFTP Server IP:</label>
-                                                <input type="text" name="node_tftp_server_ip" id="node_tftp_server_ip" class="form-control" value="{{ $node_tftp_server_ip }}" required>
+                                                <label for="node_tftp_server_ip">TFTP IP:</label>
+                                                <input type="text" name="node_tftp_server_ip" id="node_tftp_server_ip" class="form-control input-sm" value="{{ $node_tftp_server_ip }}" required>
                                             </div>
                                         </div>
                                         <div class="col-md-6">
                                             <div class="form-group">
-                                                <label for="node_backup_retention_days">Retention Period (Days):</label>
-                                                <input type="number" name="node_backup_retention_days" id="node_backup_retention_days" class="form-control" value="{{ $node_backup_retention_days }}" min="1" required>
+                                                <label for="node_backup_retention_days">Retention (Days):</label>
+                                                <input type="number" name="node_backup_retention_days" id="node_backup_retention_days" class="form-control input-sm" value="{{ $node_backup_retention_days }}" min="1" required>
                                             </div>
                                         </div>
                                     </div>
-                                    <div class="form-group" style="margin-top: 15px; margin-bottom: 0;">
-                                        <button type="submit" class="btn btn-success btn-block">
-                                            <i class="fa fa-floppy-o fa-fw"></i> Save Node Schedule Settings
+                                    <div class="form-group" style="margin-top: 5px; margin-bottom: 0;">
+                                        <button type="submit" class="btn btn-success btn-block btn-sm">
+                                            <i class="fa fa-floppy-o fa-fw"></i> Save Schedule
                                         </button>
                                     </div>
                                 </form>
@@ -144,7 +168,7 @@
                     <div class="col-md-12">
                         <div class="panel panel-default">
                             <div class="panel-heading">
-                                <h5 class="panel-title"><i class="fa fa-file-code-o text-success"></i> Saved Node Startup Configurations (/tftpboot)</h5>
+                                <h5 class="panel-title"><i class="fa fa-file-code-o text-success"></i> Saved Node Startup Configurations (<code>/tftpboot/node</code>)</h5>
                             </div>
                             <div class="panel-body">
                                 @if (count($nodeBackups) > 0)
@@ -227,25 +251,25 @@
             <!-- ================= RRD BACKUP TAB ================= -->
             <div class="tab-pane fade" id="rrd-backup">
                 <div class="row">
-                    <div class="col-md-6">
+                    <div class="col-md-4">
                         <div class="panel panel-default">
                             <div class="panel-heading">
                                 <h5 class="panel-title"><i class="fa fa-play-circle text-primary"></i> Run Manual RRD Backup</h5>
                             </div>
                             <div class="panel-body">
-                                <p>Creates a compressed archive (<code>.tar.gz</code>) of all historical metric graphs in <code>rrd/</code> directory. Pending writes are automatically flushed from <code>rrdcached</code> prior to archiving.</p>
+                                <p>Creates a compressed archive (<code>.tar.gz</code>) of metrics in <code>/tftpboot/rrd/</code>.</p>
                                 
                                 <form action="{{ route('backup.rrd.run') }}" method="POST">
                                     @csrf
                                     <div class="form-group">
                                         <label for="rrd_destination">Backup Destination:</label>
-                                        <select name="destination" id="rrd_destination" class="form-control" required>
-                                            <option value="local">Same Device (storage/app/backups/rrd/)</option>
+                                        <select name="destination" id="rrd_destination" class="form-control input-sm" required>
+                                            <option value="local">Primary (/tftpboot/rrd/)</option>
                                         </select>
                                     </div>
                                     
-                                    <div class="form-group">
-                                        <button type="submit" class="btn btn-primary btn-block">
+                                    <div class="form-group" style="margin-top: 45px; margin-bottom: 0;">
+                                        <button type="submit" class="btn btn-primary btn-block btn-sm">
                                             <i class="fa fa-file-archive-o fa-fw"></i> Start Manual RRD Backup
                                         </button>
                                     </div>
@@ -254,36 +278,73 @@
                         </div>
                     </div>
 
-                    <div class="col-md-6">
+                    <div class="col-md-4">
                         <div class="panel panel-info">
                             <div class="panel-heading">
-                                <h5 class="panel-title"><i class="fa fa-clock-o"></i> Automated RRD Backup Schedule</h5>
+                                <h5 class="panel-title"><i class="fa fa-upload text-info"></i> Upload & Restore RRD Backup</h5>
+                            </div>
+                            <div class="panel-body">
+                                <p>Upload an RRD backup archive (<code>.tar.gz</code>) directly to <code>/tftpboot/rrd/</code>.</p>
+
+                                <form action="{{ route('backup.rrd.upload') }}" method="POST" enctype="multipart/form-data">
+                                    @csrf
+                                    <div class="form-group">
+                                        <label for="rrd_backup_file">Select Archive File:</label>
+                                        <input type="file" name="backup_file" id="rrd_backup_file" class="form-control input-sm" accept=".tar.gz,.gz" required>
+                                    </div>
+
+                                    <div class="checkbox">
+                                        <label>
+                                            <input type="checkbox" name="restore_immediately" value="1"> 
+                                            <strong>Restore immediately after upload?</strong>
+                                        </label>
+                                    </div>
+
+                                    <div class="form-group" style="margin-bottom: 0;">
+                                        <button type="submit" class="btn btn-info btn-block btn-sm" onclick="return document.querySelector('#rrd_backup_file').form.querySelector('input[name=restore_immediately]').checked ? confirm('WARNING: Restoring will overwrite existing RRD files in rrd/ directory. Proceed?') : true;">
+                                            <i class="fa fa-upload fa-fw"></i> Upload RRD Backup
+                                        </button>
+                                    </div>
+                                </form>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="col-md-4">
+                        <div class="panel panel-info">
+                            <div class="panel-heading">
+                                <h5 class="panel-title"><i class="fa fa-clock-o"></i> Automated RRD Schedule</h5>
                             </div>
                             <div class="panel-body">
                                 <form action="{{ route('backup.rrd.save-schedule') }}" method="POST">
                                     @csrf
-                                    <div class="form-group">
-                                        <label for="rrd_backup_time">Execution Time:</label>
-                                        <input type="time" name="rrd_backup_time" id="rrd_backup_time" class="form-control" value="{{ $rrd_backup_time }}" required>
-                                    </div>
-                                    <div class="form-group">
-                                        <label for="rrd_backup_interval_days">Backup Interval (Days):</label>
-                                        <input type="number" name="rrd_backup_interval_days" id="rrd_backup_interval_days" class="form-control" value="{{ $rrd_backup_interval_days }}" min="1" required>
-                                        <small class="text-muted">Specify how many days between backups (e.g. set 7 to run backup every 7 days, or 1 for daily).</small>
+                                    <div class="row">
+                                        <div class="col-md-6">
+                                            <div class="form-group">
+                                                <label for="rrd_backup_time">Execution Time:</label>
+                                                <input type="time" name="rrd_backup_time" id="rrd_backup_time" class="form-control input-sm" value="{{ $rrd_backup_time }}" required>
+                                            </div>
+                                        </div>
+                                        <div class="col-md-6">
+                                            <div class="form-group">
+                                                <label for="rrd_backup_interval_days">Interval (Days):</label>
+                                                <input type="number" name="rrd_backup_interval_days" id="rrd_backup_interval_days" class="form-control input-sm" value="{{ $rrd_backup_interval_days }}" min="1" required>
+                                            </div>
+                                        </div>
                                     </div>
                                     <div class="form-group">
                                         <label for="rrd_backup_destination">Backup Destination:</label>
-                                        <select name="rrd_backup_destination" id="rrd_backup_destination" class="form-control" required>
-                                            <option value="local" {{ $rrd_backup_destination == 'local' ? 'selected' : '' }}>Same Device (storage/app/backups/rrd/)</option>
+                                        <select name="rrd_backup_destination" id="rrd_backup_destination" class="form-control input-sm" required>
+                                            <option value="local" {{ $rrd_backup_destination == 'local' ? 'selected' : '' }}>Primary (/tftpboot/rrd/)</option>
                                         </select>
                                     </div>
                                     <div class="form-group">
                                         <label for="rrd_backup_purge_days">Retention Period (Days):</label>
-                                        <input type="number" name="rrd_backup_purge_days" id="rrd_backup_purge_days" class="form-control" value="{{ $rrd_backup_purge_days }}" min="1" required>
+                                        <input type="number" name="rrd_backup_purge_days" id="rrd_backup_purge_days" class="form-control input-sm" value="{{ $rrd_backup_purge_days }}" min="1" required>
                                     </div>
-                                    <div class="form-group" style="margin-top: 15px; margin-bottom: 0;">
-                                        <button type="submit" class="btn btn-info btn-block">
-                                            <i class="fa fa-floppy-o fa-fw"></i> Save RRD Schedule Settings
+                                    <div class="form-group" style="margin-top: 5px; margin-bottom: 0;">
+                                        <button type="submit" class="btn btn-info btn-block btn-sm">
+                                            <i class="fa fa-floppy-o fa-fw"></i> Save Schedule
                                         </button>
                                     </div>
                                 </form>
@@ -296,7 +357,7 @@
                     <div class="col-md-12">
                         <div class="panel panel-default">
                             <div class="panel-heading">
-                                <h5 class="panel-title"><i class="fa fa-list"></i> Available RRD Backups</h5>
+                                <h5 class="panel-title"><i class="fa fa-list"></i> Available RRD Backups (<code>/tftpboot/rrd</code>)</h5>
                             </div>
                             <div class="panel-body">
                                 @if (count($rrdBackups) > 0)
@@ -392,7 +453,7 @@
                                     <div class="form-group">
                                         <label for="destination">Backup Destination:</label>
                                         <select name="destination" id="destination" class="form-control" required>
-                                            <option value="local">Same Device (storage/app/backups/)</option>
+                                            <option value="local">Primary (/tftpboot/database/)</option>
                                         </select>
                                     </div>
                                     
@@ -412,7 +473,7 @@
                                 <h5 class="panel-title"><i class="fa fa-upload"></i> Upload & Restore Database Backup</h5>
                             </div>
                             <div class="panel-body">
-                                <p>Upload a <code>.sql</code> backup file from your local machine.</p>
+                                <p>Upload a <code>.sql</code> backup file directly to <code>/tftpboot/database/</code>.</p>
 
                                 <form action="{{ route('backup.upload') }}" method="POST" enctype="multipart/form-data">
                                     @csrf
@@ -466,7 +527,7 @@
                                             <div class="form-group">
                                                 <label for="db_backup_destination">Backup Destination:</label>
                                                 <select name="db_backup_destination" id="db_backup_destination" class="form-control" required>
-                                                    <option value="local" {{ $db_backup_destination == 'local' ? 'selected' : '' }}>Same Device (storage/app/backups/)</option>
+                                                    <option value="local" {{ $db_backup_destination == 'local' ? 'selected' : '' }}>Primary (/tftpboot/database/)</option>
                                                 </select>
                                             </div>
                                         </div>
@@ -492,7 +553,7 @@
                     <div class="col-md-12">
                         <div class="panel panel-default">
                             <div class="panel-heading">
-                                <h5 class="panel-title"><i class="fa fa-list"></i> Available Database Backups</h5>
+                                <h5 class="panel-title"><i class="fa fa-list"></i> Available Database Backups (<code>/tftpboot/database</code>)</h5>
                             </div>
                             <div class="panel-body">
                                 @if (count($backups) > 0)
@@ -564,7 +625,7 @@
                                         </div>
                                     </div>
                                 @else
-                                    <p class="text-muted">No database backups found in <code>storage/app/backups/</code>.</p>
+                                    <p class="text-muted">No database backups found in <code>/tftpboot/database/</code> or <code>storage/app/backups/</code>.</p>
                                 @endif
                             </div>
                         </div>
@@ -903,7 +964,26 @@
                             <div class="panel-footer small text-muted">
                                 <strong>Last Run:</strong> {{ $alarm_last_run }}<br>
                                 <strong>Scheduled Daily At:</strong> {{ $alarm_archive_time }}<br>
-                                <strong>Storage Path:</strong> <code>/opt/librenms/storage/app/backups/alarm_archives/</code>
+                                <strong>Storage Path:</strong> <code>/tftpboot/alarms/</code>
+                            </div>
+                        </div>
+
+                        <!-- Upload Alarm History Archive Panel -->
+                        <div class="panel panel-info">
+                            <div class="panel-heading">
+                                <strong><i class="fa fa-upload"></i> Upload Alarm Archive</strong>
+                            </div>
+                            <div class="panel-body">
+                                <form action="{{ route('alerts.archive.upload') }}" method="POST" enctype="multipart/form-data">
+                                    @csrf
+                                    <div class="form-group">
+                                        <label for="alarm_archive_file">Select Archive (.csv):</label>
+                                        <input type="file" name="archive_file" id="alarm_archive_file" class="form-control input-sm" accept=".csv" required>
+                                    </div>
+                                    <button type="submit" class="btn btn-info btn-block btn-sm">
+                                        <i class="fa fa-upload"></i> Upload Archive CSV
+                                    </button>
+                                </form>
                             </div>
                         </div>
                     </div>

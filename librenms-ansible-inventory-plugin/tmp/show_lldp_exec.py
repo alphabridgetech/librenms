@@ -4,10 +4,10 @@ import re
 import os
 import sys
 
-HOST = "192.168.200.245"
+HOST = "192.168.200.244"
 USER = "admin"
-PASSWORD = "admin@123#"
-OUTPUT_FILE = "/opt/librenms/librenms-ansible-inventory-plugin/output/192.168.200.245_getlldp.yml"
+PASSWORD = "admin"
+OUTPUT_FILE = "/opt/librenms/librenms-ansible-inventory-plugin/output/192.168.200.244_getlldp.yml"
 
 def read_channel(chan, wait=1):
     time.sleep(wait)

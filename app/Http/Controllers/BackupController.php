@@ -19,18 +19,23 @@ class BackupController extends Controller
      */
     public function index()
     {
-        $backupPath = storage_path('app/backups');
+        // Database Backups (/tftpboot/database primary, storage/app/backups fallback)
         $backups = [];
-
-        if (File::exists($backupPath)) {
-            $files = File::files($backupPath);
-            foreach ($files as $file) {
-                if ($file->getExtension() === 'sql' || str_starts_with($file->getFilename(), 'backup_')) {
-                    $backups[] = [
-                        'name' => $file->getFilename(),
-                        'size' => number_format($file->getSize() / 1024 / 1024, 2) . ' MB',
-                        'date' => date('Y-m-d H:i:s', $file->getMTime()),
-                    ];
+        $dbDirs = ['/tftpboot/database', storage_path('app/backups')];
+        $addedDbFiles = [];
+        foreach ($dbDirs as $dbDir) {
+            if (File::exists($dbDir)) {
+                $files = File::files($dbDir);
+                foreach ($files as $file) {
+                    $name = $file->getFilename();
+                    if (!in_array($name, $addedDbFiles) && ($file->getExtension() === 'sql' || str_starts_with($name, 'backup_'))) {
+                        $addedDbFiles[] = $name;
+                        $backups[] = [
+                            'name' => $name,
+                            'size' => number_format($file->getSize() / 1024 / 1024, 2) . ' MB',
+                            'date' => date('Y-m-d H:i:s', $file->getMTime()),
+                        ];
+                    }
                 }
             }
         }
@@ -40,19 +45,23 @@ class BackupController extends Controller
             return strcmp($b['date'], $a['date']);
         });
 
-        // RRD Backups
-        $rrdBackupPath = storage_path('app/backups/rrd');
+        // RRD Backups (/tftpboot/rrd primary, storage/app/backups/rrd fallback)
         $rrdBackups = [];
-
-        if (File::exists($rrdBackupPath)) {
-            $rrdFiles = File::files($rrdBackupPath);
-            foreach ($rrdFiles as $file) {
-                if (str_starts_with($file->getFilename(), 'rrd_backup_') || str_ends_with($file->getFilename(), '.tar.gz')) {
-                    $rrdBackups[] = [
-                        'name' => $file->getFilename(),
-                        'size' => number_format($file->getSize() / 1024 / 1024, 2) . ' MB',
-                        'date' => date('Y-m-d H:i:s', $file->getMTime()),
-                    ];
+        $rrdDirs = ['/tftpboot/rrd', storage_path('app/backups/rrd')];
+        $addedRrdFiles = [];
+        foreach ($rrdDirs as $rrdDir) {
+            if (File::exists($rrdDir)) {
+                $rrdFiles = File::files($rrdDir);
+                foreach ($rrdFiles as $file) {
+                    $name = $file->getFilename();
+                    if (!in_array($name, $addedRrdFiles) && (str_starts_with($name, 'rrd_backup_') || str_ends_with($name, '.tar.gz') || str_ends_with($name, '.gz'))) {
+                        $addedRrdFiles[] = $name;
+                        $rrdBackups[] = [
+                            'name' => $name,
+                            'size' => number_format($file->getSize() / 1024 / 1024, 2) . ' MB',
+                            'date' => date('Y-m-d H:i:s', $file->getMTime()),
+                        ];
+                    }
                 }
             }
         }
@@ -72,19 +81,23 @@ class BackupController extends Controller
             Log::warning("Could not fetch backup logs: " . $e->getMessage());
         }
 
-        // Node / Device Startup-Config Backups
-        $nodeBackupPath = '/tftpboot';
+        // Node / Device Startup-Config Backups (/tftpboot/node primary, /tftpboot fallback)
         $nodeBackups = [];
-
-        if (File::exists($nodeBackupPath)) {
-            $nodeFiles = File::files($nodeBackupPath);
-            foreach ($nodeFiles as $file) {
-                if ($file->isFile()) {
-                    $nodeBackups[] = [
-                        'name' => $file->getFilename(),
-                        'size' => number_format($file->getSize() / 1024, 2) . ' KB',
-                        'date' => date('Y-m-d H:i:s', $file->getMTime()),
-                    ];
+        $nodeDirs = ['/tftpboot/node', '/tftpboot'];
+        $addedNodeFiles = [];
+        foreach ($nodeDirs as $nodeDir) {
+            if (File::exists($nodeDir)) {
+                $nodeFiles = File::files($nodeDir);
+                foreach ($nodeFiles as $file) {
+                    $name = $file->getFilename();
+                    if (!in_array($name, $addedNodeFiles) && $file->isFile()) {
+                        $addedNodeFiles[] = $name;
+                        $nodeBackups[] = [
+                            'name' => $name,
+                            'size' => number_format($file->getSize() / 1024, 2) . ' KB',
+                            'date' => date('Y-m-d H:i:s', $file->getMTime()),
+                        ];
+                    }
                 }
             }
         }
@@ -245,9 +258,19 @@ class BackupController extends Controller
     /**
      * Download a specific DB backup file.
      */
+    /**
+     * Download a specific DB backup file.
+     */
     public function download($filename)
     {
-        $path = storage_path('app/backups/' . $filename);
+        if (str_contains($filename, '..') || str_contains($filename, '/') || str_contains($filename, '\\')) {
+            abort(403);
+        }
+
+        $path = '/tftpboot/database/' . $filename;
+        if (!File::exists($path)) {
+            $path = storage_path('app/backups/' . $filename);
+        }
 
         if (!File::exists($path)) {
             abort(404);
@@ -276,7 +299,10 @@ class BackupController extends Controller
             abort(403);
         }
 
-        $path = storage_path('app/backups/rrd/' . $filename);
+        $path = '/tftpboot/rrd/' . $filename;
+        if (!File::exists($path)) {
+            $path = storage_path('app/backups/rrd/' . $filename);
+        }
 
         if (!File::exists($path)) {
             abort(404);
@@ -437,11 +463,20 @@ class BackupController extends Controller
             abort(403);
         }
 
-        $path = storage_path('app/backups/' . $filename);
-
+        $path = '/tftpboot/database/' . $filename;
+        $deleted = false;
         if (File::exists($path)) {
             File::delete($path);
+            $deleted = true;
+        }
 
+        $fallbackPath = storage_path('app/backups/' . $filename);
+        if (File::exists($fallbackPath)) {
+            File::delete($fallbackPath);
+            $deleted = true;
+        }
+
+        if ($deleted) {
             try {
                 BackupLog::create([
                     'user_id' => Auth::id(),
@@ -468,11 +503,20 @@ class BackupController extends Controller
             abort(403);
         }
 
-        $path = storage_path('app/backups/rrd/' . $filename);
-
+        $path = '/tftpboot/rrd/' . $filename;
+        $deleted = false;
         if (File::exists($path)) {
             File::delete($path);
+            $deleted = true;
+        }
 
+        $fallbackPath = storage_path('app/backups/rrd/' . $filename);
+        if (File::exists($fallbackPath)) {
+            File::delete($fallbackPath);
+            $deleted = true;
+        }
+
+        if ($deleted) {
             try {
                 BackupLog::create([
                     'user_id' => Auth::id(),
@@ -502,13 +546,19 @@ class BackupController extends Controller
         $file = $request->file('backup_file');
         $filename = $file->getClientOriginalName();
 
-        if ($file->getClientOriginalExtension() !== 'sql') {
+        if (strtolower($file->getClientOriginalExtension()) !== 'sql') {
             return redirect()->route('backup.index')->with('error', __('Only .sql files are allowed.'));
         }
 
         try {
-            $path = $file->storeAs('backups', $filename);
-            
+            $targetDir = '/tftpboot/database';
+            if (!File::exists($targetDir)) {
+                File::makeDirectory($targetDir, 0777, true);
+            }
+
+            $file->move($targetDir, $filename);
+            @chmod($targetDir . '/' . $filename, 0777);
+
             try {
                 BackupLog::create([
                     'user_id' => Auth::id(),
@@ -524,10 +574,98 @@ class BackupController extends Controller
                 return $this->restore($filename);
             }
 
-            return redirect()->route('backup.index')->with('success', __('Backup file uploaded successfully.'));
+            return redirect()->route('backup.index')->with('success', __('Database backup file uploaded successfully to /tftpboot/database/'));
         } catch (\Exception $e) {
             Log::error("Backup upload error: " . $e->getMessage());
             return redirect()->route('backup.index')->with('error', __('An error occurred while uploading: ') . $e->getMessage());
+        }
+    }
+
+    /**
+     * Upload an RRD backup file.
+     */
+    public function uploadRrd(Request $request)
+    {
+        $request->validate([
+            'backup_file' => 'required|file',
+        ]);
+
+        $file = $request->file('backup_file');
+        $filename = $file->getClientOriginalName();
+
+        if (!str_ends_with(strtolower($filename), '.tar.gz') && !str_ends_with(strtolower($filename), '.gz')) {
+            return redirect()->route('backup.index')->with('error', __('Only .tar.gz or .gz compressed backup files are allowed for RRD.'));
+        }
+
+        try {
+            $targetDir = '/tftpboot/rrd';
+            if (!File::exists($targetDir)) {
+                File::makeDirectory($targetDir, 0777, true);
+            }
+
+            $file->move($targetDir, $filename);
+            @chmod($targetDir . '/' . $filename, 0777);
+
+            try {
+                BackupLog::create([
+                    'user_id' => Auth::id(),
+                    'action' => 'upload',
+                    'filename' => 'RRD: ' . $filename,
+                    'status' => 'success',
+                ]);
+            } catch (\Exception $e) {
+                Log::warning("Could not log RRD backup upload: " . $e->getMessage());
+            }
+
+            if ($request->has('restore_immediately')) {
+                return $this->restoreRrd($filename);
+            }
+
+            return redirect()->route('backup.index')->with('success', __('RRD backup file uploaded successfully to /tftpboot/rrd/'));
+        } catch (\Exception $e) {
+            Log::error("RRD Backup upload error: " . $e->getMessage());
+            return redirect()->route('backup.index')->with('error', __('An error occurred while uploading RRD backup: ') . $e->getMessage());
+        }
+    }
+
+    /**
+     * Upload a Node startup-config file.
+     */
+    public function uploadNode(Request $request)
+    {
+        $request->validate([
+            'backup_file' => 'required|file',
+        ]);
+
+        $file = $request->file('backup_file');
+        $filename = $file->getClientOriginalName();
+
+        try {
+            $targetDir = '/tftpboot/node';
+            if (!File::exists($targetDir)) {
+                File::makeDirectory($targetDir, 0777, true);
+            }
+
+            $file->move($targetDir, $filename);
+            @chmod($targetDir . '/' . $filename, 0777);
+
+            try {
+                \App\Models\ConfigBackupLog::create([
+                    'device_id' => 0,
+                    'user_id' => Auth::id(),
+                    'filename' => $filename,
+                    'tftp_server' => request()->getHost() ?: 'localhost',
+                    'status' => 'success',
+                    'message' => "SUCCESS: Node startup-config file uploaded manually to /tftpboot/node/{$filename}",
+                ]);
+            } catch (\Exception $e) {
+                Log::warning("Could not log node upload: " . $e->getMessage());
+            }
+
+            return redirect()->route('backup.index')->with('success', __('Node backup file uploaded successfully to /tftpboot/node/'));
+        } catch (\Exception $e) {
+            Log::error("Node backup upload error: " . $e->getMessage());
+            return redirect()->route('backup.index')->with('error', __('An error occurred while uploading node backup file: ') . $e->getMessage());
         }
     }
 
@@ -540,10 +678,13 @@ class BackupController extends Controller
             abort(403);
         }
 
-        $path = storage_path('app/backups/' . $filename);
+        $path = '/tftpboot/database/' . $filename;
+        if (!File::exists($path)) {
+            $path = storage_path('app/backups/' . $filename);
+        }
 
         if (!File::exists($path)) {
-            return redirect()->route('backup.index')->with('error', __('Backup file not found.'));
+            return redirect()->route('backup.index')->with('error', __('Backup file not found in /tftpboot/database/ or storage/app/backups/.'));
         }
 
         try {
@@ -587,10 +728,13 @@ class BackupController extends Controller
             abort(403);
         }
 
-        $path = storage_path('app/backups/rrd/' . $filename);
+        $path = '/tftpboot/rrd/' . $filename;
+        if (!File::exists($path)) {
+            $path = storage_path('app/backups/rrd/' . $filename);
+        }
 
         if (!File::exists($path)) {
-            return redirect()->route('backup.index')->with('error', __('RRD backup file not found.'));
+            return redirect()->route('backup.index')->with('error', __('RRD backup file not found in /tftpboot/rrd/ or storage/app/backups/rrd/.'));
         }
 
         try {
@@ -704,7 +848,6 @@ class BackupController extends Controller
                 $ipOrHost = !empty($device->overwrite_ip) ? $device->overwrite_ip : $device->hostname;
                 $hostsFile = "{$pluginPath}/hosts/{$hostname}.yml";
                 
-                // Construct standard manual filename format: e.g. 10.133.27.164_20260819_1233_man_startup-config
                 $dateFormatted = date('Ymd_Hi');
                 $destination_file = "{$ipOrHost}_{$dateFormatted}_man_startup-config";
 
@@ -782,7 +925,10 @@ class BackupController extends Controller
                 $process->run();
 
                 if ($process->isSuccessful()) {
-                    $localPath = "/tftpboot/{$destination_file}";
+                    if (!file_exists('/tftpboot/node')) {
+                        @mkdir('/tftpboot/node', 0777, true);
+                    }
+                    $localPath = "/tftpboot/node/{$destination_file}";
                     if (!file_exists($localPath)) {
                         $downloadCmd = "tftp -g -r " . escapeshellarg($destination_file) . " -l " . escapeshellarg($localPath) . " " . escapeshellarg($tftpServer);
                         shell_exec($downloadCmd);
@@ -795,7 +941,7 @@ class BackupController extends Controller
                             'filename' => $destination_file,
                             'tftp_server' => $tftpServer,
                             'status' => 'success',
-                            'message' => "SUCCESS: Manual startup-config export completed. Saved to /tftpboot/{$destination_file}",
+                            'message' => "SUCCESS: Manual startup-config export completed. Saved to /tftpboot/node/{$destination_file}",
                         ]);
                     } catch (\Exception $e) {}
 
@@ -845,7 +991,7 @@ class BackupController extends Controller
     }
 
     /**
-     * Download Node backup file from /tftpboot.
+     * Download Node backup file from /tftpboot/node or /tftpboot.
      */
     public function downloadNode($filename)
     {
@@ -853,7 +999,10 @@ class BackupController extends Controller
             abort(403);
         }
 
-        $filePath = "/tftpboot/{$filename}";
+        $filePath = "/tftpboot/node/{$filename}";
+        if (!File::exists($filePath)) {
+            $filePath = "/tftpboot/{$filename}";
+        }
 
         if (File::exists($filePath)) {
             return response()->download($filePath);
@@ -871,10 +1020,13 @@ class BackupController extends Controller
             abort(403);
         }
 
-        $filePath = "/tftpboot/{$filename}";
+        $filePath = "/tftpboot/node/{$filename}";
+        if (!File::exists($filePath)) {
+            $filePath = "/tftpboot/{$filename}";
+        }
 
         if (!File::exists($filePath)) {
-            return redirect()->route('backup.index')->with('error', __('Backup file not found in /tftpboot/.'));
+            return redirect()->route('backup.index')->with('error', __('Backup file not found in /tftpboot/node/ or /tftpboot/.'));
         }
 
         try {
@@ -884,15 +1036,15 @@ class BackupController extends Controller
                 'filename' => $filename,
                 'tftp_server' => parse_url(config('app.url'), PHP_URL_HOST) ?: 'localhost',
                 'status' => 'success',
-                'message' => "SUCCESS: Restore operation triggered for file /tftpboot/{$filename}.",
+                'message' => "SUCCESS: Restore operation triggered for file {$filePath}.",
             ]);
         } catch (\Exception $e) {}
 
-        return redirect()->route('backup.index')->with('success', __("Restore initiated for startup-config /tftpboot/{$filename}. Server backup path verified."));
+        return redirect()->route('backup.index')->with('success', __("Restore initiated for startup-config {$filePath}. Server backup path verified."));
     }
 
     /**
-     * Delete Node backup file from /tftpboot.
+     * Delete Node backup file from /tftpboot/node or /tftpboot.
      */
     public function destroyNode($filename)
     {
@@ -900,10 +1052,21 @@ class BackupController extends Controller
             abort(403);
         }
 
-        $filePath = "/tftpboot/{$filename}";
+        $filePath = "/tftpboot/node/{$filename}";
+        $deleted = false;
 
         if (File::exists($filePath)) {
             File::delete($filePath);
+            $deleted = true;
+        }
+
+        $fallbackPath = "/tftpboot/{$filename}";
+        if (File::exists($fallbackPath)) {
+            File::delete($fallbackPath);
+            $deleted = true;
+        }
+
+        if ($deleted) {
             return redirect()->route('backup.index')->with('success', __('Node backup file deleted successfully.'));
         }
 

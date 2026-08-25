@@ -1,1 +1,83 @@
-error: Incompatible ssh peer (no acceptable host key)
+ip: 192.168.200.244
+vlans:
+-   id: '1'
+    name: Default
+    ports:
+    - g0/6
+    - g0/13
+    - g0/15
+    - g0/16
+    - g0/19
+    - g0/20
+    - g0/21
+    - g0/23
+    - g0/26
+    - g0/27
+    - g0/28
+    - p1
+    status: Static
+-   id: '3'
+    name: VLAN0003
+    ports: []
+    status: Static
+-   id: '4'
+    name: VLAN0004
+    ports: []
+    status: Static
+-   id: '5'
+    name: VLAN0005
+    ports: []
+    status: Static
+-   id: '111'
+    name: VLAN0111
+    ports:
+    - g0/3
+    - g0/4
+    - g0/7
+    - g0/8
+    - g0/9
+    - g0/10
+    - g0/11
+    - g0/12
+    - g0/14
+    - g0/24
+    status: Static
+-   id: '200'
+    name: VLAN0200
+    ports:
+    - g0/1
+    - g0/2
+    - g0/3
+    - g0/8
+    - g0/9
+    - g0/10
+    - g0/11
+    - g0/12
+    - g0/14
+    - g0/17
+    - g0/18
+    - g0/24
+    - g0/25
+    status: Static
+-   id: '222'
+    name: VLAN0222
+    ports:
+    - g0/9
+    - g0/10
+    status: Static
+-   id: '1234'
+    name: VLAN1234
+    ports:
+    - g0/22
+    - g0/24
+    status: Static
+-   id: '2225'
+    name: VLAN2225
+    ports: []
+    status: Static
+-   id: '4000'
+    name: VLAN4000
+    ports:
+    - g0/5
+    - g0/24
+    status: Static

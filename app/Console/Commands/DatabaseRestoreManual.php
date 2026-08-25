@@ -30,10 +30,13 @@ class DatabaseRestoreManual extends Command
     public function handle()
     {
         $filename = $this->argument('filename');
-        $backupPath = storage_path('app/backups/' . $filename);
+        $backupPath = '/tftpboot/database/' . $filename;
+        if (!File::exists($backupPath)) {
+            $backupPath = storage_path('app/backups/' . $filename);
+        }
 
         if (!File::exists($backupPath)) {
-            $this->error("Backup file not found: {$backupPath}");
+            $this->error("Backup file not found in /tftpboot/database or storage/app/backups: {$filename}");
             return 1;
         }
 

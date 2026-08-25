@@ -347,7 +347,10 @@ Artisan::command('backup:startup-configs', function () {
                 $this->info("Successfully backed up {$ipOrHost}.");
                 
                 // Sync file locally if it was uploaded to a remote TFTP server
-                $localPath = "/tftpboot/{$destination_file}";
+                if (!file_exists('/tftpboot/node')) {
+                    @mkdir('/tftpboot/node', 0777, true);
+                }
+                $localPath = "/tftpboot/node/{$destination_file}";
                 if (!file_exists($localPath)) {
                     $downloadCmd = "tftp -g -r " . escapeshellarg($destination_file) . " -l " . escapeshellarg($localPath) . " " . escapeshellarg($tftpServer);
                     shell_exec($downloadCmd);
@@ -360,7 +363,7 @@ Artisan::command('backup:startup-configs', function () {
                         'filename' => $destination_file,
                         'tftp_server' => $tftpServer,
                         'status' => 'success',
-                        'message' => "SUCCESS: Daily automated backup completed. Saved to /tftpboot/{$destination_file}",
+                        'message' => "SUCCESS: Daily automated backup completed. Saved to /tftpboot/node/{$destination_file}",
                     ]);
                 } catch (\Exception $e) {
                     $this->warn("Could not log automated backup to DB: " . $e->getMessage());
@@ -442,8 +445,8 @@ Artisan::command('backup:startup-configs', function () {
     $this->info("Cleaning up backups older than {$retentionDays} days...");
     $thresholdTime = time() - ($retentionDays * 24 * 60 * 60);
 
-    // 1. Delete files in /tftpboot older than threshold
-    $tftpPath = '/tftpboot';
+    // 1. Delete files in /tftpboot/node older than threshold
+    $tftpPath = '/tftpboot/node';
     if (file_exists($tftpPath) && is_dir($tftpPath)) {
         $files = scandir($tftpPath);
         foreach ($files as $file) {

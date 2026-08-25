@@ -75,7 +75,7 @@ class RrdBackupManual extends Command
                 break;
             case 'local':
             default:
-                $basePath = storage_path('app/backups/rrd');
+                $basePath = '/tftpboot/rrd';
                 break;
         }
 

@@ -38,9 +38,9 @@ class ArchiveAlarmHistory extends Command
         $maxSizeBytes = $maxSizeMb * 1024 * 1024;
         $purgeDays = (int) (DB::table('config')->where('config_name', 'alarm_archive_purge_days')->value('config_value') ?: 90);
 
-        $archiveDir = storage_path('app/backups/alarm_archives');
+        $archiveDir = '/tftpboot/alarms';
         if (!File::exists($archiveDir)) {
-            File::makeDirectory($archiveDir, 0755, true);
+            File::makeDirectory($archiveDir, 0777, true);
         }
 
         // Fetch logs from alert_log table

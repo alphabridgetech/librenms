@@ -49,7 +49,7 @@ class DatabaseBackupManual extends Command
                 break;
             case 'local':
             default:
-                $basePath = storage_path('app/backups');
+                $basePath = '/tftpboot/database';
                 break;
         }
 

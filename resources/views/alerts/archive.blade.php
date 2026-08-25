@@ -145,7 +145,26 @@
                     </div>
                     <div class="panel-footer small text-muted">
                         <strong>Last Run:</strong> {{ $last_run }}<br>
-                        <strong>Storage Path:</strong> <code>/opt/librenms/storage/app/backups/alarm_archives/</code>
+                        <strong>Storage Path:</strong> <code>/tftpboot/alarms/</code>
+                    </div>
+                </div>
+
+                <!-- Upload Alarm History Archive Panel -->
+                <div class="panel panel-info">
+                    <div class="panel-heading">
+                        <strong><i class="fa fa-upload"></i> Upload Alarm Archive</strong>
+                    </div>
+                    <div class="panel-body">
+                        <form action="{{ route('alerts.archive.upload') }}" method="POST" enctype="multipart/form-data">
+                            @csrf
+                            <div class="form-group">
+                                <label for="archive_file">Select Archive (.csv):</label>
+                                <input type="file" name="archive_file" id="archive_file" class="form-control input-sm" accept=".csv" required>
+                            </div>
+                            <button type="submit" class="btn btn-info btn-block btn-sm">
+                                <i class="fa fa-upload"></i> Upload Archive CSV
+                            </button>
+                        </form>
                     </div>
                 </div>
             </div>
