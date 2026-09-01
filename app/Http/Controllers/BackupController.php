@@ -823,6 +823,13 @@ class BackupController extends Controller
         $tftpServer = $request->input('tftp_server_ip');
 
         try {
+            if (!empty($tftpServer)) {
+                \DB::table('config')->updateOrInsert(
+                    ['config_name' => 'tftp_server_ip'],
+                    ['config_value' => $tftpServer]
+                );
+            }
+
             if (empty($deviceId) || $deviceId === 'all') {
                 $exitCode = Artisan::call('backup:startup-configs');
                 $output = Artisan::output();
