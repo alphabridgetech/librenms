@@ -3,6 +3,7 @@
 namespace App\Models;
 
 use Illuminate\Database\Eloquent\Factories\HasFactory;
+use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use LibreNMS\Interfaces\Models\Keyable;
 
 class Transceiver extends PortRelatedModel implements Keyable
@@ -43,5 +44,13 @@ class Transceiver extends PortRelatedModel implements Keyable
     public function getCompositeKey()
     {
         return $this->index;
+    }
+
+    /**
+     * @return \Illuminate\Database\Eloquent\Relations\BelongsTo<\App\Models\Device, $this>
+     */
+    public function device(): BelongsTo
+    {
+        return $this->belongsTo(Device::class, 'device_id', 'device_id');
     }
 }

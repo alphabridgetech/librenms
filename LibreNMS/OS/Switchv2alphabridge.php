@@ -17,31 +17,50 @@ class Switchv2alphabridge extends OS implements TransceiverDiscovery
 
         if (function_exists('snmpwalk_cache_oid')) {
             $models = snmpwalk_cache_oid($device, '.1.3.6.1.4.1.58158.9.63.1.7.1.44', [], '');
-            $statuses = snmpwalk_cache_oid($device, '.1.3.6.1.4.1.58158.9.63.1.7.1.21', [], '');
+            $serials = snmpwalk_cache_oid($device, '.1.3.6.1.4.1.58158.9.63.1.7.1.23', [], '');
+            $wavelengths = snmpwalk_cache_oid($device, '.1.3.6.1.4.1.58158.9.63.1.7.1.19', [], '');
+            $distances = snmpwalk_cache_oid($device, '.1.3.6.1.4.1.58158.9.63.1.7.1.18', [], '');
+            $vendors = snmpwalk_cache_oid($device, '.1.3.6.1.4.1.58158.9.63.1.7.1.7', [], '');
 
             $transceivers = collect();
 
             if (! empty($models)) {
                 foreach ($models as $key => $data) {
                     $ifIndex = (int) last(explode('.', $key));
-                    $statusKey = "58158.9.63.1.7.1.21.{$ifIndex}";
-                    $statusArr = $statuses[$statusKey] ?? [];
-                    $status = ! empty($statusArr) ? array_values($statusArr)[0] : null;
-                    $model = ! empty($data) ? array_values($data)[0] : null;
+                    $model = ! empty($data) ? trim((string) array_values($data)[0]) : null;
 
-                    // Skip empty models or non-inserted ports (status 2 = absent)
-                    if (empty($model) || $status == 2) {
+                    // Skip empty models
+                    if (empty($model)) {
                         continue;
                     }
+
+                    $vendorKey = "58158.9.63.1.7.1.7.{$ifIndex}";
+                    $vendorArr = $vendors[$vendorKey] ?? [];
+                    $vendorVal = ! empty($vendorArr) ? trim((string) array_values($vendorArr)[0]) : null;
+
+                    $distKey = "58158.9.63.1.7.1.18.{$ifIndex}";
+                    $distArr = $distances[$distKey] ?? [];
+                    $distVal = ! empty($distArr) ? (int) array_values($distArr)[0] : null;
+
+                    $waveKey = "58158.9.63.1.7.1.19.{$ifIndex}";
+                    $waveArr = $wavelengths[$waveKey] ?? [];
+                    $waveVal = ! empty($waveArr) ? (int) array_values($waveArr)[0] : null;
+
+                    $serialKey = "58158.9.63.1.7.1.23.{$ifIndex}";
+                    $serialArr = $serials[$serialKey] ?? [];
+                    $serialVal = ! empty($serialArr) ? trim((string) array_values($serialArr)[0]) : null;
 
                     $portId = (int) PortCache::getIdFromIfIndex($ifIndex, $this->getDevice());
 
                     $transceivers->push(new Transceiver([
                         'port_id' => $portId,
                         'index' => $ifIndex,
-                        'vendor' => 'Alpha Bridge',
+                        'vendor' => $vendorVal ?: 'Alpha Bridge',
                         'type' => str_contains((string) $model, '10G') ? 'SFP+' : 'SFP',
-                        'model' => trim((string) $model),
+                        'model' => $model,
+                        'serial' => $serialVal ?: null,
+                        'wavelength' => ($waveVal && $waveVal > 0) ? (string) $waveVal : null,
+                        'distance' => ($distVal && $distVal > 0) ? (string) $distVal : null,
                         'ddm' => true,
                         'entity_physical_index' => $ifIndex,
                     ]));

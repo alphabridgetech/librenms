@@ -95,6 +95,8 @@
 
                         <li><a href="{{ route('inventory') }}"><i class="fa fa-cube fa-fw fa-lg"
                                                                 aria-hidden="true"></i> {{ __('Inventory') }}</a></li>
+                        <li><a href="{{ route('sfp-inventory') }}"><i class="fa fa-cube fa-fw fa-lg"
+                                                                aria-hidden="true"></i> {{ __('SFP Inventory') }}</a></li>
                         <li><a href="{{ url('outages') }}"><i class="fa fa-bar-chart fa-fw fa-lg"
                                                                aria-hidden="true"></i> {{ __('Outages') }}</a></li>
                         @if($package_count)

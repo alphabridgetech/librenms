@@ -48,6 +48,7 @@ class Port extends DeviceRelatedModel
             $port->pseudowires()->delete();
             $port->statistics()->delete();
             $port->stp()->delete();
+            $port->transceivers()->delete();
             $port->vlans()->delete();
             $port->links()->delete();
             $port->remoteLinks()->delete();

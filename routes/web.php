@@ -210,6 +210,7 @@ Route::middleware(['auth', 'license'])->group(function () {
     Route::resource('device-groups', DeviceGroupController::class);
     Route::any('inventory', App\Http\Controllers\InventoryController::class)->name('inventory');
     Route::get('inventory/purge', [App\Http\Controllers\InventoryController::class, 'purge'])->name('inventory.purge');
+    Route::any('sfp-inventory', App\Http\Controllers\SfpInventoryController::class)->name('sfp-inventory');
     Route::resource('port', PortController::class)->only('update');
     Route::get('vlans', [App\Http\Controllers\VlansController::class, 'index'])->name('vlans.index');
     Route::prefix('poller')->group(function () {
@@ -475,6 +476,8 @@ Route::middleware(['auth', 'license'])->group(function () {
             Route::post('graylog', Table\GraylogController::class);
             Route::post('inventory', Table\InventoryController::class)->name('table.inventory');
             Route::get('inventory/export', [Table\InventoryController::class, 'export']);
+            Route::post('sfp-inventory', Table\SfpInventoryController::class)->name('table.sfp-inventory');
+            Route::get('sfp-inventory/export', [Table\SfpInventoryController::class, 'export'])->name('table.sfp-inventory.export');
             Route::post('location', Table\LocationController::class);
             Route::post('mempools', Table\MempoolsController::class)->name('table.mempools');
             Route::get('mempools/export', [Table\MempoolsController::class, 'export']);

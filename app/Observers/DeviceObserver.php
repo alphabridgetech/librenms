@@ -188,6 +188,7 @@ class DeviceObserver
         $device->stpInstances()->delete();
         $device->syslogs()->delete();
         $device->tnmsNeInfo()->delete();
+        $device->transceivers()->delete();
         $device->vlans()->delete();
         $device->vminfo()->delete();
         $device->vrfs()->delete();
