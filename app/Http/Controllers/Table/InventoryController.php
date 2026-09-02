@@ -54,32 +54,17 @@ class InventoryController extends TableController
 
     protected function searchFields($request)
     {
-        return [
-            'entPhysicalDescr',
-            'entPhysicalModelName',
-            'entPhysicalSerialNum',
-            'entPhysicalMfgName',
-            'entPhysicalClass',
-            'entPhysicalHardwareRev',
-            'entPhysicalFirmwareRev',
-            'entPhysicalSoftwareRev'
-        ];
+        return ['entPhysicalDescr', 'entPhysicalModelName', 'entPhysicalSerialNum'];
     }
 
     protected function sortFields($request)
     {
         return [
             'device' => 'device_id',
-            'mfg' => 'entPhysicalMfgName',
-            'class' => 'entPhysicalClass',
             'name' => 'entPhysicalName',
             'descr' => 'entPhysicalDescr',
             'model' => 'entPhysicalModelName',
             'serial' => 'entPhysicalSerialNum',
-            'hw_rev' => 'entPhysicalHardwareRev',
-            'fw_rev' => 'entPhysicalFirmwareRev',
-            'sw_rev' => 'entPhysicalSoftwareRev',
-            'fru' => 'entPhysicalIsFRU',
         ];
     }
 
@@ -87,20 +72,7 @@ class InventoryController extends TableController
     {
         $query = EntPhysical::hasAccess($request->user())
             ->with('device')
-            ->select([
-                'entPhysical_id',
-                'device_id',
-                'entPhysicalDescr',
-                'entPhysicalName',
-                'entPhysicalModelName',
-                'entPhysicalSerialNum',
-                'entPhysicalMfgName',
-                'entPhysicalClass',
-                'entPhysicalHardwareRev',
-                'entPhysicalFirmwareRev',
-                'entPhysicalSoftwareRev',
-                'entPhysicalIsFRU'
-            ]);
+            ->select(['entPhysical_id', 'device_id', 'entPhysicalDescr', 'entPhysicalName', 'entPhysicalModelName', 'entPhysicalSerialNum']);
 
         // apply specific field filters
         $this->search($request->get('descr'), $query, ['entPhysicalDescr']);
@@ -116,23 +88,12 @@ class InventoryController extends TableController
      */
     public function formatItem($entPhysical)
     {
-        $hwRev = $entPhysical->entPhysicalHardwareRev ?: ($entPhysical->device->hardware ?? 'N/A');
-        $swRev = $entPhysical->entPhysicalSoftwareRev ?: ($entPhysical->device->version ?? 'N/A');
-        $model = $entPhysical->entPhysicalModelName ?: ($entPhysical->device->hardware ?? 'N/A');
-        $serial = $entPhysical->entPhysicalSerialNum ?: ($entPhysical->device->serial ?? 'N/A');
-
         return [
             'device' => Blade::render('<x-device-link :device="$device"/>', ['device' => $entPhysical->device]),
-            'mfg' => htmlspecialchars((string) ($entPhysical->entPhysicalMfgName ?: 'N/A')),
-            'class' => htmlspecialchars((string) ucfirst($entPhysical->entPhysicalClass ?: 'N/A')),
-            'descr' => htmlspecialchars((string) ($entPhysical->entPhysicalDescr ?? '')),
-            'name' => htmlspecialchars((string) ($entPhysical->entPhysicalName ?? '')),
-            'model' => htmlspecialchars((string) $model),
-            'serial' => htmlspecialchars((string) $serial),
-            'hw_rev' => htmlspecialchars((string) $hwRev),
-            'fw_rev' => htmlspecialchars((string) ($entPhysical->entPhysicalFirmwareRev ?: 'N/A')),
-            'sw_rev' => htmlspecialchars((string) $swRev),
-            'fru' => $entPhysical->entPhysicalIsFRU ? '<span class="label label-success">Yes</span>' : '<span class="label label-default">No</span>',
+            'descr' => htmlspecialchars($entPhysical->entPhysicalDescr),
+            'name' => htmlspecialchars($entPhysical->entPhysicalName),
+            'model' => htmlspecialchars($entPhysical->entPhysicalModelName),
+            'serial' => htmlspecialchars($entPhysical->entPhysicalSerialNum),
         ];
     }
 
@@ -145,16 +106,10 @@ class InventoryController extends TableController
     {
         return [
             'Device',
-            'Manufacturer',
-            'Class',
             'Description',
             'Name',
             'Model',
             'Serial Number',
-            'HW Revision',
-            'FW Revision',
-            'SW Revision',
-            'FRU',
         ];
     }
 
@@ -166,23 +121,12 @@ class InventoryController extends TableController
      */
     protected function formatExportRow($entPhysical)
     {
-        $hwRev = $entPhysical->entPhysicalHardwareRev ?: ($entPhysical->device->hardware ?? 'N/A');
-        $swRev = $entPhysical->entPhysicalSoftwareRev ?: ($entPhysical->device->version ?? 'N/A');
-        $model = $entPhysical->entPhysicalModelName ?: ($entPhysical->device->hardware ?? 'N/A');
-        $serial = $entPhysical->entPhysicalSerialNum ?: ($entPhysical->device->serial ?? 'N/A');
-
         return [
             $entPhysical->device ? $entPhysical->device->displayName() : '',
-            $entPhysical->entPhysicalMfgName ?: 'N/A',
-            $entPhysical->entPhysicalClass ?: 'N/A',
             $entPhysical->entPhysicalDescr,
             $entPhysical->entPhysicalName,
-            $model,
-            $serial,
-            $hwRev,
-            $entPhysical->entPhysicalFirmwareRev ?: 'N/A',
-            $swRev,
-            $entPhysical->entPhysicalIsFRU ? 'Yes' : 'No',
+            $entPhysical->entPhysicalModelName,
+            $entPhysical->entPhysicalSerialNum,
         ];
     }
 }
