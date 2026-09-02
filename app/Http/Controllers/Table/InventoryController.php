@@ -54,17 +54,26 @@ class InventoryController extends TableController
 
     protected function searchFields($request)
     {
-        return ['entPhysicalDescr', 'entPhysicalModelName', 'entPhysicalSerialNum'];
+        return [
+            'entPhysicalDescr',
+            'entPhysicalModelName',
+            'entPhysicalSerialNum',
+            'entPhysicalMfgName',
+            'entPhysicalFirmwareRev',
+            'entPhysicalSoftwareRev',
+        ];
     }
 
     protected function sortFields($request)
     {
         return [
             'device' => 'device_id',
+            'mfg' => 'entPhysicalMfgName',
             'name' => 'entPhysicalName',
             'descr' => 'entPhysicalDescr',
-            'model' => 'entPhysicalModelName',
             'serial' => 'entPhysicalSerialNum',
+            'fw_rev' => 'entPhysicalFirmwareRev',
+            'sw_rev' => 'entPhysicalSoftwareRev',
         ];
     }
 
@@ -72,7 +81,17 @@ class InventoryController extends TableController
     {
         $query = EntPhysical::hasAccess($request->user())
             ->with('device')
-            ->select(['entPhysical_id', 'device_id', 'entPhysicalDescr', 'entPhysicalName', 'entPhysicalModelName', 'entPhysicalSerialNum']);
+            ->select([
+                'entPhysical_id',
+                'device_id',
+                'entPhysicalDescr',
+                'entPhysicalName',
+                'entPhysicalModelName',
+                'entPhysicalSerialNum',
+                'entPhysicalMfgName',
+                'entPhysicalFirmwareRev',
+                'entPhysicalSoftwareRev',
+            ]);
 
         // apply specific field filters
         $this->search($request->get('descr'), $query, ['entPhysicalDescr']);
@@ -90,10 +109,12 @@ class InventoryController extends TableController
     {
         return [
             'device' => Blade::render('<x-device-link :device="$device"/>', ['device' => $entPhysical->device]),
-            'descr' => htmlspecialchars($entPhysical->entPhysicalDescr),
-            'name' => htmlspecialchars($entPhysical->entPhysicalName),
-            'model' => htmlspecialchars($entPhysical->entPhysicalModelName),
-            'serial' => htmlspecialchars($entPhysical->entPhysicalSerialNum),
+            'mfg' => htmlspecialchars((string) ($entPhysical->entPhysicalMfgName ?: '')),
+            'descr' => htmlspecialchars((string) ($entPhysical->entPhysicalDescr ?? '')),
+            'name' => htmlspecialchars((string) ($entPhysical->entPhysicalName ?? '')),
+            'serial' => htmlspecialchars((string) ($entPhysical->entPhysicalSerialNum ?: '')),
+            'fw_rev' => htmlspecialchars((string) ($entPhysical->entPhysicalFirmwareRev ?: '')),
+            'sw_rev' => htmlspecialchars((string) ($entPhysical->entPhysicalSoftwareRev ?: '')),
         ];
     }
 
@@ -106,10 +127,12 @@ class InventoryController extends TableController
     {
         return [
             'Device',
+            'Manufacturer',
             'Description',
             'Name',
-            'Model',
             'Serial Number',
+            'FW Revision',
+            'SW Revision',
         ];
     }
 
@@ -123,10 +146,12 @@ class InventoryController extends TableController
     {
         return [
             $entPhysical->device ? $entPhysical->device->displayName() : '',
-            $entPhysical->entPhysicalDescr,
-            $entPhysical->entPhysicalName,
-            $entPhysical->entPhysicalModelName,
-            $entPhysical->entPhysicalSerialNum,
+            $entPhysical->entPhysicalMfgName ?: '',
+            $entPhysical->entPhysicalDescr ?: '',
+            $entPhysical->entPhysicalName ?: '',
+            $entPhysical->entPhysicalSerialNum ?: '',
+            $entPhysical->entPhysicalFirmwareRev ?: '',
+            $entPhysical->entPhysicalSoftwareRev ?: '',
         ];
     }
 }

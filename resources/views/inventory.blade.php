@@ -19,10 +19,12 @@
                 <thead>
                 <tr>
                     <th data-column-id="device" data-order="asc">@lang('Device')</th>
+                    <th data-column-id="mfg">@lang('Manufacturer')</th>
                     <th data-column-id="descr">@lang('Description')</th>
                     <th data-column-id="name">@lang('inventory.name')</th>
-                    <th data-column-id="model">@lang('inventory.model')</th>
                     <th data-column-id="serial">@lang('inventory.serial')</th>
+                    <th data-column-id="fw_rev">@lang('FW Rev')</th>
+                    <th data-column-id="sw_rev">@lang('SW Rev')</th>
                 </tr>
                 </thead>
             </table>
