@@ -3,6 +3,39 @@
 @section('title', __('Template Push Configuration'))
 
 @section('content')
+<style>
+    .spinner-border {
+        width: 16px;
+        height: 16px;
+        border: 2px solid #fff;
+        border-right-color: transparent;
+        border-radius: 50%;
+        display: inline-block;
+        animation: spin 0.75s linear infinite;
+    }
+
+    @keyframes spin {
+        100% { transform: rotate(360deg); }
+    }
+
+    .interface-data {
+        margin-top: 15px;
+        padding: 10px;
+        background: #f0f0f0;
+        border-radius: 4px;
+        border-left: 3px solid #5cb85c;
+    }
+
+    .interface-data pre {
+        background: #2d2d2d;
+        color: #f0f0f0;
+        padding: 10px;
+        border-radius: 4px;
+        overflow-x: auto;
+        margin-top: 10px;
+        margin-bottom: 0;
+    }
+</style>
     <div class="container-fluid">
         <x-panel>
             <x-slot name="title">
@@ -816,6 +849,166 @@ switchport pvid @{{value}}
 
             $(document).on('change', '.device-interface-select', function() {
                 updateSelectedCount();
+                updateInterfaceDetails($(this));
+            });
+
+            const apiToken = "{{ $api_token ?? '' }}";
+
+            function updateInterfaceDetails($selectEl) {
+                const devId = $selectEl.data('device-id');
+                const $container = $(`#interface_details_container_${devId}`);
+                if ($container.length === 0) return;
+
+                const selectedIfaces = $selectEl.val() || [];
+                const deviceIp = $('#device_select option:selected').data('ip') || ($('#hostname').val() || '').trim();
+
+                if (!selectedIfaces || selectedIfaces.length === 0 || !deviceIp) {
+                    $container.empty();
+                    return;
+                }
+
+                const activeSafeIds = [];
+
+                selectedIfaces.forEach(function(ifaceName) {
+                    const safeId = 'iface_data_' + devId + '_' + ifaceName.replace(/[^a-zA-Z0-9_-]/g, '_');
+                    activeSafeIds.push(safeId);
+
+                    let $box = $(`#${safeId}`);
+                    if ($box.length === 0) {
+                        const boxHtml = `
+                            <div id="${safeId}" class="interface-data" data-iface="${_.escape(ifaceName)}">
+                                <strong>Interface Details (${_.escape(ifaceName)}):</strong>
+                                <pre class="interface-data-content" style="max-height: 250px;">Loading...</pre>
+                                <div style="margin-top:8px; display:flex; align-items:center; gap:5px; flex-wrap:wrap;">
+                                    <button type="button" class="btn btn-xs btn-danger btn-reset-interface" data-iface="${_.escape(ifaceName)}" data-device-ip="${_.escape(deviceIp)}">
+                                        <i class="fa fa-refresh"></i> RESET INTERFACE
+                                    </button>
+                                    <select class="form-control select-port-status" style="width:auto; display:inline-block;" data-iface="${_.escape(ifaceName)}" data-device-ip="${_.escape(deviceIp)}">
+                                        <option value="">Port Status...</option>
+                                        <option value="enable">Enable</option>
+                                        <option value="disable">Disable</option>
+                                    </select>
+                                </div>
+                            </div>
+                        `;
+                        $container.append(boxHtml);
+                        $box = $(`#${safeId}`);
+
+                        fetch(`/api/v0/network/interface/show/${encodeURIComponent(deviceIp)}`, {
+                            method: "POST",
+                            headers: {
+                                "Authorization": "Bearer " + apiToken,
+                                "Content-Type": "application/json",
+                                "Accept": "application/json",
+                                "X-CSRF-TOKEN": '{{ csrf_token() }}'
+                            },
+                            body: JSON.stringify({ interface: ifaceName })
+                        })
+                        .then(res => res.json())
+                        .then(data => {
+                            $box.find('.interface-data-content').text(JSON.stringify(data, null, 2));
+                        })
+                        .catch(err => {
+                            $box.find('.interface-data-content').text('Error: ' + err);
+                        });
+                    }
+                });
+
+                $container.find('.interface-data').each(function() {
+                    if (!activeSafeIds.includes($(this).attr('id'))) {
+                        $(this).remove();
+                    }
+                });
+            }
+
+            $(document).on('click', '.btn-reset-interface', function() {
+                const $btn = $(this);
+                const ifaceName = $btn.data('iface');
+                const deviceIp = $btn.data('device-ip') || $('#device_select option:selected').data('ip') || ($('#hostname').val() || '').trim();
+
+                if (!ifaceName) {
+                    alert('Please select an interface first.');
+                    return;
+                }
+
+                if (!confirm('Are you sure you want to reset interface ' + ifaceName + '?')) {
+                    return;
+                }
+
+                const originalHtml = $btn.html();
+                $btn.prop('disabled', true).html('<span class="spinner-border"></span> RESETTING...');
+
+                fetch(`/api/v0/interface/reset/${encodeURIComponent(deviceIp)}`, {
+                    method: "POST",
+                    headers: {
+                        "Authorization": "Bearer " + apiToken,
+                        "Content-Type": "application/json",
+                        "Accept": "application/json",
+                        "X-CSRF-TOKEN": '{{ csrf_token() }}'
+                    },
+                    body: JSON.stringify({ interface: ifaceName })
+                })
+                .then(res => res.json())
+                .then(res => {
+                    $btn.prop('disabled', false).html(originalHtml);
+                    if (res.status === "success") {
+                        alert('Interface reset successfully!');
+                    } else {
+                        alert('Failed to reset interface: ' + (res.message || 'Unknown error'));
+                    }
+                })
+                .catch(err => {
+                    $btn.prop('disabled', false).html(originalHtml);
+                    alert('Error: ' + err);
+                });
+            });
+
+            $(document).on('change', '.select-port-status', function() {
+                const $select = $(this);
+                const status = $select.val();
+                if (!status) return;
+
+                const ifaceName = $select.data('iface');
+                const deviceIp = $select.data('device-ip') || $('#device_select option:selected').data('ip') || ($('#hostname').val() || '').trim();
+
+                if (!ifaceName) {
+                    alert('Please select an interface first.');
+                    $select.val('');
+                    return;
+                }
+
+                if (!confirm('Are you sure you want to ' + status + ' port ' + ifaceName + '?')) {
+                    $select.val('');
+                    return;
+                }
+
+                $select.prop('disabled', true);
+
+                fetch(`/api/v0/cngportstatus/${encodeURIComponent(deviceIp)}`, {
+                    method: "POST",
+                    headers: {
+                        "Authorization": "Bearer " + apiToken,
+                        "Content-Type": "application/json",
+                        "Accept": "application/json",
+                        "X-CSRF-TOKEN": '{{ csrf_token() }}'
+                    },
+                    body: JSON.stringify({ interface: ifaceName, status: status })
+                })
+                .then(res => res.json())
+                .then(res => {
+                    $select.prop('disabled', false);
+                    if (res.status === "success") {
+                        alert('Port ' + status + ' successfully!');
+                    } else {
+                        alert('Failed to ' + status + ' port: ' + (res.message || 'Unknown error'));
+                    }
+                    $select.val('');
+                })
+                .catch(err => {
+                    $select.prop('disabled', false);
+                    alert('Error: ' + err);
+                    $select.val('');
+                });
             });
 
             function fetchInterfacesForDevices() {
@@ -855,6 +1048,7 @@ switchport pvid @{{value}}
                                                 multiple="multiple" style="width: 100%;">
                                             ${deviceGroup.children.map(p => `<option value="${p.id}">${p.text}</option>`).join('')}
                                         </select>
+                                        <div id="interface_details_container_${devId}" class="interface-details-container" style="margin-top: 10px;"></div>
                                     </div>
                                 </div>
                             `;

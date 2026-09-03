@@ -11,9 +11,24 @@ use Illuminate\Support\Facades\Log;
 use Carbon\Carbon;
 use App\Http\Controllers\Traits\HandlesPushConfiguration;
 
+use App\Models\ApiToken;
+use Illuminate\Support\Facades\Auth;
+
 class TemplatePushController extends Controller
 {
     use HandlesPushConfiguration;
+
+    private function getUserLibreNMSToken()
+    {
+        try {
+            $apiToken = ApiToken::select('token_hash')
+                ->where('user_id', Auth::user()->user_id)
+                ->firstOrFail();
+            return $apiToken->token_hash;
+        } catch (\Exception $e) {
+            return null;
+        }
+    }
 
     public function addHostTemplate(Request $request)
     {
@@ -72,7 +87,9 @@ class TemplatePushController extends Controller
             Log::error('Failed to fetch uploaded files: ' . $e->getMessage());
         }
 
-        return view('addhostip.template', compact('templates', 'uploadedFiles', 'devices'));
+        $api_token = $this->getUserLibreNMSToken();
+
+        return view('addhostip.template', compact('templates', 'uploadedFiles', 'devices', 'api_token'));
     }
 
     public function addHostTemplateSave(Request $request)

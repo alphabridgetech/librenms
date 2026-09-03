@@ -1,0 +1,105 @@
+================================================================================
+               TELEQUILL / LIBRENMS FEATURE SET (FCAPS MODEL)
+================================================================================
+
+--------------------------------------------------------------------------------
+1. FAULT MANAGEMENT (F)
+--------------------------------------------------------------------------------
+   [Newly Developed & Custom Enhancements]
+   - Custom SNMP Trap & Forwarding Module:
+     * Complete custom SNMP trap forwarding engine to relay system alerts to external OEM monitoring systems.
+     * Rich payload enrichment with interface metadata (sysName, ifIndex, ifDescr, ifType, ifAdminStatus, ifOperStatus).
+     * Standardized SMI types (Integer vs String) and distinct alert classification (Equipment vs Port/Link rules).
+   - Alert History Date Range Filtering:
+     * Added custom "Date Range" filter in EMS GUI to search historical alert events over specified day ranges.
+   - Event Log Management:
+     * Added CSV download export functionality for Event Logs.
+     * Fixed UI auto-refresh glitches on Event Log dashboard.
+   - Syslog Testing Integration:
+     * Added "Test Syslog" button in UI to trigger and verify syslog generation and forwarding.
+
+   [Pre-Existing Base Framework Features]
+   - Rule-Based Alert Engine:
+     * Customizable alert rules with threshold evaluation, macros, and severity levels.
+   - Multi-Channel Notifications:
+     * Native notification dispatch via Email, Slack, Webhooks, Telegram, PagerDuty, SMS, etc.
+   - Maintenance Windows:
+     * Scheduled maintenance windows to suppress alert notifications during planned maintenance.
+   - Centralized Syslog & Event Ingestion:
+     * Syslog server collection and centralized event log dashboard.
+
+--------------------------------------------------------------------------------
+2. CONFIGURATION MANAGEMENT (C)
+--------------------------------------------------------------------------------
+   [Newly Developed & Custom Enhancements]
+   - Inventory & Hardware Configuration Management:
+     * Expanded entPhysical attribute parsing (Manufacturer, Firmware Rev, Software Rev, Model Name, Serial Num, Class, FRU status).
+     * Enhanced Inventory table layout, column sorting, filtering, and data integrity.
+   - Dedicated SFP / Transceiver Inventory & Discovery:
+     * Dedicated SFP Transceiver Inventory view in main navigation menu.
+     * Custom Alphabridge discovery driver using direct OID walks (`ifSfpParameterTable`).
+     * Uploaded and registered MIBs for Alphabridge & Alpha v3 devices.
+   - Automated Lifecycle & Cascade Cleanup:
+     * Implemented cascade deletion hooks in `DeviceObserver` and `Port` models to automatically purge transceiver records when parent devices/ports are deleted.
+   - Backup & Restoration Operations:
+     * Automated & Manual RRD Backup/Restore via custom Artisan commands (`rrd:backup`, `rrd:restore`).
+     * Scheduled daily RRD backups with retention policy enforcement and buffer flushing.
+     * SQL database and Node/Device configuration backup management with Web UI manual/auto toggles.
+     * Refined TFTP export mechanisms for device configuration exports.
+   - Device & Port Configuration Controls:
+     * Ingress/Egress Rate Limiting validation (minimum value >= 64, divisible by 64, auto-roundoff).
+     * Fixed bulk device/configuration upload import issues.
+     * Updated LAG (Link Aggregation Group) and switch command handlers.
+
+   [Pre-Existing Base Framework Features]
+   - Automated Network Discovery:
+     * Discovery via CDP, LLDP, FDP, OSPF, BGP, ARP, and IP subnet range scanning.
+   - Multi-Vendor Device Support:
+     * Pre-configured MIB definitions for hundreds of network hardware vendors.
+   - Configuration Archiving Integration:
+     * Native integration support with Oxidized / RANCID for device configuration tracking.
+
+--------------------------------------------------------------------------------
+3. ACCOUNTING MANAGEMENT (A)
+--------------------------------------------------------------------------------
+   [Newly Developed & Custom Enhancements]
+   - Hardware Inventory & Asset Metadata Tracking:
+     * Structured asset tracking with Manufacturer, Serial Number, and FRU status mapping across network inventory.
+
+   [Pre-Existing Base Framework Features]
+   - Bandwidth Billing & Quotas:
+     * 95th percentile bandwidth billing calculations and burstable rate tracking.
+     * Transfer quota monitoring and overage reporting per port/customer.
+   - Port & Service Resource Utilization:
+     * Granular traffic metrics (inbound/outbound octets, packets, errors, discards).
+
+--------------------------------------------------------------------------------
+4. PERFORMANCE MANAGEMENT (P)
+--------------------------------------------------------------------------------
+   [Newly Developed & Custom Enhancements]
+   - Transceiver & Optical Signal Monitoring:
+     * Direct extraction and tracking of optical transceiver parameters (Tx/Rx optical power, bias current, temperature).
+
+   [Pre-Existing Base Framework Features]
+   - Real-Time Graphing via RRDTool:
+     * Performance trends for bandwidth, CPU utilization, memory usage, temperature sensors, fan speeds, and power supply voltages.
+   - Scalable Polling Infrastructure:
+     * Distributed polling architecture using Redis/Memcached queue handling.
+   - Health & Environmental Metrics:
+     * Real-time monitoring of device health, sensor thresholds, and environmental stats.
+
+--------------------------------------------------------------------------------
+5. SECURITY MANAGEMENT (S)
+--------------------------------------------------------------------------------
+   [Newly Developed & Custom Enhancements]
+   - Inventory Access Control & Multi-Tenancy:
+     * Enforced user authorization checks on inventory hardware queries (`EntPhysical::hasAccess($request->user())`).
+
+   [Pre-Existing Base Framework Features]
+   - Role-Based Access Control (RBAC):
+     * Multi-user administration with granular access tiers (Administrator, Normal User, Global Read-Only).
+   - Enterprise Authentication Drivers:
+     * Native support for local database auth, LDAP, Active Directory, RADIUS, and Single Sign-On (SSO).
+   - Secure Polling & API Security:
+     * Support for encrypted SNMP v3 polling and token-authenticated RESTful API access.
+================================================================================
