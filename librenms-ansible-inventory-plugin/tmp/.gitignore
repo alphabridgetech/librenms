@@ -1,3 +1,4 @@
 # Ignore all contents of tmp directory
 *
 !.gitignore
+!NETWORK_CONFIG_README.md

@@ -1,8 +1,0 @@
-ip: 192.168.200.244
-voice_vlan:
-  type: mac-based
-  mac_addresses:
-    - mac: "0800.27ea.e2f5"
-      mask: "ffff.ffff.ffff"
-    - mac: "0800.27ea.e2f1"
-      mask: "ffff.ffff.ffff"
