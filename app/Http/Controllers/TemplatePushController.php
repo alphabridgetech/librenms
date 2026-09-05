@@ -34,7 +34,7 @@ class TemplatePushController extends Controller
     {
         $this->authorize('create', \App\Models\CustomMib::class);
         
-        $devices = Device::orderBy('hostname')->get(['device_id', 'hostname', 'overwrite_ip', 'sysName', 'display', 'ip']);
+        $devices = Device::orderBy('hostname')->get(['device_id', 'hostname', 'overwrite_ip', 'sysName', 'display', 'ip', 'hardware']);
         
         $templates = [];
         try {
@@ -115,11 +115,18 @@ class TemplatePushController extends Controller
                 return response()->json(['success' => false, 'message' => 'Name and fields are required'], 400);
             }
 
+            $hardwareModels = collect(explode(',', (string) $request->input('hardware_models', '')))
+                ->map(fn ($model) => trim($model))
+                ->filter()
+                ->values()
+                ->all();
+
             $data = [
                 'name' => $name,
                 'type' => 'form',
                 'hostname' => '',
                 'interfaces' => [],
+                'hardware_models' => $hardwareModels,
                 'fields' => $fields,
                 'created_at' => Carbon::now()->toDateTimeString(),
             ];

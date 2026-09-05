@@ -3,37 +3,45 @@
     "type": "form",
     "hostname": "",
     "interfaces": [],
+    "hardware_models": [
+        "AS210T mother card"
+    ],
     "fields": [
         {
             "label": "Description",
             "type": "text",
             "options": null,
-            "command": "description {{value}}"
+            "command": "description {{value}}",
+            "required": true
         },
         {
             "label": null,
             "type": "putonlycmd",
             "options": null,
-            "command": "no spanning-tree"
+            "command": "no spanning-tree",
+            "required": true
         },
         {
             "label": null,
             "type": "putonlycmd",
             "options": null,
-            "command": "switchport mode dot1q-translating-tunnel"
+            "command": "switchport mode dot1q-translating-tunnel",
+            "required": true
         },
         {
             "label": "Allowed Vlan",
             "type": "text",
             "options": null,
-            "command": "switchport trunk vlan-allowed {{value}}"
+            "command": "switchport trunk vlan-allowed {{value}}",
+            "required": true
         },
         {
             "label": "QinQ",
             "type": "dynamic_list",
             "options": null,
-            "command": "switchport dot1q-translating-tunnel mode QinQ translate {{from}} {{to}}"
+            "command": "switchport dot1q-translating-tunnel mode QinQ translate {{from}} {{to}}",
+            "required": true
         }
     ],
-    "created_at": "2026-06-26 18:20:47"
+    "created_at": "2026-09-05 12:09:05"
 }

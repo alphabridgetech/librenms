@@ -3,43 +3,52 @@
     "type": "form",
     "hostname": "",
     "interfaces": [],
+    "hardware_models": [
+        "AS210T mother card"
+    ],
     "fields": [
         {
             "label": null,
             "type": "putonlycmd",
             "options": null,
-            "command": "!"
+            "command": "!",
+            "required": true
         },
         {
             "label": "LAG number",
             "type": "text",
             "options": null,
-            "command": "interface port-aggregator {{value}}"
+            "command": "interface port-aggregator {{value}}",
+            "required": true
         },
         {
             "label": null,
             "type": "putonlycmd",
             "options": null,
-            "command": "agg-period 1"
+            "command": "agg-period 1",
+            "required": true
         },
         {
             "label": null,
             "type": "putonlycmd",
             "options": null,
-            "command": "aggregator-group load-balance both-mac"
+            "command": "aggregator-group load-balance both-mac",
+            "required": true
         },
         {
             "label": null,
             "type": "putonlycmd",
             "options": null,
-            "command": "switchport mode trunk"
+            "command": "switchport mode trunk",
+            "required": true
         },
         {
             "label": "Allowed-vlans",
             "type": "text",
             "options": null,
-            "command": "switchport trunk vlan-allowed {{value}}"
+            "command": "switchport trunk vlan-allowed {{value}}",
+            "required": true
         }
     ],
-    "created_at": "2026-07-10 11:55:52"
+    "created_at": "2026-09-05 12:09:54"
 }

@@ -3,6 +3,9 @@
     "type": "form",
     "hostname": "",
     "interfaces": [],
+    "hardware_models": [
+        "AS212XTS"
+    ],
     "fields": [
         {
             "label": "Description",

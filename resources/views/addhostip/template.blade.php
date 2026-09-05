@@ -110,6 +110,17 @@ switchport pvid @{{value}}
                                 </div>
                             </div>
 
+                            <div class="form-group">
+                                <label for="builder_template_hardware">{{ __('Hardware Model(s)') }}</label>
+                                <div class="checkbox" style="margin-top: 0; margin-bottom: 6px;">
+                                    <label style="font-weight: normal;">
+                                        <input type="checkbox" id="builder_template_global" checked> {{ __('Global Template (show for all hardware models)') }}
+                                    </label>
+                                </div>
+                                <input type="text" id="builder_template_hardware" class="form-control" placeholder="{{ __('e.g. AS210T, AS212XTS') }}" disabled>
+                                <span class="help-block" style="font-size: 11px; margin-bottom: 0;">{{ __('Uncheck "Global Template" to restrict this template to specific device hardware models.') }}</span>
+                            </div>
+
                             <div id="builder_fields_container">
                                 <p class="text-muted">{{ __('No fields yet. Click "Add Field" to start building your template.') }}</p>
                             </div>
@@ -142,6 +153,22 @@ switchport pvid @{{value}}
                     <form id="ipUploadForm" method="post" action="{{ route('addhost.template.save') }}" enctype="multipart/form-data" class="form-horizontal" role="form">
                         @csrf
 
+                        <!-- Device Selection -->
+                        <div class="form-group">
+                            <label for="device_select" class="col-sm-3 control-label">{{ __('Select Device') }} <span class="text-danger">*</span></label>
+                            <div class="col-sm-9">
+                                <select name="device_id" id="device_select" class="form-control" style="width: 100%;" required>
+                                    <option value="">{{ __('-- Select Device --') }}</option>
+                                    @foreach($devices as $device)
+                                        <option value="{{ $device->device_id }}" data-ip="{{ $device->overwrite_ip ?: $device->hostname }}" data-hardware="{{ $device->hardware }}">
+                                            {{ $device->sysName ?: $device->hostname }} ({{ $device->overwrite_ip ?: $device->hostname }})
+                                        </option>
+                                    @endforeach
+                                </select>
+                                <span class="help-block" style="font-size: 11px; margin-bottom: 0;">{{ __('The template list below will be filtered to templates matching this device\'s hardware model.') }}</span>
+                            </div>
+                        </div>
+
                         @if(!empty($templates))
                         <div class="form-group">
                             <label for="load_template" class="col-sm-3 control-label">{{ __('Load Template') }}</label>
@@ -150,7 +177,7 @@ switchport pvid @{{value}}
                                     <option value="">{{ __('-- Select Template --') }}</option>
                                     @foreach($templates as $template)
                                         @php $typeLabel = strtoupper($template['type'] ?? 'other'); @endphp
-                                        <option value="{{ json_encode($template) }}" data-type="{{ $template['type'] ?? 'other' }}">[{{ $typeLabel }}] {{ $template['name'] }}</option>
+                                        <option value="{{ json_encode($template) }}" data-type="{{ $template['type'] ?? 'other' }}" data-hardware="{{ implode(',', $template['hardware_models'] ?? []) }}">[{{ $typeLabel }}] {{ $template['name'] }}</option>
                                     @endforeach
                                 </select>
                             </div>
@@ -172,21 +199,6 @@ switchport pvid @{{value}}
                                     <button type="button" class="btn btn-danger btn-sm" id="deleteTemplateBtn" style="display: none;">
                                         <i class="fa fa-trash"></i> {{ __('Delete') }}
                                     </button>
-                                </div>
-                            </div>
-
-                            <!-- Device Selection -->
-                            <div class="form-group">
-                                <label for="device_select" class="col-sm-3 control-label">{{ __('Select Device') }} <span class="text-danger">*</span></label>
-                                <div class="col-sm-9">
-                                    <select name="device_id" id="device_select" class="form-control" style="width: 100%;" required>
-                                        <option value="">{{ __('-- Select Device --') }}</option>
-                                        @foreach($devices as $device)
-                                            <option value="{{ $device->device_id }}" data-ip="{{ $device->overwrite_ip ?: $device->hostname }}">
-                                                {{ $device->sysName ?: $device->hostname }} ({{ $device->overwrite_ip ?: $device->hostname }})
-                                            </option>
-                                        @endforeach
-                                    </select>
                                 </div>
                             </div>
 
@@ -270,6 +282,20 @@ switchport pvid @{{value}}
             let pendingTemplateInterfaces = {};
             let interfaceRequestId = 0;
             let builderFieldCount = 0;
+            let currentDeviceHardware = '';
+
+            function normalizeModel(str) {
+                return (str || '').toString().toUpperCase().replace(/[^A-Z0-9]/g, '');
+            }
+
+            function templateMatchesHardware(hardwareAttr) {
+                const raw = (hardwareAttr || '').toString().trim();
+                if (!raw || !currentDeviceHardware) {
+                    return true;
+                }
+                const models = raw.split(',').map(m => normalizeModel(m)).filter(Boolean);
+                return models.length === 0 || models.includes(normalizeModel(currentDeviceHardware));
+            }
 
             // Development Mode logic from global settings
             const isDevMode = {{ \App\Facades\LibrenmsConfig::get('development_mode') ? 'true' : 'false' }};
@@ -308,7 +334,22 @@ switchport pvid @{{value}}
             $('#load_template').select2({
                 placeholder: "{{ __('-- Select Template --') }}",
                 allowClear: true,
-                width: '100%'
+                width: '100%',
+                matcher: function(params, data) {
+                    if (!data.element) {
+                        return data;
+                    }
+                    if (!templateMatchesHardware($(data.element).data('hardware'))) {
+                        return null;
+                    }
+                    if ($.trim(params.term) === '') {
+                        return data;
+                    }
+                    if (data.text && data.text.toUpperCase().indexOf(params.term.toUpperCase()) > -1) {
+                        return data;
+                    }
+                    return null;
+                }
             });
 
             function getTemplateVariables(templateStr) {
@@ -335,6 +376,14 @@ switchport pvid @{{value}}
 
             $('#builder_template_name').on('input', function() {
                 updateBuilderPreview();
+            });
+
+            $('#builder_template_global').on('change', function() {
+                const isGlobal = $(this).is(':checked');
+                $('#builder_template_hardware').prop('disabled', isGlobal);
+                if (isGlobal) {
+                    $('#builder_template_hardware').val('');
+                }
             });
 
             function addBuilderField(data) {
@@ -582,10 +631,12 @@ switchport pvid @{{value}}
                     return;
                 }
 
+                const isGlobal = $('#builder_template_global').is(':checked');
                 const data = {
                     _token: '{{ csrf_token() }}',
                     template_name: name,
                     template_folder: $('#builder_template_folder').val() || '',
+                    hardware_models: isGlobal ? '' : ($('#builder_template_hardware').val() || ''),
                     port_mode: 'form',
                     fields: fields
                 };
@@ -859,6 +910,17 @@ switchport pvid @{{value}}
             $('#custom_commands').on('input', function() { updateSelectedCount(); });
 
             $('#device_select').on('change', function() {
+                currentDeviceHardware = $('#device_select option:selected').data('hardware') || '';
+
+                const loadedVal = $('#load_template').val();
+                if (loadedVal) {
+                    const loadedTemplate = JSON.parse(loadedVal);
+                    if (!templateMatchesHardware((loadedTemplate.hardware_models || []).join(','))) {
+                        alert('The loaded template "' + loadedTemplate.name + '" does not apply to this device\'s hardware model. Please pick a matching template.');
+                        $('#load_template').val('').trigger('change');
+                    }
+                }
+
                 updateSelectedCount();
                 fetchInterfacesForDevices();
             });
@@ -1332,7 +1394,6 @@ switchport pvid @{{value}}
                     $('#editTemplateBtn').hide();
                     $('#dynamic_form_fields').empty().hide();
                     $('#port_mode_group').show();
-                    $('#device_select').val('').trigger('change');
                     $('#pvid').val('1');
                     $('input[name="port_mode"][value="access"]').prop('checked', true).trigger('change');
                     $('#mode_access').addClass('active');
@@ -1352,6 +1413,9 @@ switchport pvid @{{value}}
 
                 $('#builder_template_name').val(template.name);
                 $('#builder_template_folder').val(template.template_folder || '');
+                const hasHardwareModels = !!(template.hardware_models && template.hardware_models.length);
+                $('#builder_template_global').prop('checked', !hasHardwareModels);
+                $('#builder_template_hardware').prop('disabled', !hasHardwareModels).val(hasHardwareModels ? template.hardware_models.join(', ') : '');
                 $('#builder_fields_container').empty();
                 if (template.fields) {
                     template.fields.forEach(function(field) {
