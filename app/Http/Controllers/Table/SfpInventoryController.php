@@ -110,6 +110,22 @@ class SfpInventoryController extends TableController
         }
     }
 
+    protected function getExportHeaders()
+    {
+        return [
+            'Device',
+            'Port',
+            'Vendor',
+            'Type',
+            'Model',
+            'Serial Number',
+            'Wavelength',
+            'Distance',
+            'Connector',
+            'DDM',
+        ];
+    }
+
     public function formatItem($item)
     {
         if ($item instanceof Transceiver) {
