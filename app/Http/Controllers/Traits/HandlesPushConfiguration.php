@@ -6,7 +6,10 @@ use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Storage;
 use Illuminate\Support\Str;
 use Illuminate\Support\Facades\Log;
+use Illuminate\Support\Facades\Auth;
 use App\Models\Device;
+use App\Models\Eventlog;
+use LibreNMS\Enum\Severity;
 use Symfony\Component\Yaml\Yaml;
 
 trait HandlesPushConfiguration
@@ -96,6 +99,22 @@ trait HandlesPushConfiguration
             ]
         ];
         return Yaml::dump($inventory);
+    }
+
+    protected function logTemplatePush(Request $request, ?Device $device, string $ip, int $commandCount, bool $isFailed, ?string $errorMessage = null): void
+    {
+        $templateLabel = $request->input('loaded_template_name') ?: $request->input('template_name');
+        $templateLabel = $templateLabel ?: 'Direct/Manual Commands';
+
+        $username = Auth::check() ? Auth::user()->username : 'unknown';
+        $status = $isFailed ? 'FAILED' : 'success';
+
+        $message = "{$username} pushed template \"{$templateLabel}\" to {$ip} ({$commandCount} command(s)) - {$status}";
+        if ($isFailed && $errorMessage) {
+            $message .= ": {$errorMessage}";
+        }
+
+        Eventlog::log($message, $device, 'template_push', $isFailed ? Severity::Error : Severity::Ok);
     }
 
     protected function processPush(Request $request)
@@ -218,9 +237,13 @@ trait HandlesPushConfiguration
                     $results[] = ['ip' => $ip, 'hostname' => $hostname, 'status' => 'success', 'ansible_output' => $output];
                     $successCount++;
                 }
+
+                $this->logTemplatePush($request, $device, $ip, count($commands), $isFailed);
             } catch (\Exception $e) {
                 $results[] = ['ip' => $ip, 'hostname' => $hostname, 'status' => 'failed', 'error' => $e->getMessage()];
                 $failedCount++;
+
+                $this->logTemplatePush($request, $device, $ip, count($commands), true, $e->getMessage());
             }
         }
 
@@ -352,9 +375,13 @@ trait HandlesPushConfiguration
                     $results[] = ['ip' => $ip, 'hostname' => $hostname, 'status' => 'success', 'ansible_output' => $output];
                     $successCount++;
                 }
+
+                $this->logTemplatePush($request, $device, $ip, count($commands), $isFailed);
             } catch (\Exception $e) {
                 $results[] = ['ip' => $ip, 'hostname' => $hostname, 'status' => 'failed', 'error' => $e->getMessage()];
                 $failedCount++;
+
+                $this->logTemplatePush($request, $device, $ip, count($commands), true, $e->getMessage());
             }
         }
 

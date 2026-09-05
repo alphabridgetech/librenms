@@ -40,6 +40,9 @@
         <x-panel>
             <x-slot name="title">
                 <i class="fa fa-file-code-o fa-fw fa-lg"></i> {{ __('Template Push Configuration') }}
+                <a href="{{ url('eventlog') }}?eventtype=template_push" target="_blank" class="btn btn-xs btn-default pull-right">
+                    <i class="fa fa-history"></i> {{ __('View Push Logs') }}
+                </a>
             </x-slot>
 
             @if (session('status'))
