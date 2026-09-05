@@ -1,0 +1,368 @@
+# ==========================================
+# igmp_snooping_show.yml
+# Created on Aug 31, 2026 by Vikash Kumar (vikash.kumar@alphabrige.tech).
+#
+# Copyright (c), ALPHA BRIDGE, Inc.
+# 357D, Udyog Vihar Industrial Area Phase VI, Sector 37, Gurugram, Haryana.
+#
+# All rights reserved.
+#
+# This software is the confidential and proprietary information of
+# ALPHA BRIDGE, Inc. ("Confidential Information").  You shall not
+# disclose such Confidential Information and shall use it only in
+# accordance with the terms of the license agreement you entered into
+# with ALPHA BRIDGE.
+#
+# =============================================================================
+# Playbook Name : IGMP Snooping Show / Verify
+# =============================================================================
+#
+# Description:
+# This playbook retrieves the Global IGMP Snooping configuration from
+# AlphaBridge switches through SSH using a Python helper script, and
+# parses the output of "show ip igmp-snooping".
+#
+# Raw device output looks like:
+#
+#   Global IGMP snooping configuration:
+#   -----------------------------------
+#   VLAN nodes           : 1,10-11,22,33,111,222,500,2000
+#   IGMP version         : V3
+#   Max src-rec num      : 32
+#   Forwarding mode      : IPMC
+#   Dlf-drop VLAN nodes  :
+#   Sensitive            : Disabled
+#   Querier              : Disabled
+#   Querier address      : 10.0.0.200
+#   Querier election     : Disabled
+#   Querier interval     : 200s
+#   Router age           : 260s
+#   Response time        : 15s
+#   Pull-stream          : Disabled
+#   Pull-stream address  : 10.0.0.200
+#   Report suppression   : Disabled
+#   Proxy leave          : Disabled
+#   VLAN  Immediate-leave  Querier IP       Router Ports
+#   --------------------------------------------------------
+#   1     Disabled         none
+#   ...
+#
+# This playbook extracts only the following required fields:
+#   - Destination Looking-up Failure   (from "Dlf-drop VLAN nodes")
+#   - IGMP Snooping                    (derived from "VLAN nodes")
+#   - Enable Auto Query                (from "Querier election")
+#   - Snooping Querier Address         (from "Querier address")
+#   - Query Interval(s)                (from "Querier interval")
+#   - Querier Expiry Interval(s)       (from "Router age")
+#
+# Features:
+# - Connect to the switch over SSH
+# - Run "show ip igmp-snooping"
+# - Parse the global IGMP snooping configuration block
+# - Save execution result in YAML format
+# - Generate JSON output
+#
+# Example:
+# ansible-playbook -i inventory/192.168.2.245.yml \
+# playbooks/igmp_snooping_show.yml
+#
+# Output:
+# output/<switch_ip>_igmp_snooping_show.yml
+# =============================================================================
+
+- name: IGMP snooping show
+  hosts: alphabridge_devices
+  gather_facts: no
+
+  tasks:
+
+    # ==========================================
+    # Create Python SSH Script
+    # ==========================================
+
+    - name: Create Python SSH Script for IGMP snooping show
+      ansible.builtin.copy:
+        dest: "/opt/librenms/librenms-ansible-inventory-plugin/tmp/igmp_snooping_show_exec.py"
+        mode: '0755'
+        content: |
+          #!/usr/bin/env python3
+
+          import paramiko
+          import time
+          import re
+          import json
+
+          HOST = "{{ ansible_host }}"
+          USER = "{{ ansible_user }}"
+          PASSWORD = "{{ ansible_password }}"
+
+
+          def read_until_prompt(shell, prompt_regex, timeout=10):
+              buf = ""
+              end_time = time.time() + timeout
+
+              while time.time() < end_time:
+                  if shell.recv_ready():
+                      chunk = shell.recv(65535).decode(errors="ignore")
+                      buf += chunk
+
+                      if re.search(prompt_regex, buf):
+                          return buf
+                  else:
+                      time.sleep(0.1)
+
+              return buf
+
+
+          ansi_re = re.compile(
+              r'\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])'
+          )
+
+          shell = None
+          ssh = None
+
+          try:
+              # ==========================================
+              # SSH CONNECTION
+              # ==========================================
+
+              ssh = paramiko.SSHClient()
+              ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+
+              ssh.connect(
+                  HOST,
+                  username=USER,
+                  password=PASSWORD,
+                  look_for_keys=False,
+                  allow_agent=False,
+                  timeout=10
+              )
+
+              shell = ssh.invoke_shell()
+              time.sleep(0.5)
+
+              # ==========================================
+              # INITIAL PROMPT
+              # Example:
+              # AS212XTS>
+              # ==========================================
+
+              initial_output = read_until_prompt(
+                  shell,
+                  r'[>#]\s*$',
+                  timeout=5
+              )
+
+              # ==========================================
+              # ENABLE
+              # Example:
+              # AS212XTS#
+              # ==========================================
+
+              shell.send("enable\n")
+
+              enable_output = read_until_prompt(
+                  shell,
+                  r'[>#]\s*$',
+                  timeout=5
+              )
+
+              # ==========================================
+              # DISABLE PAGING
+              # ==========================================
+
+              shell.send("terminal length 0\n")
+
+              terminal_output = read_until_prompt(
+                  shell,
+                  r'[>#]\s*$',
+                  timeout=5
+              )
+
+              # ==========================================
+              # SHOW IP IGMP-SNOOPING
+              # ==========================================
+
+              shell.send("show ip igmp-snooping\n")
+
+              igmp_snooping_output = read_until_prompt(
+                  shell,
+                  r'[>#]\s*$',
+                  timeout=10
+              )
+
+              if re.search(r'%err|invalid|error', igmp_snooping_output, re.IGNORECASE):
+                  raise Exception(
+                      f"show ip igmp-snooping command rejected by switch: "
+                      f"{igmp_snooping_output.strip()}"
+                  )
+
+              # ==========================================
+              # EXIT
+              # ==========================================
+
+              shell.send("exit\n")
+
+              exit_output = read_until_prompt(
+                  shell,
+                  r'[>#]\s*$',
+                  timeout=5
+              )
+
+              # ==========================================
+              # CLEAN ANSI CHARACTERS
+              # ==========================================
+
+              enable_output = ansi_re.sub("", enable_output)
+              igmp_snooping_output = ansi_re.sub("", igmp_snooping_output)
+              exit_output = ansi_re.sub("", exit_output)
+
+              # ==========================================
+              # PARSE OUTPUT
+              #
+              # Only the "Global IGMP snooping configuration" block
+              # (key : value lines) is parsed. Parsing stops once the
+              # per-VLAN table header is reached.
+              # ==========================================
+
+              lines = igmp_snooping_output.splitlines()
+
+              field_re = re.compile(r'^([A-Za-z][A-Za-z0-9\-\s]*?)\s*:\s*(.*)$')
+
+              raw_fields = {}
+
+              for line in lines:
+                  clean_line = line.strip()
+
+                  if not clean_line:
+                      continue
+
+                  # Stop once the per-VLAN table header shows up
+                  if clean_line.startswith("VLAN") and "Immediate-leave" in clean_line:
+                      break
+
+                  if clean_line.startswith("---"):
+                      continue
+
+                  match = field_re.match(clean_line)
+                  if match:
+                      key = match.group(1).strip()
+                      value = match.group(2).strip()
+                      raw_fields[key] = value
+
+              # ==========================================
+              # MAP RAW FIELDS TO REQUIRED OUTPUT FIELDS
+              # ==========================================
+
+              vlan_nodes = raw_fields.get("VLAN nodes", "")
+              igmp_snooping_state = "Enable" if vlan_nodes else "Disable"
+
+              dlf_drop_vlan_nodes = raw_fields.get("Dlf-drop VLAN nodes", "")
+              destination_lookup_failure = (
+                  "Discrad Unknown" if dlf_drop_vlan_nodes else "Transfer Unknown"
+              )
+
+              querier_election = raw_fields.get("Querier election", "Disabled")
+              enable_auto_query = (
+                  "Enable" if querier_election.lower().startswith("enable") else "Disable"
+              )
+
+              snooping_querier_address = raw_fields.get("Querier address", "")
+
+              query_interval = raw_fields.get("Querier interval", "").rstrip("sS")
+
+              querier_expiry_interval = raw_fields.get("Router age", "").rstrip("sS")
+
+              # ==========================================
+              # CLOSE SSH
+              # ==========================================
+
+              shell.close()
+              ssh.close()
+
+              # ==========================================
+              # RETURN JSON
+              # ==========================================
+
+              print(json.dumps({
+                  "Destination Looking-up Failure": destination_lookup_failure,
+                  "IGMP Snooping": igmp_snooping_state,
+                  "Enable Auto Query": enable_auto_query,
+                  "Snooping Querier Address": snooping_querier_address,
+                  "Query Interval(s)": query_interval,
+                  "Querier Expiry Interval(s)": querier_expiry_interval,
+                  "ip": HOST,
+                  "status": "success"
+              }))
+
+          except Exception as e:
+              try:
+                  if shell:
+                      shell.close()
+
+                  if ssh:
+                      ssh.close()
+              except:
+                  pass
+
+              print(json.dumps({
+                  "ip": HOST,
+                  "status": "failed",
+                  "error": str(e)
+              }))
+
+    # ==========================================
+    # EXECUTE PYTHON SCRIPT
+    # ==========================================
+
+    - name: Execute IGMP snooping show script
+      ansible.builtin.command:
+        cmd: >
+          /opt/librenms/librenms-ansible-inventory-plugin/bin/python3
+          /opt/librenms/librenms-ansible-inventory-plugin/tmp/igmp_snooping_show_exec.py
+      register: igmp_raw
+      changed_when: false
+      failed_when: false
+
+    # ==========================================
+    # CONVERT JSON RESULT
+    # ==========================================
+
+    - name: Convert IGMP snooping result to JSON
+      ansible.builtin.set_fact:
+        igmp_result: "{{ igmp_raw.stdout | from_json }}"
+
+    # ==========================================
+    # DISPLAY RESULT
+    # ==========================================
+
+    - name: Display IGMP snooping result
+      ansible.builtin.debug:
+        var: igmp_result
+
+    # ==========================================
+    # SAVE RESULT
+    # ==========================================
+
+    - name: Save IGMP snooping result
+      ansible.builtin.copy:
+        dest: "/opt/librenms/librenms-ansible-inventory-plugin/output/{{ ansible_host }}_igmp_snooping_show.yml"
+        content: |
+          {{ igmp_result | to_nice_yaml }}
+
+    # ==========================================
+    # FAIL IF SHOW COMMAND FAILED
+    # ==========================================
+
+    - name: Fail if IGMP snooping show failed
+      ansible.builtin.fail:
+        msg: "{{ igmp_result.error }}"
+      when: igmp_result.status == "failed"
+
+    # ==========================================
+    # FINAL MESSAGE
+    # ==========================================
+
+    - name: Display result file
+      ansible.builtin.debug:
+        msg: "IGMP snooping status retrieved from {{ ansible_host }}. Result saved to output/{{ ansible_host }}_igmp_snooping_show.yml"

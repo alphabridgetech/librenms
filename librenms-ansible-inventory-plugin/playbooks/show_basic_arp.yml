@@ -1,0 +1,247 @@
+# ==========================================
+# show_basic_arp.yml
+# Created on Aug 24, 2026 by Vikash Kumar (vikash.kumar@alphabrige.tech).
+#
+# Copyright (c), ALPHA BRIDGE, Inc.
+# 357D, Udyog Vihar Industrial Area Phase VI, Sector 37, Gurugram, Haryana.
+# 
+# All rights reserved.
+#
+# This software is the confidential and proprietary information of
+# ALPHA BRIDGE, Inc. ("Confidential Information").  You shall not
+# disclose such Confidential Information and shall use it only in
+# accordance with the terms of the license agreement you entered into
+# with ALPHA BRIDGE.
+#
+# =============================================================================
+# Playbook Name : Show ARP Table
+# =============================================================================
+# Description:
+# This playbook retrieves the ARP table from the AlphaBridge switch using SSH.
+# The output is parsed into JSON and stored as a YAML report for easy
+# readability and further automation.
+#
+# Features:
+# - Connect to Switch
+# - Execute "show arp"
+# - Parse CLI Output
+# - Convert to Structured JSON
+# - Save YAML Report
+# - Return Parsed Results
+#
+# CLI Command:
+# show arp
+#
+# Example:
+# ansible-playbook \
+# -i inventory/192.168.2.245.yml \
+# playbooks/show_basic_arp.yml
+#
+# Output:
+# output/<switch_ip>_show_basic_arp.yml
+# =============================================================================
+
+- name: Show ARP Table on network device
+  hosts: alphabridge_devices
+  gather_facts: false
+
+  tasks:
+
+    # ==========================================
+    # Create Python SSH Script
+    # ==========================================
+
+    - name: Create Python SSH Script for Show ARP
+      ansible.builtin.copy:
+        dest: "/opt/librenms/librenms-ansible-inventory-plugin/tmp/show_basic_arp.py"
+        mode: '0755'
+        content: |
+          #!/usr/bin/env python3
+
+          import paramiko
+          import time
+          import re
+          import json
+
+          HOST = "{{ ansible_host }}"
+          USER = "{{ ansible_user }}"
+          PASSWORD = "{{ ansible_password }}"
+
+
+          def read_until_prompt(shell, prompt_regex, timeout=10):
+              buf = ""
+              end_time = time.time() + timeout
+
+              while time.time() < end_time:
+                  if shell.recv_ready():
+                      chunk = shell.recv(65535).decode(errors="ignore")
+                      buf += chunk
+
+                      if re.search(prompt_regex, buf):
+                          return buf
+                  else:
+                      time.sleep(0.1)
+
+              return buf
+
+
+          ansi_re = re.compile(
+              r'\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])'
+          )
+
+          shell = None
+          ssh = None
+
+          try:
+              # ==========================================
+              # SSH CONNECTION
+              # ==========================================
+              ssh = paramiko.SSHClient()
+              ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+              ssh.connect(
+                  HOST,
+                  username=USER,
+                  password=PASSWORD,
+                  look_for_keys=False,
+                  allow_agent=False,
+                  timeout=10
+              )
+
+              shell = ssh.invoke_shell()
+              time.sleep(0.5)
+
+              # ==========================================
+              # INITIAL PROMPT
+              # ==========================================
+              initial_output = read_until_prompt(shell, r'[>#]\s*$', timeout=5)
+
+              # ==========================================
+              # ENABLE
+              # ==========================================
+              shell.send("enable\n")
+              enable_output = read_until_prompt(shell, r'[>#]\s*$', timeout=5)
+
+              # ==========================================
+              # SHOW ARP
+              # ==========================================
+              show_command = "show arp"
+              shell.send(show_command + "\n")
+              arp_output = read_until_prompt(shell, r'[>#]\s*$', timeout=10)
+
+              # ==========================================
+              # EXIT
+              # ==========================================
+              shell.send("exit\n")
+              exit_output = read_until_prompt(shell, r'[>#]\s*$', timeout=5)
+
+              # ==========================================
+              # CLEAN ANSI CHARACTERS
+              # ==========================================
+              enable_output = ansi_re.sub("", enable_output)
+              arp_output = ansi_re.sub("", arp_output)
+              exit_output = ansi_re.sub("", exit_output)
+
+              # ==========================================
+              # PARSE ARP TABLE
+              # ==========================================
+              arp_entries = []
+              lines = arp_output.splitlines()
+
+              for line in lines:
+                  line = line.strip()
+
+                  if line.startswith("IP") and "ARPA" in line:
+                      fields = line.split()
+
+                      if len(fields) >= 6:
+                          arp_entries.append({
+                              "IP Address": fields[1],
+                              "MAC Address": fields[3],
+                              "Interface VLAN": " ".join(fields[5:])
+                          })
+
+              # ==========================================
+              # CLOSE SSH
+              # ==========================================
+              shell.close()
+              ssh.close()
+
+              # ==========================================
+              # RETURN JSON
+              # ==========================================
+              print(json.dumps({
+                  "ip": HOST,
+                  "arp_entries": arp_entries,
+                  "status": "success"
+              }, indent=4))
+
+          except Exception as e:
+              try:
+                  if shell:
+                      shell.close()
+                  if ssh:
+                      ssh.close()
+              except Exception:
+                  pass
+
+              print(json.dumps({
+                  "ip": HOST,
+                  "status": "failed",
+                  "error": str(e)
+              }))
+
+    # ==========================================
+    # EXECUTE PYTHON SCRIPT
+    # ==========================================
+
+    - name: Execute Show ARP script
+      ansible.builtin.command:
+        cmd: >
+          /opt/librenms/librenms-ansible-inventory-plugin/bin/python3
+          /opt/librenms/librenms-ansible-inventory-plugin/tmp/show_basic_arp.py
+      register: arp_raw
+      changed_when: false
+      failed_when: false
+
+    # ==========================================
+    # CONVERT JSON RESULT
+    # ==========================================
+
+    - name: Convert Show ARP result to JSON
+      ansible.builtin.set_fact:
+        arp_result: "{{ arp_raw.stdout | from_json }}"
+
+    # ==========================================
+    # DISPLAY RESULT
+    # ==========================================
+
+    - name: Display Show ARP result
+      ansible.builtin.debug:
+        var: arp_result
+
+    # ==========================================
+    # SAVE RESULT
+    # ==========================================
+
+    - name: Save Show ARP result
+      ansible.builtin.copy:
+        dest: "/opt/librenms/librenms-ansible-inventory-plugin/output/{{ ansible_host }}_show_basic_arp.yml"
+        content: |
+          {{ arp_result | to_nice_yaml }}
+
+    # ==========================================
+    # FAIL IF SCRIPT FAILED
+    # ==========================================
+
+    - name: Fail if Show ARP failed
+      ansible.builtin.fail:
+        msg: "{{ arp_result.error }}"
+      when: arp_result.status == "failed"
+
+    # ==========================================
+    # FINAL MESSAGE
+    # ==========================================
+
+    - name: Display result file
+      ansible.builtin.debug:
+        msg: "ARP table collected successfully. Result saved to output/{{ ansible_host }}_show_basic_arp.yml"

@@ -1,0 +1,331 @@
+# ==========================================
+# port_aggregate_details.yml
+# Created on Sept 1, 2026 by Vikash Kumar (vikash.kumar@alphabrige.tech).
+#
+# Copyright (c), ALPHA BRIDGE, Inc.
+# 357D, Udyog Vihar Industrial Area Phase VI, Sector 37, Gurugram, Haryana.
+#
+# All rights reserved.
+#
+# This software is the confidential and proprietary information of
+# ALPHA BRIDGE, Inc. ("Confidential Information").  You shall not
+# disclose such Confidential Information and shall use it only in
+# accordance with the terms of the license agreement you entered into
+# with ALPHA BRIDGE.
+#
+# =============================================================================
+# Playbook Name : Port Aggregate Details
+# =============================================================================
+#
+# Description:
+# This playbook only READS aggregator-group (port aggregation) details
+# from an AlphaBridge switch over SSH by running:
+#   show aggregator-group detail
+#
+# It does not change any configuration.
+#
+# Output columns produced (one row per Aggregation Group found):
+#   Aggregation Group        - the "Group: N" number
+#   Mode                     - Static / Lacp, taken from the member port(s)
+#   Configure port members   - every port explicitly listed ("Port: gX/Y")
+#                               under that group in the show output
+#   Valid port members       - member ports currently Status: Up
+#   Speed                    - "Speed:" value on the group header line
+#   State                    - "state :" value on the "Group ID" line
+#                               (e.g. lineUp / lineDown)
+#
+# ASSUMPTIONS TO CONFIRM AGAINST YOUR SAMPLE OUTPUT:
+#   - "Configure port members" is read as: every port listed under that
+#     group's "Port:" entries (i.e. ports assigned to the group,
+#     regardless of link state).
+#   - "Valid port members" is read as: the subset of those ports whose
+#     "Status:" is "Up" (i.e. actually usable right now). Your sample
+#     output only shows ports in "Down" state, so this logic hasn't been
+#     exercised against a real "Up" port yet - please sanity check once
+#     you have a live aggregate with an Up member.
+#   - "Mode" is read per-port from "Mode : Static" / "Mode : Lacp". If a
+#     group somehow has ports with different modes, all distinct modes
+#     are joined with a comma (e.g. "Static, Lacp") rather than picking
+#     one arbitrarily.
+#   - "State" comes from the group's own "state :" field (line containing
+#     "Group ID"), not from any individual port's Status.
+#
+# Input vars:
+#   group_id (optional) - if set, only the matching Aggregation Group
+#                          number is returned. If omitted, all groups
+#                          found in the output are returned.
+#
+# Example:
+# ansible-playbook -i inventory/192.168.2.245.yml \
+#   playbooks/port_aggregate_details.yml
+#
+# Output:
+# output/<switch_ip>_port_aggregate_details.yml
+# =============================================================================
+
+- name: Port aggregate details
+  hosts: alphabridge_devices
+  gather_facts: no
+
+  tasks:
+
+    # ==========================================
+    # Validate group_id if provided
+    # ==========================================
+
+    - name: Validate group_id is numeric (when provided)
+      ansible.builtin.assert:
+        that:
+          - group_id | string is match('^[0-9]+$')
+        fail_msg: "group_id must be a whole number (got: {{ group_id }})"
+      when: group_id is defined
+
+    # ==========================================
+    # Create Python SSH Script
+    # ==========================================
+
+    - name: Create Python SSH Script for port aggregate details
+      ansible.builtin.copy:
+        dest: "/opt/librenms/librenms-ansible-inventory-plugin/tmp/port_aggregate_details_exec.py"
+        mode: '0755'
+        content: |
+          #!/usr/bin/env python3
+
+          import paramiko
+          import time
+          import re
+          import json
+
+          HOST = "{{ ansible_host }}"
+          USER = "{{ ansible_user }}"
+          PASSWORD = "{{ ansible_password }}"
+          GROUP_ID_FILTER = "{{ group_id | default('') }}"
+
+          PROMPT_RE = r'[>#]\s*$'
+
+
+          def read_until_prompt(shell, prompt_regex, timeout=10):
+              buf = ""
+              end_time = time.time() + timeout
+
+              while time.time() < end_time:
+                  if shell.recv_ready():
+                      chunk = shell.recv(65535).decode(errors="ignore")
+                      buf += chunk
+
+                      if re.search(prompt_regex, buf):
+                          return buf
+                  else:
+                      time.sleep(0.1)
+
+              return buf
+
+
+          def send_cmd(shell, cmd, timeout=10, check_errors=True):
+              """Send a CLI command, wait for the prompt, optionally raise
+              on switch-reported errors. Returns the raw output."""
+              shell.send(cmd if cmd.endswith("\n") else cmd + "\n")
+              output = read_until_prompt(shell, PROMPT_RE, timeout=timeout)
+
+              if check_errors and re.search(r'%err|invalid|error', output, re.IGNORECASE):
+                  raise Exception(
+                      f"'{cmd.strip()}' rejected by switch: {output.strip()}"
+                  )
+
+              return output
+
+
+          ansi_re = re.compile(
+              r'\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])'
+          )
+
+          # Splits the raw output into one chunk per "Group: N" section.
+          group_split_re = re.compile(r'(?=^Group:\s*\d+\b)', re.MULTILINE)
+
+          group_header_re = re.compile(
+              r'^Group:\s*(\d+)\s+Speed:\s*(\S+)\s+interval:\s*(\S+)',
+              re.MULTILINE
+          )
+
+          # "Group ID : 32768 C86B.BCA0.D0F3      state : lineDown"
+          group_state_re = re.compile(r'^\s*Group ID\s*:.*?\bstate\s*:\s*(\S+)', re.MULTILINE)
+
+          # "Port: g0/6" followed a couple lines later by
+          # "Status: Down   Individual" and "Aggregator-group : 1    Mode : Static"
+          port_block_re = re.compile(
+              r'Port:\s*(\S+)\s*\n'
+              r'\s*Status:\s*(\S+)\s+(\S+)\s*\n'
+              r'\s*Aggregator-group\s*:\s*(\d+)\s+Mode\s*:\s*(\S+)'
+          )
+
+          shell = None
+          ssh = None
+
+          try:
+              # ==========================================
+              # SSH CONNECTION
+              # ==========================================
+
+              ssh = paramiko.SSHClient()
+              ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+
+              ssh.connect(
+                  HOST,
+                  username=USER,
+                  password=PASSWORD,
+                  look_for_keys=False,
+                  allow_agent=False,
+                  timeout=10
+              )
+
+              shell = ssh.invoke_shell()
+              time.sleep(0.5)
+
+              # ==========================================
+              # LOGIN BANNER / INITIAL PROMPT
+              # ==========================================
+
+              read_until_prompt(shell, PROMPT_RE, timeout=5)
+
+              # ==========================================
+              # ENABLE, DISABLE PAGING, RUN SHOW COMMAND
+              # ==========================================
+
+              send_cmd(shell, "enable", timeout=5, check_errors=False)
+              send_cmd(shell, "terminal length 0", timeout=5, check_errors=False)
+
+              show_output = send_cmd(shell, "show aggregator-group detail", timeout=10)
+
+              # ==========================================
+              # CLEAN ANSI CHARACTERS
+              # ==========================================
+
+              show_output = ansi_re.sub("", show_output)
+
+              # ==========================================
+              # PARSE OUTPUT INTO ONE ROW PER GROUP
+              # ==========================================
+
+              groups = []
+
+              for chunk in group_split_re.split(show_output):
+                  header_match = group_header_re.search(chunk)
+                  if not header_match:
+                      continue
+
+                  group_num, speed, interval = header_match.groups()
+
+                  if GROUP_ID_FILTER.strip() and group_num != GROUP_ID_FILTER.strip():
+                      continue
+
+                  state_match = group_state_re.search(chunk)
+                  state = state_match.group(1) if state_match else ""
+
+                  configured_ports = []
+                  valid_ports = []
+                  modes_seen = []
+
+                  for port_match in port_block_re.finditer(chunk):
+                      port_name, status, link_type, agg_id, mode_val = port_match.groups()
+
+                      configured_ports.append(port_name)
+
+                      if status.lower() == "up":
+                          valid_ports.append(port_name)
+
+                      if mode_val not in modes_seen:
+                          modes_seen.append(mode_val)
+
+                  groups.append({
+                      "aggregation_group": group_num,
+                      "mode": ", ".join(modes_seen) if modes_seen else "",
+                      "configured_port_members": configured_ports,
+                      "valid_port_members": valid_ports,
+                      "speed": speed,
+                      "state": state
+                  })
+
+              # ==========================================
+              # CLOSE SSH / RETURN JSON
+              # ==========================================
+
+              shell.close()
+              ssh.close()
+
+              print(json.dumps({
+                  "ip": HOST,
+                  "status": "success",
+                  "groups": groups
+              }))
+
+          except Exception as e:
+              try:
+                  if shell:
+                      shell.close()
+                  if ssh:
+                      ssh.close()
+              except:
+                  pass
+
+              print(json.dumps({
+                  "ip": HOST,
+                  "status": "failed",
+                  "error": str(e)
+              }))
+
+    # ==========================================
+    # EXECUTE PYTHON SCRIPT
+    # ==========================================
+
+    - name: Execute port aggregate details script
+      ansible.builtin.command:
+        cmd: >
+          /opt/librenms/librenms-ansible-inventory-plugin/bin/python3
+          /opt/librenms/librenms-ansible-inventory-plugin/tmp/port_aggregate_details_exec.py
+      register: aggregate_raw
+      changed_when: false
+      failed_when: false
+
+    # ==========================================
+    # CONVERT JSON RESULT
+    # ==========================================
+
+    - name: Convert port aggregate details result to JSON
+      ansible.builtin.set_fact:
+        aggregate_result: "{{ aggregate_raw.stdout | from_json }}"
+
+    # ==========================================
+    # DISPLAY RESULT
+    # ==========================================
+
+    - name: Display port aggregate details result
+      ansible.builtin.debug:
+        var: aggregate_result
+
+    # ==========================================
+    # SAVE RESULT
+    # ==========================================
+
+    - name: Save port aggregate details result
+      ansible.builtin.copy:
+        dest: "/opt/librenms/librenms-ansible-inventory-plugin/output/{{ ansible_host }}_port_aggregate_details.yml"
+        content: |
+          {{ aggregate_result | to_nice_yaml }}
+
+    # ==========================================
+    # FAIL IF SHOW COMMAND FAILED
+    # ==========================================
+
+    - name: Fail if port aggregate details show failed
+      ansible.builtin.fail:
+        msg: "{{ aggregate_result.error }}"
+      when: aggregate_result.status == "failed"
+
+    # ==========================================
+    # FINAL MESSAGE
+    # ==========================================
+
+    - name: Display result file
+      ansible.builtin.debug:
+        msg: "Aggregator-group details retrieved from {{ ansible_host }}.
+        Result saved to output/{{ ansible_host }}_port_aggregate_details.yml"

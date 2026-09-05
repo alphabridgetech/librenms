@@ -8,7 +8,8 @@
             "label": "Description",
             "type": "text",
             "options": null,
-            "command": "description {{value}}"
+            "command": "description {{value}}",
+            "required": false
         },
         {
             "label": "L2TP - CDP",
@@ -50,7 +51,8 @@
             "label": "Allowed Vlans",
             "type": "text",
             "options": null,
-            "command": "switchport trunk vlan-allowed {{value}}"
+            "command": "switchport trunk vlan-allowed {{value}}",
+            "required": false
         }
     ],
     "created_at": "2026-06-29 12:33:51"

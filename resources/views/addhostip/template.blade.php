@@ -343,15 +343,16 @@ switchport pvid @{{value}}
                 const type = data ? data.type : 'text';
                 const options = data ? (data.options || '') : '';
                 const command = data ? data.command : '';
+                const required = data ? (data.required !== false) : true;
 
                 const html = `
                     <div class="builder-field well well-sm" data-field-id="${id}">
                         <div class="row">
-                            <div class="col-sm-4">
+                            <div class="col-sm-3 field-label-col">
                                 <label>{{ __('Label') }}</label>
                                 <input type="text" class="form-control input-sm field-label" value="${_.escape(label)}" placeholder="{{ __('Field Label') }}">
                             </div>
-                            <div class="col-sm-3">
+                            <div class="col-sm-2">
                                 <label>{{ __('Type') }}</label>
                                 <select class="form-control input-sm field-type">
                                     <option value="text" ${type === 'text' ? 'selected' : ''}>{{ __('Text') }}</option>
@@ -362,12 +363,20 @@ switchport pvid @{{value}}
                                     <option value="dynamic_list" ${type === 'dynamic_list' ? 'selected' : ''}>{{ __('Dynamic Rules List') }}</option>
                                 </select>
                             </div>
-                            <div class="col-sm-4">
+                            <div class="col-sm-3 field-options-col">
                                 <label>{{ __('Dropdown Options') }}</label>
                                 <input type="text" class="form-control input-sm field-options" value="${_.escape(options)}" placeholder="{{ __('val:cmd, val2:cmd2') }}">
                                 <span class="help-block" style="font-size: 11px; margin-bottom: 0;">{{ __('Use') }} <code>value:command</code> {{ __('for per-option commands, or just') }} <code>value</code> {{ __('to use the template') }}</span>
                             </div>
-                            <div class="col-sm-1">
+                            <div class="col-sm-2 field-required-col">
+                                <label>&nbsp;</label>
+                                <div class="checkbox" style="margin-top: 0;">
+                                    <label style="font-weight: normal;">
+                                        <input type="checkbox" class="field-required" ${required ? 'checked' : ''}> {{ __('Required') }}
+                                    </label>
+                                </div>
+                            </div>
+                            <div class="col-sm-2">
                                 <label>&nbsp;</label>
                                 <button type="button" class="btn btn-danger btn-sm remove-field-btn">&times;</button>
                             </div>
@@ -397,8 +406,8 @@ switchport pvid @{{value}}
                 const $lastField = $(`#builder_fields_container .builder-field:last`);
                 $lastField.find('.field-type').on('change', function() {
                     const val = $(this).val();
-                    const $label = $(this).closest('.builder-field').find('.field-label').closest('.col-sm-4');
-                    const $options = $(this).closest('.builder-field').find('.field-options').closest('.col-sm-4');
+                    const $label = $(this).closest('.builder-field').find('.field-label-col');
+                    const $options = $(this).closest('.builder-field').find('.field-options-col');
                     const $command = $(this).closest('.builder-field').find('.field-command').closest('.row');
                     const $commandInput = $(this).closest('.builder-field').find('.field-command');
                     const $help = $(this).closest('.builder-field').find('.field-command').siblings('.help-block');
@@ -434,7 +443,7 @@ switchport pvid @{{value}}
                 });
                 $lastField.find('.field-type').trigger('change');
 
-                $lastField.find('.field-label, .field-type, .field-options, .field-command').on('input change', function() {
+                $lastField.find('.field-label, .field-type, .field-options, .field-command, .field-required').on('input change', function() {
                     updateBuilderPreview();
                 });
 
@@ -456,7 +465,8 @@ switchport pvid @{{value}}
                         label: $(this).find('.field-label').val(),
                         type: $(this).find('.field-type').val(),
                         options: $(this).find('.field-options').val(),
-                        command: $(this).find('.field-command').val()
+                        command: $(this).find('.field-command').val(),
+                        required: $(this).find('.field-required').is(':checked')
                     });
                 });
                 return fields;
@@ -689,6 +699,12 @@ switchport pvid @{{value}}
 
                     const rawValue = $field.find('.dynamic-field-value').val();
                     const isFilled = (rawValue && rawValue.trim() !== '');
+                    const isRequired = $field.data('required') !== false;
+
+                    if (!isFilled && !isRequired) {
+                        return;
+                    }
+
                     let val = isFilled ? (type === 'dropdown' ? rawValue.split(':', 2)[0].trim() : rawValue) : ($field.data('label') || 'value');
 
                     if (isFilled && (label === 'Ingress (1= 64kbps)' || label === 'Egress (1= 64kbps)')) {
@@ -1084,6 +1100,7 @@ switchport pvid @{{value}}
 
                 $container.show();
                 fields.forEach(function(field) {
+                    const isRequired = field.required !== false;
                     let inputHtml = '';
                     if (field.type === 'dropdown') {
                         const options = (field.options || '').split(',').map(function(o) { return o.trim(); }).filter(function(o) { return o; });
@@ -1119,8 +1136,8 @@ switchport pvid @{{value}}
                     }
 
                     const row = `
-                        <div class="form-group dynamic-field-row" data-label="${_.escape(field.label)}" data-type="${_.escape(field.type)}" data-command="${_.escape(field.command)}" data-options="${_.escape(field.options || '')}">
-                            <label class="col-sm-3 control-label">${_.escape(field.label)} <span class="text-danger">*</span></label>
+                        <div class="form-group dynamic-field-row" data-label="${_.escape(field.label)}" data-type="${_.escape(field.type)}" data-command="${_.escape(field.command)}" data-options="${_.escape(field.options || '')}" data-required="${isRequired}">
+                            <label class="col-sm-3 control-label">${_.escape(field.label)} ${isRequired ? '<span class="text-danger">*</span>' : '<span class="text-muted" style="font-weight: normal;">(optional)</span>'}</label>
                             <div class="col-sm-9">
                                 ${inputHtml}
                             </div>
@@ -1391,13 +1408,16 @@ switchport pvid @{{value}}
                 $('#dynamic_form_fields .dynamic-field-row').each(function() {
                     const type = $(this).data('type');
                     const label = $(this).data('label') || 'Field';
+                    const isRequired = $(this).data('required') !== false;
                     if (type === 'putonlycmd' || type === 'checkbox') return;
-                    
+
                     if (type === 'dynamic_list') {
                         const $rulesContainer = $(this).find('.dynamic-list-field-container');
                         const $ruleRows = $rulesContainer.find('.dynamic-row-item');
                         if ($ruleRows.length === 0) {
-                            missingFields.push(label + ' (Please add at least one row)');
+                            if (isRequired) {
+                                missingFields.push(label + ' (Please add at least one row)');
+                            }
                             return;
                         }
                         let hasEmptyField = false;
@@ -1408,7 +1428,7 @@ switchport pvid @{{value}}
                                 }
                             });
                         });
-                        if (hasEmptyField) {
+                        if (hasEmptyField && isRequired) {
                             missingFields.push(label + ' (Please fill in all row values)');
                         }
                         return;
@@ -1416,7 +1436,9 @@ switchport pvid @{{value}}
 
                     const val = $(this).find('.dynamic-field-value').val();
                     if (!val || val.trim() === '') {
-                        missingFields.push(label);
+                        if (isRequired) {
+                            missingFields.push(label);
+                        }
                     } else if (label === 'Ingress (1= 64kbps)' || label === 'Egress (1= 64kbps)') {
                         const valNum = parseFloat(val);
                         if (isNaN(valNum)) {

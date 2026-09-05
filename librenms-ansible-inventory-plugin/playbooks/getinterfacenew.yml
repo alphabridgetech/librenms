@@ -1,0 +1,163 @@
+---
+- name: Run "show interface" on network device via SSH
+  hosts: alphabridge_devices
+  gather_facts: no
+
+  tasks:
+    - name: Create output directory
+      ansible.builtin.file:
+        path: "/opt/librenms/librenms-ansible-inventory-plugin/tmp"
+        state: directory
+        mode: "0755"
+      delegate_to: localhost
+
+    - name: Create Python SSH script for Interface
+      ansible.builtin.copy:
+        dest: "/opt/librenms/librenms-ansible-inventory-plugin/tmp/get_interface_exec.py"
+        mode: "0755"
+        content: |
+          #!/usr/bin/env python3
+          import paramiko,time,re,json
+
+          HOST="{{ ansible_host }}"
+          USER="{{ ansible_user }}"
+          PASSWORD="{{ ansible_password }}"
+          INTERFACE="{{ interface | default('') }}"
+
+          ansi=re.compile(r'\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])')
+
+          def read_until_prompt(shell,timeout=120):
+              buf=""
+              end=time.time()+timeout
+              while time.time()<end:
+                  if shell.recv_ready():
+                      chunk=shell.recv(65535).decode(errors="ignore")
+                      buf+=chunk
+                      if "--More--" in chunk or "-- More --" in chunk:
+                          shell.send(" ")
+                          end=time.time()+30
+                          continue
+                      if re.search(r'AS212XTS(?:_config)?[#>]\s*$',ansi.sub("",buf),re.M):
+                          break
+                  else:
+                      time.sleep(0.1)
+              return buf
+
+          def clean(txt):
+              txt=ansi.sub("",txt)
+              txt=txt.replace("--More--","").replace("-- More --","").replace("\b","")
+              out=[]
+              for l in txt.splitlines():
+                  s=l.strip()
+                  if s.lower().startswith("show interface"):
+                      continue
+                  if s.startswith("AS212XTS"):
+                      continue
+                  out.append(l.rstrip())
+              return "\n".join(out).strip()
+
+          def get(p,b,c=str):
+              m=re.search(p,b,re.I|re.M)
+              return c(m.group(1)) if m else None
+
+          def parse(block):
+              h=re.search(r'^(\S+)\s+is\s+(?:administratively\s+)?(up|down),\s+line protocol is\s+(up|down)',block,re.M)
+              if not h:
+                  return None
+              d={"interface":h.group(1),"status":h.group(2),"line_protocol":h.group(3)}
+              m=re.search(r'protocolstatus\s+upTimes\s+(\d+),\s+downTimes\s+(\d+),\s+(?:alloc at|last transition)\s+([^\n]+)',block,re.I)
+              if m:
+                  d["protocol_status"]={"up_times":int(m.group(1)),"down_times":int(m.group(2)),"allocated_at":m.group(3).strip()}
+              for pat,key,cast in [
+                  (r'Ifindex is\s+(\d+)','ifindex',int),
+                  (r'unique port number is\s+(\d+)','unique_port_number',int),
+                  (r'Hardware is\s+([^,\n]+)','hardware',str),
+                  (r'address is\s+([0-9a-fA-F.]+)','mac_address',str),
+                  (r'bia\s+([0-9a-fA-F.]+)','bia',str),
+                  (r'Interface address is\s+(\S+)','ip_address',str),
+                  (r'MTU\s+(\d+) bytes','mtu',int),
+                  (r'BW\s+(\d+) kbit','bandwidth_kbit',int),
+                  (r'DLY\s+(\d+) usec','delay_usec',int),
+                  (r'Encapsulation\s+(\S+)','encapsulation',str),
+                  (r'Flow-Control\s+(\S+)','flow_control',str),
+              ]:
+                  v=get(pat,block,cast)
+                  if v is not None:
+                      d[key]=v
+              m=re.search(r'(?:Auto-)?Duplex(?:\((Full|Half)\))?',block,re.I)
+              if m:
+                  d["duplex"]=m.group(1) or "Auto"
+              m=re.search(r'Auto-Speed\((\d+)Mb/s\)|(\d+)Mb/s',block,re.I)
+              if m:
+                  d["speed_mbps"]=int(m.group(1) or m.group(2))
+              m=re.search(r'ARP type:\s*(\S+),\s*ARP timeout\s*([0-9:]+)',block,re.I)
+              if m:
+                  d["arp"]={"type":m.group(1),"timeout":m.group(2)}
+              return d
+
+          ssh=paramiko.SSHClient()
+          ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+          ssh.connect(HOST,username=USER,password=PASSWORD,look_for_keys=False,allow_agent=False)
+          sh=ssh.invoke_shell()
+          time.sleep(1)
+          if sh.recv_ready():
+              sh.recv(65535)
+          sh.send("enable\n")
+          time.sleep(.5)
+          if sh.recv_ready():
+              t=sh.recv(65535).decode(errors="ignore")
+              if "assword" in t:
+                  sh.send(PASSWORD+"\n")
+                  time.sleep(.5)
+                  if sh.recv_ready():
+                      sh.recv(65535)
+          for cmd in ("terminal length 0","no page"):
+              sh.send(cmd+"\n")
+              time.sleep(.3)
+              if sh.recv_ready():
+                  sh.recv(65535)
+
+          commands=[]
+          if INTERFACE.strip():
+              groups=re.findall(r'([A-Za-z]+):([0-9/,]+)',INTERFACE)
+              for typ,ports in groups:
+                  for p in ports.split(","):
+                      p=p.strip()
+                      if p:
+                          commands.append(f"show interface {typ} {p}")
+          if not commands:
+              commands=["show interface"]
+
+          raw=""
+          for c in commands:
+              sh.send(c+"\n")
+              raw+=clean(read_until_prompt(sh))+"\n"
+          ssh.close()
+
+          blocks=re.split(r'(?=^(?:GigaEthernet|TGigaEthernet|VLAN|Null)\S*\s+is\s+(?:administratively\s+)?(?:up|down),\s+line protocol is\s+(?:up|down))',raw,flags=re.M)
+          out={"ip":HOST,"interfaces":[]}
+          for b in blocks:
+              b=b.strip()
+              if not b:
+                  continue
+              p=parse(b)
+              if p:
+                  out["interfaces"].append(p)
+          print(json.dumps(out))
+
+    - name: Run Interface script
+      ansible.builtin.command: >
+        /opt/librenms/librenms-ansible-inventory-plugin/bin/python3
+        /opt/librenms/librenms-ansible-inventory-plugin/tmp/get_interface_exec.py
+      register: interface_raw
+      changed_when: false
+
+    - name: Save Interface output to YAML
+      ansible.builtin.copy:
+        dest: "/opt/librenms/librenms-ansible-inventory-plugin/output/{{ ansible_host }}_interfaces_new.yml"
+        content: |
+          {{ interface_raw.stdout | from_json | to_nice_yaml(indent=4, sort_keys=false) }}
+
+    - name: Display Interface YAML path
+      ansible.builtin.debug:
+        msg: "Saved interfaces to output/{{ ansible_host }}_interfaces_new.yml"

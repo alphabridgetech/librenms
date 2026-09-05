@@ -5,11 +5,12 @@
     "interfaces": [],
     "fields": [
         {
-            "label": null,
-            "type": "putonlycmd",
-            "options": null,
-            "command": "interface {{interface}}"
+            "label": "metu",
+            "type": "dropdown",
+            "options": "enable:mtu enable,disable:mtu disable",
+            "command": null,
+            "required": false
         }
     ],
-    "created_at": "2026-06-26 18:26:52"
+    "created_at": "2026-09-05 11:17:44"
 }
