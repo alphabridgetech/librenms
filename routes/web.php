@@ -484,6 +484,8 @@ Route::middleware(['auth', 'license'])->group(function () {
             Route::post('outages', Table\OutagesController::class)->name('table.outages');
             Route::get('outages/export', [Table\OutagesController::class, 'export']);
             Route::post('port-nac', Table\PortNacController::class)->name('table.port-nac');
+            Route::post('port-statistics', Table\PortStatisticsController::class);
+            Route::get('port-statistics/export', [Table\PortStatisticsController::class, 'export'])->name('table.port-statistics.export');
             Route::post('port-stp', Table\PortStpController::class);
             Route::post('ports', Table\PortsController::class)->name('table.ports');
             Route::get('ports/export', [Table\PortsController::class, 'export']);
