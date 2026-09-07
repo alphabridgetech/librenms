@@ -991,6 +991,174 @@ public function getvlan($hostname)
         ]);
     }
 
+    #------------------------------------------------------------
+    #                    SHOW STATIC ARP TABLE
+    #------------------------------------------------------------
+    public function showbasicarp($hostname)
+    {
+        $playbook = "{$this->pluginPath}/playbooks/show_basic_arp.yml";
+        $hosts    = "{$this->pluginPath}/hosts/{$hostname}.yml";
+        $yamlFile = "{$this->pluginPath}/output/{$hostname}_show_basic_arp.yml";
+
+        // If we already have a result from a previous run, serve it immediately
+        // and kick off a fresh SSH fetch in the background for next time -
+        // avoids making every page load wait on a live SSH round-trip.
+        if (file_exists($yamlFile)) {
+            $cached = yaml_parse_file($yamlFile);
+            $entries = $cached['arp_entries'] ?? [];
+            if (!is_array($entries)) {
+                $entries = [];
+            }
+
+            $this->runAnsibleAsync($playbook, $hosts);
+
+            return $this->success([
+                "ip"           => $cached['ip'] ?? $hostname,
+                "arp_entries"  => $entries,
+                "cached"       => true,
+            ]);
+        }
+
+        // No cached result yet (first load) - fetch synchronously.
+        $ansibleOutput = $this->runAnsible($playbook, $hosts);
+
+        if (!file_exists($yamlFile)) {
+            return $this->error("ARP show output file not found", $ansibleOutput);
+        }
+
+        $data = yaml_parse_file($yamlFile);
+        if (($data['status'] ?? null) !== 'success') {
+            return $this->error($data['error'] ?? 'Failed to read ARP table', $data);
+        }
+
+        $entries = $data['arp_entries'] ?? [];
+        if (!is_array($entries)) {
+            $entries = [];
+        }
+
+        return $this->success([
+            "ip"           => $data['ip'] ?? $hostname,
+            "arp_entries"  => $entries,
+            "cached"       => false,
+        ]);
+    }
+
+    /**
+     * Fire the given playbook in the background and return immediately,
+     * without waiting for it to finish. Used to silently refresh a cached
+     * output file after already serving its previous contents to the user.
+     */
+    private function runAnsibleAsync(string $playbook, string $hosts): void
+    {
+        $cmd = "source {$this->venv} && ansible-playbook -i {$hosts} {$playbook} > /dev/null 2>&1 &";
+        shell_exec($cmd);
+    }
+
+    #------------------------------------------------------------
+    #                    ADD STATIC ARP ENTRY
+    #------------------------------------------------------------
+    public function addbasicarp(Request $request, $hostname)
+    {
+        $data = $request->validate([
+            'ip_address' => 'required|ipv4',
+            'mac_address' => ['required', 'regex:/^([0-9A-Fa-f]{2}:){5}[0-9A-Fa-f]{2}$/'],
+            'interface_vlan' => 'required|integer|min:1|max:4094',
+        ]);
+
+        $playbook = "{$this->pluginPath}/playbooks/add_basic_arp.yml";
+        $hosts    = "{$this->pluginPath}/hosts/{$hostname}.yml";
+
+        $ansibleOutput = $this->runAnsible($playbook, $hosts, [
+            'ip_address' => $data['ip_address'],
+            'mac_address' => $data['mac_address'],
+            'interface_vlan' => $data['interface_vlan'],
+        ]);
+
+        $yamlFile = "{$this->pluginPath}/output/{$hostname}_add_basic_arp.yml";
+        if (!file_exists($yamlFile)) {
+            return $this->error("ARP add output file not found", $ansibleOutput);
+        }
+
+        $result = yaml_parse_file($yamlFile);
+        if (($result['status'] ?? null) !== 'success') {
+            return $this->error($result['error'] ?? 'Failed to add ARP entry', $result);
+        }
+
+        return $this->success([
+            "message" => "Static ARP entry {$data['ip_address']} -> {$data['mac_address']} added on VLAN {$data['interface_vlan']}",
+            "raw"     => $result,
+        ]);
+    }
+
+    #------------------------------------------------------------
+    #                    EDIT STATIC ARP ENTRY
+    #------------------------------------------------------------
+    public function editbasicarp(Request $request, $hostname)
+    {
+        $data = $request->validate([
+            'ip_address' => 'required|ipv4',
+            'mac_address' => ['required', 'regex:/^([0-9A-Fa-f]{2}:){5}[0-9A-Fa-f]{2}$/'],
+            'interface_vlan' => 'required|integer|min:1|max:4094',
+        ]);
+
+        $playbook = "{$this->pluginPath}/playbooks/edit_basic_arp.yml";
+        $hosts    = "{$this->pluginPath}/hosts/{$hostname}.yml";
+
+        $ansibleOutput = $this->runAnsible($playbook, $hosts, [
+            'ip_address' => $data['ip_address'],
+            'mac_address' => $data['mac_address'],
+            'interface_vlan' => $data['interface_vlan'],
+        ]);
+
+        $yamlFile = "{$this->pluginPath}/output/{$hostname}_edit_basic_arp.yml";
+        if (!file_exists($yamlFile)) {
+            return $this->error("ARP edit output file not found", $ansibleOutput);
+        }
+
+        $result = yaml_parse_file($yamlFile);
+        if (($result['status'] ?? null) !== 'success') {
+            return $this->error($result['error'] ?? 'Failed to edit ARP entry', $result);
+        }
+
+        return $this->success([
+            "message" => "Static ARP entry for {$data['ip_address']} updated to {$data['mac_address']} on VLAN {$data['interface_vlan']}",
+            "raw"     => $result,
+        ]);
+    }
+
+    #------------------------------------------------------------
+    #                    DELETE STATIC ARP ENTRY
+    #------------------------------------------------------------
+    public function deletebasicarp(Request $request, $hostname)
+    {
+        $data = $request->validate([
+            'ip_address' => 'required|ipv4',
+            'interface_vlan' => 'required|integer|min:1|max:4094',
+        ]);
+
+        $playbook = "{$this->pluginPath}/playbooks/delete_basic_arp.yml";
+        $hosts    = "{$this->pluginPath}/hosts/{$hostname}.yml";
+
+        $ansibleOutput = $this->runAnsible($playbook, $hosts, [
+            'ip_address' => $data['ip_address'],
+            'interface_vlan' => $data['interface_vlan'],
+        ]);
+
+        $yamlFile = "{$this->pluginPath}/output/{$hostname}_delete_basic_arp.yml";
+        if (!file_exists($yamlFile)) {
+            return $this->error("ARP delete output file not found", $ansibleOutput);
+        }
+
+        $result = yaml_parse_file($yamlFile);
+        if (($result['status'] ?? null) !== 'success') {
+            return $this->error($result['error'] ?? 'Failed to delete ARP entry', $result);
+        }
+
+        return $this->success([
+            "message" => "Static ARP entry {$data['ip_address']} removed from VLAN {$data['interface_vlan']}",
+            "raw"     => $result,
+        ]);
+    }
 
 
 

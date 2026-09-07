@@ -78,6 +78,10 @@ Route::prefix('v0')->group(function () {
         Route::post('vlandelete/{hostname}', [App\Api\Controllers\KunalApiController::class, 'vlandelete'])->name('vlandelete');
         Route::get('voicevlanshow/{hostname}', [App\Api\Controllers\KunalApiController::class, 'voicevlanshow'])->name('voicevlanshow');
         Route::post('voicevlan/batch/{hostname}', [App\Api\Controllers\KunalApiController::class, 'voicevlandelete'])->name('voicevlandelete');
+        Route::get('arp/show/{hostname}', [App\Api\Controllers\KunalApiController::class, 'showbasicarp'])->name('arp.show');
+        Route::post('arp/add/{hostname}', [App\Api\Controllers\KunalApiController::class, 'addbasicarp'])->name('arp.add');
+        Route::post('arp/edit/{hostname}', [App\Api\Controllers\KunalApiController::class, 'editbasicarp'])->name('arp.edit');
+        Route::post('arp/delete/{hostname}', [App\Api\Controllers\KunalApiController::class, 'deletebasicarp'])->name('arp.delete');
         Route::post('tftpupload/{hostname}', [App\Api\Controllers\KunalApiController::class, 'tftpupload'])->name('tftpupload');
         Route::post('tftpexport/{hostname}', [App\Api\Controllers\KunalApiController::class, 'tftpexport'])->name('tftpexport'); 
         Route::post('tftp/schedule', [App\Api\Controllers\KunalApiController::class, 'saveTftpSchedule'])->name('tftp.schedule');

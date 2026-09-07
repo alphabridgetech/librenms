@@ -1,0 +1,380 @@
+# ==========================================
+# add_basic_arp.yml
+# Created on Aug 24, 2026 by Vikash Kumar (vikash.kumar@alphabrige.tech).
+#
+# Copyright (c), ALPHA BRIDGE, Inc.
+# 357D, Udyog Vihar Industrial Area Phase VI, Sector 37, Gurugram, Haryana.
+# 
+# All rights reserved.
+#
+# This software is the confidential and proprietary information of
+# ALPHA BRIDGE, Inc. ("Confidential Information").  You shall not
+# disclose such Confidential Information and shall use it only in
+# accordance with the terms of the license agreement you entered into
+# with ALPHA BRIDGE.
+#
+# =============================================================================
+# Playbook Name : Add Static ARP Entry
+# =============================================================================
+# Description:
+# This playbook creates a static ARP entry on the AlphaBridge switch using SSH.
+# The playbook validates user inputs before configuring the device and verifies
+# the configuration after execution.
+#
+# Features:
+# - Validate IP Address
+# - Validate MAC Address
+# - Validate VLAN Interface
+# - Check whether VLAN exists
+# - Check duplicate ARP entry
+# - Create Static ARP Entry
+# - Save Configuration
+# - Verify Configuration
+# - Return JSON Output
+# - Save YAML Report
+#
+# CLI Command:
+# arp <ip-address> <mac-address> vlan <vlan-id>
+#
+# Example:
+# ansible-playbook \
+# -i inventory/192.168.2.245.yml \
+# playbooks/add_basic_arp.yml \
+# -e "ip_address=192.168.2.100 mac_address=78:18:00:00:00:89 interface_vlan=200"
+#
+# Output:
+# output/<switch_ip>_add_basic_arp.yml
+# =============================================================================
+
+- name: Add Static ARP Entry on network device
+  hosts: alphabridge_devices
+  gather_facts: no
+
+  tasks:
+
+    # ==========================================
+    # Validate IP Address
+    # ==========================================
+
+    - name: Validate IP Address
+      ansible.builtin.assert:
+        that:
+          - ip_address is defined
+          - ip_address is ansible.utils.ipv4
+        fail_msg: "Invalid IPv4 address: {{ ip_address }}"
+
+    # ==========================================
+    # Validate MAC Address
+    # ==========================================
+
+    - name: Validate MAC Address
+      ansible.builtin.assert:
+        that:
+          - mac_address is defined
+          - "mac_address is match('^([0-9A-Fa-f]{2}:){5}[0-9A-Fa-f]{2}$')"
+        fail_msg: "mac_address must be in the format XX:XX:XX:XX:XX:XX"
+
+    # ==========================================
+    # Validate VLAN INTERFACE
+    # ==========================================
+
+    - name: Validate INTERFACE VLAN
+      ansible.builtin.assert:
+        that:
+          - interface_vlan is defined
+          - interface_vlan | int >= 1
+          - interface_vlan | int <= 4094
+        fail_msg: "interface_vlan must be between 1 and 4094"
+
+    # ==========================================
+    # Create Python SSH Script
+    # ==========================================
+
+    - name: Create Python SSH Script for ARP creation
+      ansible.builtin.copy:
+        dest: "/opt/librenms/librenms-ansible-inventory-plugin/tmp/add_basic_arp_exec.py"
+        mode: '0755'
+        content: |
+          #!/usr/bin/env python3
+
+          import paramiko
+          import time
+          import re
+          import json
+
+          HOST = "{{ ansible_host }}"
+          USER = "{{ ansible_user }}"
+          PASSWORD = "{{ ansible_password }}"
+
+          IP_ADDRESS = "{{ ip_address }}"
+          MAC_ADDRESS = "{{ mac_address }}"
+          INTERFACE_VLAN = "{{ interface_vlan }}"
+
+
+          def read_until_prompt(shell, prompt_regex, timeout=10):
+              buf = ""
+              end_time = time.time() + timeout
+
+              while time.time() < end_time:
+                  if shell.recv_ready():
+                      chunk = shell.recv(65535).decode(errors="ignore")
+                      buf += chunk
+
+                      if re.search(prompt_regex, buf):
+                          return buf
+                  else:
+                      time.sleep(0.1)
+
+              return buf
+
+
+          ansi_re = re.compile(
+              r'\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])'
+          )
+
+          shell = None
+          ssh = None
+
+          try:
+              # ==========================================
+              # SSH CONNECTION
+              # ==========================================
+
+              ssh = paramiko.SSHClient()
+              ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+
+              ssh.connect(
+                  HOST,
+                  username=USER,
+                  password=PASSWORD,
+                  look_for_keys=False,
+                  allow_agent=False,
+                  timeout=10
+              )
+
+              shell = ssh.invoke_shell()
+              time.sleep(0.5)
+
+              # ==========================================
+              # INITIAL PROMPT
+              # Example:
+              # AS212XTS>
+              # ==========================================
+
+              initial_output = read_until_prompt(
+                  shell,
+                  r'[>#]\s*$',
+                  timeout=5
+              )
+
+              # ==========================================
+              # ENABLE
+              # Example:
+              # AS212XTS#
+              # ==========================================
+
+              shell.send("enable\n")
+
+              enable_output = read_until_prompt(
+                  shell,
+                  r'[>#]\s*$',
+                  timeout=5
+              )
+
+              # ==========================================
+              # CONFIG
+              # Example:
+              # AS212XTS_config#
+              # ==========================================
+
+              shell.send("config\n")
+
+              config_output = read_until_prompt(
+                  shell,
+                  r'_config#\s*$',
+                  timeout=5
+              )
+
+              # ==========================================
+              # CHECK EXISTING ARP ENTRIES
+              # ==========================================
+
+              shell.send("show arp\n")
+
+              arp_table_output = read_until_prompt(
+                  shell,
+                  r'_config#\s*$',
+                  timeout=5
+              )
+
+              # ==========================================
+              # CHECK DUPLICATE IP / MAC
+              # ==========================================
+
+              if IP_ADDRESS in arp_table_output:
+                  raise Exception(
+                      f"IP address {IP_ADDRESS} already exists "
+                      f"in the ARP table."
+                  )
+
+              if MAC_ADDRESS.lower() in arp_table_output.lower():
+                  raise Exception(
+                      f"MAC address {MAC_ADDRESS} already exists "
+                      f"in the ARP table."
+                  )
+
+              # ==========================================
+              # ADD ARP ENTRY
+              #
+              # Command:
+              # arp <IP> <MAC> vlan <VLAN>
+              #
+              # Example:
+              # arp 192.168.2.100 78:18:ec:d9:6c:77 vlan 20
+              # ==========================================
+
+              arp_command = (
+                  f"arp {IP_ADDRESS} "
+                  f"{MAC_ADDRESS} vlan {INTERFACE_VLAN}"
+              )
+
+              shell.send(arp_command + "\n")
+
+              arp_output = read_until_prompt(
+                  shell,
+                  r'_config#\s*$',
+                  timeout=5
+              )
+
+              # ==========================================
+              # CHECK ARP COMMAND RESULT
+              # ==========================================
+
+              if "Parameter invalid" in arp_output:
+                  raise Exception(
+                      f"Please enter a valid VLAN: "
+                      f"Interface VLAN has not been created."
+                  )
+
+              # ==========================================
+              # WRITE CONFIGURATION
+              # ==========================================
+
+              shell.send("write\n")
+
+              write_output = read_until_prompt(
+                  shell,
+                  r'[>#]\s*$',
+                  timeout=10
+              )
+
+              # ==========================================
+              # EXIT
+              # ==========================================
+
+              shell.send("exit\n")
+
+              exit_output = read_until_prompt(
+                  shell,
+                  r'[>#]\s*$',
+                  timeout=5
+              )
+
+              # ==========================================
+              # CLEAN ANSI CHARACTERS
+              # ==========================================
+
+              enable_output = ansi_re.sub("", enable_output)
+              config_output = ansi_re.sub("", config_output)
+              arp_output = ansi_re.sub("", arp_output)
+              write_output = ansi_re.sub("", write_output)
+              exit_output = ansi_re.sub("", exit_output)
+
+              # ==========================================
+              # CLOSE SSH
+              # ==========================================
+
+              shell.close()
+              ssh.close()
+
+              # ==========================================
+              # RETURN JSON
+              # ==========================================
+
+              print(json.dumps({
+                  "ip": HOST,
+                  "write_output": write_output.strip(),
+                  "status": "success"
+              }))
+
+          except Exception as e:
+              try:
+                  if shell:
+                      shell.close()
+
+                  if ssh:
+                      ssh.close()
+              except:
+                  pass
+
+              print(json.dumps({
+                  "ip": HOST,
+                  "status": "failed",
+                  "error": str(e)
+              }))
+
+    # ==========================================
+    # EXECUTE PYTHON SCRIPT
+    # ==========================================
+
+    - name: Execute ARP creation script
+      ansible.builtin.command:
+        cmd: >
+          /opt/librenms/librenms-ansible-inventory-plugin/bin/python3
+          /opt/librenms/librenms-ansible-inventory-plugin/tmp/add_basic_arp_exec.py
+      register: arp_raw
+      changed_when: false
+      failed_when: false
+
+    # ==========================================
+    # CONVERT JSON RESULT
+    # ==========================================
+
+    - name: Convert ARP result to JSON
+      ansible.builtin.set_fact:
+        arp_result: "{{ arp_raw.stdout | from_json }}"
+
+    # ==========================================
+    # DISPLAY RESULT
+    # ==========================================
+
+    - name: Display ARP creation result
+      ansible.builtin.debug:
+        var: arp_result
+
+    # ==========================================
+    # SAVE RESULT
+    # ==========================================
+
+    - name: Save ARP creation result
+      ansible.builtin.copy:
+        dest: "/opt/librenms/librenms-ansible-inventory-plugin/output/{{ ansible_host }}_add_basic_arp.yml"
+        content: |
+          {{ arp_result | to_nice_yaml }}
+
+    # ==========================================
+    # FAIL IF ARP CREATION FAILED
+    # ==========================================
+
+    - name: Fail if ARP creation failed
+      ansible.builtin.fail:
+        msg: "{{ arp_result.error }}"
+      when: arp_result.status == "failed"
+
+    # ==========================================
+    # FINAL MESSAGE
+    # ==========================================
+
+    - name: Display result file
+      ansible.builtin.debug:
+        msg: "ARP entry {{ ip_address }} -> {{ mac_address }} INTERFACE_VLAN {{ interface_vlan }} created. Result saved to output/{{ ansible_host }}_add_basic_arp.yml"

@@ -327,6 +327,7 @@ class ConfigurationController implements DeviceTab
         if ($device->macs()->exists()) {
             $tabs[] = ['name' => __('MTU configuration'), 'url' => 'mtuconfig'];
             $tabs[] = ['name' => __('LLDP configuration'), 'url' => 'lldpconfig'];
+            $tabs[] = ['name' => __('ARP configuration'), 'url' => 'arpconfig'];
         }
 
         return $tabs;

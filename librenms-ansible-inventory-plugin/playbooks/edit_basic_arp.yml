@@ -1,0 +1,437 @@
+# ==========================================
+# edit_basic_arp.yml
+# Created on Aug 25, 2026 by Vikash Kumar (vikash.kumar@alphabrige.tech).
+#
+# Copyright (c), ALPHA BRIDGE, Inc.
+# 357D, Udyog Vihar Industrial Area Phase VI, Sector 37, Gurugram, Haryana.
+# 
+# All rights reserved.
+#
+# This software is the confidential and proprietary information of
+# ALPHA BRIDGE, Inc. ("Confidential Information").  You shall not
+# disclose such Confidential Information and shall use it only in
+# accordance with the terms of the license agreement you entered into
+# with ALPHA BRIDGE.
+#
+# =============================================================================
+# Playbook Name : Edit Static ARP Entry
+# =============================================================================
+# Description:
+# This playbook modifies an existing static ARP entry on the AlphaBridge switch.
+# The IP address remains unchanged while the MAC address and VLAN interface
+# can be updated.
+#
+# Features:
+# - Validate Existing ARP Entry
+# - Validate New MAC Address
+# - Validate VLAN Interface
+# - Remove Existing Entry
+# - Create Updated Entry
+# - Verify Running Configuration
+# - Save Configuration
+# - Generate JSON Output
+# - Save YAML Report
+#
+# CLI Commands:
+# no arp <ip-address> vlan <vlan-id>
+# arp <ip-address> <new-mac> vlan <new-vlan>
+#
+# Example:
+# ansible-playbook \
+# -i inventory/192.168.2.245.yml \
+# playbooks/edit_basic_arp.yml \
+# -e "ip_address=192.168.2.100 mac_address=78:18:00:00:00:AA interface_vlan=300"
+#
+# Output:
+# output/<switch_ip>_edit_basic_arp.yml
+# =============================================================================
+
+- name: Edit ARP Table on network device
+  hosts: alphabridge_devices
+  gather_facts: false
+
+  tasks:
+
+  # ==========================================
+  # Create Python SSH Script
+  # ==========================================
+
+  - name: Create Python SSH Script for Edit ARP
+    ansible.builtin.copy:
+      dest: "/opt/librenms/librenms-ansible-inventory-plugin/tmp/edit_basic_arp.py"
+      mode: '0755'
+      content: |
+        #!/usr/bin/env python3
+
+        import paramiko
+        import time
+        import re
+        import json
+        import sys
+
+        HOST = "{{ ansible_host }}"
+        USER = "{{ ansible_user }}"
+        PASSWORD = "{{ ansible_password }}"
+        IP_ADDRESS = "{{ ip_address }}"
+        MAC_ADDRESS = "{{ mac_address }}"
+        INTERFACE_VLAN = "{{ interface_vlan }}"
+
+        def read_until_prompt(shell, prompt_regex, timeout=10):
+            buf = ""
+            end_time = time.time() + timeout
+
+            while time.time() < end_time:
+                if shell.recv_ready():
+                    chunk = shell.recv(65535).decode(errors="ignore")
+                    buf += chunk
+
+                    if re.search(prompt_regex, buf):
+                        return buf
+                else:
+                    time.sleep(0.1)
+
+            return buf
+
+
+        ansi_re = re.compile(
+            r'\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])'
+        )
+
+        shell = None
+        ssh = None
+
+        try:
+
+            # ==========================================
+            # SSH CONNECTION
+            # ==========================================
+
+            ssh = paramiko.SSHClient()
+            ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+
+            ssh.connect(
+                HOST,
+                username=USER,
+                password=PASSWORD,
+                look_for_keys=False,
+                allow_agent=False,
+                timeout=10
+            )
+
+            shell = ssh.invoke_shell()
+            time.sleep(0.5)
+
+            # ==========================================
+            # INITIAL PROMPT
+            # ==========================================
+
+            initial_output = read_until_prompt(
+                shell,
+                r'[>#]\s*$',
+                timeout=5
+            )
+
+            # ==========================================
+            # ENABLE
+            # ==========================================
+
+            shell.send("enable\n")
+
+            enable_output = read_until_prompt(
+                shell,
+                r'[>#]\s*$',
+                timeout=5
+            )
+
+            # ==========================================
+            # SHOW ARP
+            # ==========================================
+
+            show_command = "show arp"
+
+            shell.send(show_command + "\n")
+
+            arp_output = read_until_prompt(
+                shell,
+                r'[>#]\s*$',
+                timeout=10
+            )
+
+            # ==========================================
+            # CONFIG
+            # ==========================================
+
+            shell.send("config\n")
+
+            config_output = read_until_prompt(
+                shell,
+                r'_config#\s*$',
+                timeout=5
+            )
+
+            # ==========================================
+            # SEARCH IP ADDRESS
+            # ==========================================
+
+            old_interface = None
+            old_mac = None
+
+            lines = arp_output.splitlines()
+
+            for line in lines:
+
+                line = line.strip()
+
+                # Skip empty lines
+                if not line:
+                    continue
+
+                # Expected ARP format:
+                #
+                # IP 192.168.2.149 0 78:18:ec:d9:6c:77 ARPA VLAN100
+                #
+                # fields:
+                # [0] = IP
+                # [1] = IP address
+                # [2] = age
+                # [3] = MAC
+                # [4] = ARPA
+                # [5] = VLAN100
+
+                fields = line.split()
+
+                if len(fields) >= 6 and fields[0] == "IP":
+
+                    current_ip = fields[1]
+                    current_mac = fields[3]
+                    current_interface = fields[5]
+
+                    # Compare user entered IP
+                    if current_ip == IP_ADDRESS:
+
+                        old_mac = current_mac
+                        old_interface = current_interface
+
+                        break
+
+            # ==========================================
+            # VALIDATE ARP ENTRY
+            # ==========================================
+
+            if old_interface is None:
+
+                raise Exception(
+                    f"IP address {IP_ADDRESS} was not found "
+                    f"in the ARP table"
+                )
+
+            # ==========================================
+            # EXTRACT VLAN ID
+            # ==========================================
+
+            match = re.search(
+                r'(\d+)',
+                old_interface
+            )
+
+            if not match:
+                raise Exception(
+                    f"Unable to determine VLAN ID "
+                    f"from interface {old_interface}"
+                )
+
+            OLD_VLAN_ID = match.group(1)
+
+            # IMPORTANT:
+            # Do not use print() here because stdout must
+            # contain ONLY valid JSON.
+            #
+            # Send debug information to stderr instead.
+
+            print(
+                f"Old VLAN ID: {OLD_VLAN_ID}",
+                file=sys.stderr
+            )
+
+            # ==========================================
+            # DELETE OLD ARP ENTRY
+            # ==========================================
+
+            delete_command = (
+                f"no arp {IP_ADDRESS} vlan {OLD_VLAN_ID}"
+            )
+
+            shell.send(delete_command + "\n")
+
+            delete_output = read_until_prompt(
+                shell,
+                r'_config#\s*$',
+                timeout=5
+            )
+
+            delete_output = ansi_re.sub(
+                "",
+                delete_output
+            )
+
+            # ==========================================
+            # ADD UPDATED ARP ENTRY
+            # ==========================================
+
+            add_command = (
+                f"arp {IP_ADDRESS} "
+                f"{MAC_ADDRESS} "
+                f"vlan {INTERFACE_VLAN}"
+            )
+
+            shell.send(add_command + "\n")
+
+            add_output = read_until_prompt(
+                shell,
+                r'_config#\s*$',
+                timeout=5
+            )
+            if "Parameter invalid" in add_output:
+                raise Exception(
+                   f"Please enter a valid VLAN interface: "
+                   f"Interface VLAN has not been created."
+                )
+            add_output = ansi_re.sub(
+                "",
+                add_output
+            )
+
+            # ==========================================
+            # EXIT
+            # ==========================================
+
+            shell.send("exit\n")
+
+            exit_output = read_until_prompt(
+                shell,
+                r'[>#]\s*$',
+                timeout=5
+            )
+
+            exit_output = ansi_re.sub(
+                "",
+                exit_output
+            )
+
+            # Remove ANSI characters
+            arp_output = ansi_re.sub("", arp_output)
+            config_output = ansi_re.sub("", config_output)
+            enable_output = ansi_re.sub("", enable_output)
+
+            # ==========================================
+            # CLOSE SSH
+            # ==========================================
+
+            shell.close()
+            ssh.close()
+
+            # ==========================================
+            # RETURN JSON
+            # ==========================================
+
+            result = {
+                "ip": HOST,
+                "status": "success",
+            }
+
+            # ONLY JSON goes to stdout
+            print(json.dumps(result, indent=4))
+
+        except Exception as e:
+
+            try:
+
+                if shell:
+                    shell.close()
+
+                if ssh:
+                    ssh.close()
+
+            except Exception:
+                pass
+
+            # ONLY JSON goes to stdout
+            print(json.dumps({
+                "ip": HOST,
+                "status": "failed",
+                "error": str(e)
+            }))
+
+
+  # ==========================================
+  # EXECUTE PYTHON SCRIPT
+  # ==========================================
+
+  - name: Execute Edit ARP script
+    ansible.builtin.command:
+      cmd: >
+        /opt/librenms/librenms-ansible-inventory-plugin/bin/python3
+        /opt/librenms/librenms-ansible-inventory-plugin/tmp/edit_basic_arp.py
+    register: arp_raw
+    changed_when: false
+    failed_when: false
+
+
+  # ==========================================
+  # DEBUG RAW JSON
+  # ==========================================
+
+  - name: Display raw Python output
+    ansible.builtin.debug:
+      var: arp_raw.stdout
+
+
+  # ==========================================
+  # CONVERT JSON RESULT
+  # ==========================================
+
+  - name: Convert Edit ARP result to JSON
+    ansible.builtin.set_fact:
+      arp_result: "{{ arp_raw.stdout | trim | from_json }}"
+
+
+  # ==========================================
+  # DISPLAY RESULT
+  # ==========================================
+
+  - name: Display Edit ARP result
+    ansible.builtin.debug:
+      var: arp_result
+
+
+  # ==========================================
+  # SAVE RESULT
+  # ==========================================
+
+  - name: Save Edit ARP result
+    ansible.builtin.copy:
+      dest: "/opt/librenms/librenms-ansible-inventory-plugin/output/{{ ansible_host }}_edit_basic_arp.yml"
+      content: |
+        {{ arp_result | to_nice_yaml }}
+
+
+  # ==========================================
+  # FAIL IF SCRIPT FAILED
+  # ==========================================
+
+  - name: Fail if Edit ARP failed
+    ansible.builtin.fail:
+      msg: "{{ arp_result.error }}"
+    when: arp_result.status == "failed"
+
+
+  # ==========================================
+  # FINAL MESSAGE
+  # ==========================================
+
+  - name: Display result file
+    ansible.builtin.debug:
+      msg: >-
+        ARP entry edited successfully.
+        Result saved to
+        output/{{ ansible_host }}_edit_basic_arp.yml
