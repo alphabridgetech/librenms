@@ -86,7 +86,7 @@ class KunalApiController
     public function systeminfo($hostname)
 {
     
-    $playbook = "{$this->pluginPath}/playbooks/devicedetails.yml";
+    $playbook = "{$this->pluginPath}/playbooks/device/devicedetails.yml";
     $hosts    = "{$this->pluginPath}/hosts/{$hostname}.yml";
 
     // Run Ansible
@@ -184,7 +184,7 @@ class KunalApiController
             'interface' => 'required|string'
         ])['interface'];
 
-        $playbook = "{$this->pluginPath}/playbooks/interfacereset.yml";
+        $playbook = "{$this->pluginPath}/playbooks/interface/interfacereset.yml";
         $hosts = "{$this->pluginPath}/hosts/{$hostname}.yml";
 
         $output = $this->runAnsible($playbook, $hosts, [
@@ -209,7 +209,7 @@ class KunalApiController
         'status' => 'required|string'
     ]);
 
-    $playbook = "{$this->pluginPath}/playbooks/cngportstatus.yml";
+    $playbook = "{$this->pluginPath}/playbooks/interface/cngportstatus.yml";
     $hosts    = "{$this->pluginPath}/hosts/{$hostname}.yml";
 
     $output = $this->runAnsible($playbook, $hosts, [
@@ -230,7 +230,7 @@ class KunalApiController
 
 public function gethostname($hostname)
 {
-    $playbook = "{$this->pluginPath}/playbooks/gethostname.yml";
+    $playbook = "{$this->pluginPath}/playbooks/hostname/gethostname.yml";
     $hosts    = "{$this->pluginPath}/hosts/{$hostname}.yml";
 
     // Run ansible
@@ -263,7 +263,7 @@ public function gethostname($hostname)
     #------------------------------------------------------------
 public function getmtu($hostname)
 {
-    $playbook = "{$this->pluginPath}/playbooks/getmtu.yml";
+    $playbook = "{$this->pluginPath}/playbooks/mtu/getmtu.yml";
     $hosts    = "{$this->pluginPath}/hosts/{$hostname}.yml";
     // Run ansible
     $output = $this->runAnsible($playbook, $hosts);
@@ -294,7 +294,7 @@ public function getmtu($hostname)
 
     public function devicereboot(Request $request, $hostname)
     {
-        $playbook = "{$this->pluginPath}/rebootdevice.yml";
+        $playbook = "{$this->pluginPath}/playbooks/device/rebootdevice.yml";
         $hosts = "{$this->pluginPath}/hosts/{$hostname}.yml";
 
         $output = $this->runAnsible($playbook, $hosts);
@@ -314,7 +314,7 @@ public function getmtu($hostname)
             'hostname' => 'required|string'
         ])['hostname'];
 
-        $playbook = "{$this->pluginPath}/playbooks/changehostname.yml";
+        $playbook = "{$this->pluginPath}/playbooks/hostname/changehostname.yml";
         $hosts = "{$this->pluginPath}/hosts/{$hostname}.yml";
 
         $output = $this->runAnsible($playbook, $hosts, [
@@ -337,7 +337,7 @@ public function getmtu($hostname)
             'interface' => 'required|string',
         ]);
 
-        $playbook = "{$this->pluginPath}/playbooks/vlanconfigure.yml";
+        $playbook = "{$this->pluginPath}/playbooks/vlan/vlanconfigure.yml";
         $hosts = "{$this->pluginPath}/hosts/{$hostname}.yml";
 
         $output = $this->runAnsible($playbook, $hosts, [
@@ -362,7 +362,7 @@ public function getmtu($hostname)
             'interface' => 'required|string',
         ]);
 
-        $playbook = "{$this->pluginPath}/playbooks/vlanconfiguretrunk.yml";
+        $playbook = "{$this->pluginPath}/playbooks/vlan/vlanconfiguretrunk.yml";
         $hosts = "{$this->pluginPath}/hosts/{$hostname}.yml";
 
         $output = $this->runAnsible($playbook, $hosts, [
@@ -382,7 +382,7 @@ public function getmtu($hostname)
     public function ntp(Request $request, $hostname)
     {
 
-    $playbook = "{$this->pluginPath}/playbooks/ntp.yml";
+    $playbook = "{$this->pluginPath}/playbooks/ntp/ntp.yml";
     $hosts = "{$this->pluginPath}/hosts/{$hostname}.yml";
 
     $output = $this->runAnsible($playbook, $hosts);
@@ -421,7 +421,7 @@ public function getmtu($hostname)
             'interfaces' => $interfaces
         ], JSON_UNESCAPED_SLASHES);
 
-        $playbook = "{$this->pluginPath}/playbooks/network_interface_config.yml";
+        $playbook = "{$this->pluginPath}/playbooks/interface/network_interface_config.yml";
         $hosts = "{$this->pluginPath}/hosts/{$hostname}.yml";
 
         $cmd = "source {$this->venv} && ansible-playbook -i {$hosts} {$playbook} --extra-vars 'config_json={$configJson}' 2>&1";
@@ -457,7 +457,7 @@ public function getmtu($hostname)
         // print_r($commands); // Debug commands
         // die;
         
-        $playbook = "{$this->pluginPath}/playbooks/network_cmd_config.yml";
+        $playbook = "{$this->pluginPath}/playbooks/push/network_cmd_config.yml";
         $hosts = "{$this->pluginPath}/hosts/{$hostname}.yml";
 
 
@@ -483,7 +483,7 @@ public function getmtu($hostname)
             'interface' => 'required'
         ])['interface'];
 
-        $playbook = "{$this->pluginPath}/playbooks/network_interface_show.yml";
+        $playbook = "{$this->pluginPath}/playbooks/interface/network_interface_show.yml";
         $hosts = "{$this->pluginPath}/hosts/{$hostname}.yml";
 
         
@@ -521,7 +521,7 @@ public function getmtu($hostname)
         $new = $request->validate([
             'mtu' => 'required|integer|min:1518|max:9216'
         ])['mtu'];
-        $playbook = "{$this->pluginPath}/playbooks/changemtu.yml";
+        $playbook = "{$this->pluginPath}/playbooks/mtu/changemtu.yml";
         $hosts = "{$this->pluginPath}/hosts/{$hostname}.yml";
         $output = $this->runAnsible($playbook, $hosts, [
             "new_mtu" => $new
@@ -539,7 +539,7 @@ public function getmtu($hostname)
     #------------------------------------------------------------
     public function getlldp($hostname)
 {
-    $playbook = "{$this->pluginPath}/playbooks/getlldp.yml";
+    $playbook = "{$this->pluginPath}/playbooks/lldp/getlldp.yml";
     $hosts    = "{$this->pluginPath}/hosts/{$hostname}.yml";
     // Run ansible
     $output = $this->runAnsible($playbook, $hosts);
@@ -564,7 +564,7 @@ public function getmtu($hostname)
     #------------------------------------------------------------
     public function getlldpinterface($hostname)
 {
-    $playbook = "{$this->pluginPath}/playbooks/getlldpinterface.yml";
+    $playbook = "{$this->pluginPath}/playbooks/lldp/getlldpinterface.yml";
     $hosts    = "{$this->pluginPath}/hosts/{$hostname}.yml";
     // Run ansible
     $output = $this->runAnsible($playbook, $hosts);
@@ -596,7 +596,7 @@ public function getmtu($hostname)
             'timer' => 'nullable|integer|min:5|max:65534',
             'reinit' => 'nullable|integer|min:2|max:5',
         ]);
-        $playbook = "{$this->pluginPath}/playbooks/changelldp.yml";
+        $playbook = "{$this->pluginPath}/playbooks/lldp/changelldp.yml";
         $hosts = "{$this->pluginPath}/hosts/{$hostname}.yml";
         $output = $this->runAnsible($playbook, $hosts, [
             "protocol_state" => $data['protocol_state'],
@@ -616,26 +616,40 @@ public function getmtu($hostname)
 
 public function getvlan($hostname)
 {
-    $playbook = "{$this->pluginPath}/playbooks/getvlan.yml";
+    $playbook = "{$this->pluginPath}/playbooks/vlan/getvlan.yml";
     $hosts    = "{$this->pluginPath}/hosts/{$hostname}.yml";
-
-    // Run ansible
-    $ansibleOutput = $this->runAnsible($playbook, $hosts);
-
-    // YAML output file
     $yamlFile = "{$this->pluginPath}/output/{$hostname}_getvlan.yml";
-
-    if (!file_exists($yamlFile)) {
-        return $this->error(
-            "VLAN output file not found",
-            $ansibleOutput
-        );
-    }
 
     if (!function_exists('yaml_parse_file')) {
         return $this->error(
             "PHP YAML extension missing",
             null
+        );
+    }
+
+    // If we already have a result from a previous run, serve it immediately
+    // and kick off a fresh SSH fetch in the background for next time -
+    // avoids making every page load wait on a live SSH round-trip.
+    if (file_exists($yamlFile)) {
+        $cached = yaml_parse_file($yamlFile);
+        $vlans = is_array($cached['vlans'] ?? null) ? $cached['vlans'] : [];
+
+        $this->runAnsibleAsync($playbook, $hosts);
+
+        return $this->success([
+            "ip"     => $cached['ip'] ?? $hostname,
+            "vlans"  => $vlans,
+            "cached" => true,
+        ]);
+    }
+
+    // No cached result yet (first load) - fetch synchronously.
+    $ansibleOutput = $this->runAnsible($playbook, $hosts);
+
+    if (!file_exists($yamlFile)) {
+        return $this->error(
+            "VLAN output file not found",
+            $ansibleOutput
         );
     }
 
@@ -649,8 +663,9 @@ public function getvlan($hostname)
     }
 
     return $this->success([
-        "ip"    => $data['ip'] ?? $hostname,
-        "vlans" => $data['vlans']
+        "ip"     => $data['ip'] ?? $hostname,
+        "vlans"  => $data['vlans'],
+        "cached" => false,
     ]);
 }
 
@@ -663,14 +678,31 @@ public function getvlan($hostname)
 
     public function showvlaninterface($hostname)
 {
-    $playbook = "{$this->pluginPath}/playbooks/getinterface.yml";
+    $playbook = "{$this->pluginPath}/playbooks/interface/getinterface.yml";
     $hosts    = "{$this->pluginPath}/hosts/{$hostname}.yml";
-
-    // Run Ansible
-    $ansibleOutput = $this->runAnsible($playbook, $hosts);
-
-    // YAML output file
     $yamlFile = "{$this->pluginPath}/output/{$hostname}_getinterface.yml";
+
+    // If we already have a result from a previous run, serve it immediately
+    // and kick off a fresh SSH fetch in the background for next time -
+    // avoids making every page load wait on a live SSH round-trip.
+    if (file_exists($yamlFile)) {
+        $cached = yaml_parse_file($yamlFile);
+        $interfaces = is_array($cached['interfaces'] ?? null) ? $cached['interfaces'] : [];
+
+        $this->runAnsibleAsync($playbook, $hosts);
+
+        return $this->success([
+            "ip"           => $cached['ip'] ?? $hostname,
+            "current_time" => $cached['current_time'] ?? null,
+            "interfaces"   => $interfaces,
+            "count"        => count($interfaces),
+            "raw"          => $cached,
+            "cached"       => true,
+        ]);
+    }
+
+    // No cached result yet (first load) - fetch synchronously.
+    $ansibleOutput = $this->runAnsible($playbook, $hosts);
 
     if (!file_exists($yamlFile)) {
         return $this->error(
@@ -700,7 +732,8 @@ public function getvlan($hostname)
         "current_time" => $data['current_time'] ?? null,
         "interfaces"   => $data['interfaces'],
         "count"        => count($data['interfaces']),
-        "raw"          => $data
+        "raw"          => $data,
+        "cached"       => false,
     ]);
 }
 
@@ -712,7 +745,7 @@ public function getvlan($hostname)
             'vlan_name' => 'required|string',
         ]);
 
-        $playbook = "{$this->pluginPath}/addvlan.yml";
+        $playbook = "{$this->pluginPath}/playbooks/vlan/addvlan.yml";
         $hosts = "{$this->pluginPath}/hosts/{$hostname}.yml";
 
         $output = $this->runAnsible($playbook, $hosts, [
@@ -756,7 +789,7 @@ public function getvlan($hostname)
         
 
         // Ansible
-        $playbook = "{$this->pluginPath}/playbooks/tftpupload.yml";
+        $playbook = "{$this->pluginPath}/playbooks/tftp/tftpupload.yml";
         $hosts    = "{$this->pluginPath}/hosts/{$hostname}.yml";
 
        
@@ -785,7 +818,7 @@ public function getvlan($hostname)
         $device = \App\Models\Device::where('hostname', $hostname)->first();
         $deviceId = $device ? $device->device_id : null;
 
-        $playbook = "{$this->pluginPath}/playbooks/tftpexport.yml";
+        $playbook = "{$this->pluginPath}/playbooks/tftp/tftpexport.yml";
         $hosts    = "{$this->pluginPath}/hosts/{$hostname}.yml";
 
         $destination_file = $hostname . '_' . date('Y-m-d_His') . '_' . $request->filename;
@@ -867,7 +900,7 @@ public function getvlan($hostname)
             'vlan_delete' => 'nullable|string',
         ]);
 
-        $playbook = "{$this->pluginPath}/addvlanbatch.yml";
+        $playbook = "{$this->pluginPath}/playbooks/vlan/addvlanbatch.yml";
         $hosts = "{$this->pluginPath}/hosts/{$hostname}.yml";
 
         $extraVars = [];
@@ -892,7 +925,7 @@ public function getvlan($hostname)
         'vlan_delete' => 'required'
     ]);
 
-    $playbook = "{$this->pluginPath}/addvlanbatch.yml";
+    $playbook = "{$this->pluginPath}/playbooks/vlan/addvlanbatch.yml";
     $hosts    = "{$this->pluginPath}/hosts/{$hostname}.yml";
 
     $extraVars = [
@@ -916,7 +949,7 @@ public function getvlan($hostname)
             'mask' => 'required|array|min:1',
         ]);
 
-        $playbook = "{$this->pluginPath}/playbooks/voicevlanbatch.yml";
+        $playbook = "{$this->pluginPath}/playbooks/voicevlan/voicevlanbatch.yml";
         $hosts    = "{$this->pluginPath}/hosts/{$hostname}.yml";
 
         $outputs = [];
@@ -953,14 +986,29 @@ public function getvlan($hostname)
 
     public function voicevlanshow(Request $request, $hostname)
     {
-        $playbook = "{$this->pluginPath}/playbooks/voicevlanshow.yml";
+        $playbook = "{$this->pluginPath}/playbooks/voicevlan/voicevlanshow.yml";
         $hosts    = "{$this->pluginPath}/hosts/{$hostname}.yml";
-
-        // Run Ansible
-        $ansibleOutput = $this->runAnsible($playbook, $hosts);
-
-        // YAML output file
         $yamlFile = "{$this->pluginPath}/output/{$hostname}_voicevlanshow.yml";
+
+        // If we already have a result from a previous run, serve it immediately
+        // and kick off a fresh SSH fetch in the background for next time -
+        // avoids making every page load wait on a live SSH round-trip.
+        if (file_exists($yamlFile)) {
+            $cached = yaml_parse_file($yamlFile);
+            $macAddresses = is_array($cached['mac_addresses'] ?? null) ? $cached['mac_addresses'] : [];
+
+            $this->runAnsibleAsync($playbook, $hosts);
+
+            return $this->success([
+                "ip"            => $cached['ip'] ?? $hostname,
+                "mac_addresses" => $macAddresses,
+                "raw"           => $cached,
+                "cached"        => true,
+            ]);
+        }
+
+        // No cached result yet (first load) - fetch synchronously.
+        $ansibleOutput = $this->runAnsible($playbook, $hosts);
 
         if (!file_exists($yamlFile)) {
             return $this->error(
@@ -987,7 +1035,8 @@ public function getvlan($hostname)
         return $this->success([
             "ip"            => $data['ip'] ?? $hostname,
             "mac_addresses" => $macAddresses,
-            "raw"           => $data
+            "raw"           => $data,
+            "cached"        => false,
         ]);
     }
 
@@ -996,7 +1045,7 @@ public function getvlan($hostname)
     #------------------------------------------------------------
     public function showbasicarp($hostname)
     {
-        $playbook = "{$this->pluginPath}/playbooks/show_basic_arp.yml";
+        $playbook = "{$this->pluginPath}/playbooks/arp/show_basic_arp.yml";
         $hosts    = "{$this->pluginPath}/hosts/{$hostname}.yml";
         $yamlFile = "{$this->pluginPath}/output/{$hostname}_show_basic_arp.yml";
 
@@ -1065,7 +1114,7 @@ public function getvlan($hostname)
             'interface_vlan' => 'required|integer|min:1|max:4094',
         ]);
 
-        $playbook = "{$this->pluginPath}/playbooks/add_basic_arp.yml";
+        $playbook = "{$this->pluginPath}/playbooks/arp/add_basic_arp.yml";
         $hosts    = "{$this->pluginPath}/hosts/{$hostname}.yml";
 
         $ansibleOutput = $this->runAnsible($playbook, $hosts, [
@@ -1101,7 +1150,7 @@ public function getvlan($hostname)
             'interface_vlan' => 'required|integer|min:1|max:4094',
         ]);
 
-        $playbook = "{$this->pluginPath}/playbooks/edit_basic_arp.yml";
+        $playbook = "{$this->pluginPath}/playbooks/arp/edit_basic_arp.yml";
         $hosts    = "{$this->pluginPath}/hosts/{$hostname}.yml";
 
         $ansibleOutput = $this->runAnsible($playbook, $hosts, [
@@ -1136,7 +1185,7 @@ public function getvlan($hostname)
             'interface_vlan' => 'required|integer|min:1|max:4094',
         ]);
 
-        $playbook = "{$this->pluginPath}/playbooks/delete_basic_arp.yml";
+        $playbook = "{$this->pluginPath}/playbooks/arp/delete_basic_arp.yml";
         $hosts    = "{$this->pluginPath}/hosts/{$hostname}.yml";
 
         $ansibleOutput = $this->runAnsible($playbook, $hosts, [

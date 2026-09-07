@@ -219,7 +219,7 @@ trait HandlesPushConfiguration
             $inventoryContent = $this->generateInventoryYaml($hostname, $hostnameip, $ansibleUser, $ansiblePassword, $snmpCommunity);
             file_put_contents($inventoryFile, $inventoryContent);
 
-            $playbook = $this->pluginPath . "/playbooks/firstconfiguploadip.yml";
+            $playbook = $this->pluginPath . "/playbooks/push/firstconfiguploadip.yml";
             $extraVars = [
                 'cli_commands' => $commands,
             ];
@@ -357,7 +357,7 @@ trait HandlesPushConfiguration
             $inventoryContent = $this->generateInventoryYaml($hostname, $hostnameip, $ansibleUser, $ansiblePassword, $snmpCommunity);
             file_put_contents($inventoryFile, $inventoryContent);
 
-            $playbook = $this->pluginPath . "/playbooks/pushconfigtempuploadip.yml";
+            $playbook = $this->pluginPath . "/playbooks/push/pushconfigtempuploadip.yml";
             $extraVars = [
                 'cli_commands' => $commands,
             ];

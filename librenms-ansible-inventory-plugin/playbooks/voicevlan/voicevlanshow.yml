@@ -26,18 +26,22 @@
           PASSWORD = "{{ ansible_password }}"
           OUTPUT_FILE = "{{ output_dir }}/{{ ansible_host }}_voicevlanshow.yml"
 
-          def read_all(chan, timeout=5):
-              end = time.time() + timeout
-              output = ""
-              while time.time() < end:
-                  if chan.recv_ready():
-                      data = chan.recv(65535).decode(errors="ignore")
-                      output += data
-                      if "--More--" in data:
-                          chan.send(" ")
+          ansi_re = re.compile(r'\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])')
+
+
+          def read_until_prompt(shell, prompt_regex, timeout=10):
+              buf = ""
+              end_time = time.time() + timeout
+              while time.time() < end_time:
+                  if shell.recv_ready():
+                      buf += shell.recv(65535).decode(errors="ignore")
+                      if re.search(prompt_regex, buf):
+                          return buf
+                      end_time = time.time() + 0.5
                   else:
-                      time.sleep(0.2)
-              return output
+                      time.sleep(0.1)
+              return buf
+
 
           try:
               ssh = paramiko.SSHClient()
@@ -52,21 +56,43 @@
               )
 
               shell = ssh.invoke_shell()
-              time.sleep(1)
-              shell.recv(65535)
+              time.sleep(0.5)
+
+              initial = read_until_prompt(shell, r'[#>]\s*$', timeout=3)
+              m = re.search(r'([A-Za-z0-9\-\._]+[#>])\s*$', initial.strip())
+              prompt = re.escape(m.group(1)) if m else r'[#>]\s*$'
 
               shell.send("enable\n")
-              time.sleep(0.5)
+              time.sleep(0.3)
               shell.send(PASSWORD + "\n")
-              time.sleep(0.5)
+              time.sleep(0.3)
+              read_until_prompt(shell, prompt, timeout=2)
 
               shell.send("terminal length 0\n")
-              time.sleep(0.5)
+              time.sleep(0.2)
+              read_until_prompt(shell, prompt, timeout=1)
 
               shell.send("show running-config non-interface | include voice-vlan\n")
-              output = read_all(shell, 5)
+              time.sleep(0.3)
+
+              output = ""
+              deadline = time.time() + 20
+              while time.time() < deadline:
+                  if shell.recv_ready():
+                      chunk = shell.recv(65535).decode(errors="ignore")
+                      output += chunk
+                      if "--More--" in chunk:
+                          shell.send(" ")
+                          deadline = time.time() + 20
+                          continue
+                      if re.search(prompt, output):
+                          break
+                  else:
+                      time.sleep(0.2)
 
               ssh.close()
+
+              output = ansi_re.sub("", output).replace("--More--", "")
 
               voice_macs = []
 

@@ -14,6 +14,19 @@
             transform: rotate(360deg);
         }
     }
+
+    .tab-pane .dataTables_wrapper thead th {
+        white-space: nowrap;
+    }
+
+    .tab-pane .table-responsive {
+        margin-top: 15px;
+        border: none;
+    }
+
+    .tab-pane .dataTables_wrapper {
+        margin-bottom: 10px;
+    }
 </style>
 
 <link rel="stylesheet" href="//cdn.datatables.net/1.10.25/css/dataTables.bootstrap.min.css">
@@ -36,24 +49,23 @@
             <button class="btn btn-primary" id="btnAddVlan">
                 <i class="glyphicon glyphicon-plus"></i> Add
             </button>
-            <div class="row" style="margin-top:15px;">
-                <div class="col-sm-6">
-                    <p id="pagingInfo" class="small-muted">Loading...</p>
-                </div>
+            <span id="vlan_cache_note" class="text-muted" style="display:none; margin-left:10px;">
+                <i class="fa fa-spinner fa-spin"></i> showing last known data, refreshing in background...
+            </span>
+            <div class="table-responsive">
+                <table id="vlanTable" class="table table-striped table-bordered table-condensed" style="width:auto;">
+                    <thead>
+                        <tr>
+                            <th width="40">
+                                <input type="checkbox" id="selectAll">
+                            </th>
+                            <th width="100">VLAN ID</th>
+                            <th width="200">VLAN Name</th>
+                            {{-- <th width="80">Operate</th> --}}
+                        </tr>
+                    </thead>
+                </table>
             </div>
-
-            <table id="vlanTable" class="table table-striped table-bordered table-condensed">
-                <thead>
-                    <tr>
-                        <th>
-                            <input type="checkbox" id="selectAll">
-                        </th>
-                        <th>VLAN ID</th>
-                        <th>VLAN Name</th>
-                        {{-- <th width="80">Operate</th> --}}
-                    </tr>
-                </thead>
-            </table>
 
 
             <div class="row" style="margin-top:10px;">
@@ -160,27 +172,26 @@
             <button class="btn btn-primary" id="btnAddVlan">
                 <i class="glyphicon glyphicon-plus"></i> Add
             </button>
-            <div class="row" style="margin-top:15px;">
-                <div class="col-sm-6">
-                    <p id="pagingInfo" class="small-muted">Loading...</p>
-                </div>
+            <span id="interface_vlan_cache_note" class="text-muted" style="display:none; margin-left:10px;">
+                <i class="fa fa-spinner fa-spin"></i> showing last known data, refreshing in background...
+            </span>
+            <div class="table-responsive">
+                <table id="interfaceTable" class="table table-striped table-bordered table-condensed" style="width:auto;">
+                    <thead>
+                        <tr>
+                            <th width="40">
+                                <input type="checkbox" id="selectAll">
+                            </th>
+                            <th width="100">Port</th>
+                            <th width="90">Status</th>
+                            <th width="110">Vlan</th>
+                            <th width="90">Duplex</th>
+                            <th width="110">Speed</th>
+                            <th width="100">Type</th>
+                        </tr>
+                    </thead>
+                </table>
             </div>
-
-            <table id="interfaceTable" class="table table-striped table-bordered table-condensed">
-                <thead>
-                    <tr>
-                        <th width="40">
-                            <input type="checkbox" id="selectAll">
-                        </th>
-                        <th>Port</th>
-                        <th>Status</th>
-                        <th>Vlan</th>
-                        <th>Duplex</th>
-                        <th>Speed</th>
-                        <th>Type</th>
-                    </tr>
-                </thead>
-            </table>
 
 
 
@@ -208,24 +219,23 @@
             <button class="btn btn-primary" id="btnAddvoiceVlan">
                 <i class="glyphicon glyphicon-plus"></i> Add
             </button>
-            <div class="row" style="margin-top:15px;">
-                <div class="col-sm-6">
-                    <p id="pagingInfo" class="small-muted">Loading...</p>
-                </div>
+            <span id="voice_vlan_cache_note" class="text-muted" style="display:none; margin-left:10px;">
+                <i class="fa fa-spinner fa-spin"></i> showing last known data, refreshing in background...
+            </span>
+            <div class="table-responsive">
+                <table id="voicevlanTable" class="table table-striped table-bordered table-condensed" style="width:auto;">
+                    <thead>
+                        <tr>
+                            <th width="40">
+                                <input type="checkbox" id="selectAll">
+                            </th>
+                            <th width="160">MAC Address</th>
+                            <th width="160">MAC MASK</th>
+                            {{-- <th width="80">Operate</th> --}}
+                        </tr>
+                    </thead>
+                </table>
             </div>
-
-            <table id="voicevlanTable" class="table table-striped table-bordered table-condensed">
-                <thead>
-                    <tr>
-                        <th>
-                            <input type="checkbox" id="selectAll">
-                        </th>
-                        <th>MAC Address</th>
-                        <th>MAC MASK</th>
-                        {{-- <th width="80">Operate</th> --}}
-                    </tr>
-                </thead>
-            </table>
 
 
             <div class="row" style="margin-top:10px;">
@@ -318,6 +328,7 @@
     var vlanTable = $('#vlanTable').DataTable({
         processing: true,
         serverSide: false,
+        autoWidth: false,
         ajax: {
             url: "/api/v0/getvlan/" + DEVICE_IP,
             type: "GET",
@@ -326,6 +337,7 @@
                 "Accept": "application/json"
             },
             dataSrc: function(json) {
+                document.getElementById('vlan_cache_note').style.display = json.cached ? "inline" : "none";
                 if (json.vlans) return json.vlans;
                 return json;
             }
@@ -373,6 +385,7 @@
     var voicevlanTable = $('#voicevlanTable').DataTable({
         processing: true,
         serverSide: false,
+        autoWidth: false,
         ajax: {
             url: "/api/v0/voicevlanshow/" + DEVICE_IP,
             type: "GET",
@@ -381,6 +394,7 @@
                 "Accept": "application/json"
             },
             dataSrc: function(json) {
+                document.getElementById('voice_vlan_cache_note').style.display = json.cached ? "inline" : "none";
                 return json.mac_addresses ?? json;
             }
         },
@@ -416,6 +430,7 @@
     var interfaceTable = $('#interfaceTable').DataTable({
         processing: true,
         serverSide: false,
+        autoWidth: false,
         ajax: {
             url: "/api/v0/vlan/interface/" + DEVICE_IP,
             type: "GET",
@@ -424,6 +439,7 @@
                 "Accept": "application/json"
             },
             dataSrc: function(json) {
+                document.getElementById('interface_vlan_cache_note').style.display = json.cached ? "inline" : "none";
                 return json.interfaces || [];
             }
         },

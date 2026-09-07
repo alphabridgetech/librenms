@@ -147,6 +147,8 @@
               arp_entries = []
               lines = arp_output.splitlines()
 
+              vlan_only_re = re.compile(r'^VLAN(\d+)$', re.IGNORECASE)
+
               for line in lines:
                   line = line.strip()
 
@@ -154,10 +156,16 @@
                       fields = line.split()
 
                       if len(fields) >= 6:
+                          interface_field = " ".join(fields[5:])
+
+                          vlan_match = vlan_only_re.match(interface_field)
+                          if vlan_match:
+                              interface_field = int(vlan_match.group(1))
+
                           arp_entries.append({
                               "IP Address": fields[1],
                               "MAC Address": fields[3],
-                              "Interface VLAN": " ".join(fields[5:])
+                              "Interface VLAN": interface_field
                           })
 
               # ==========================================
@@ -217,7 +225,12 @@
 
     - name: Display Show ARP result
       ansible.builtin.debug:
-        var: arp_result
+        msg: |
+          ip: {{ arp_result.ip }}
+          arp_entries:
+          {{ arp_result.arp_entries | to_nice_yaml(indent=4) | indent(2, True) }}
+          status: {{ arp_result.status }}
+
 
     # ==========================================
     # SAVE RESULT
@@ -225,9 +238,13 @@
 
     - name: Save Show ARP result
       ansible.builtin.copy:
-        dest: "/opt/librenms/librenms-ansible-inventory-plugin/output/{{ ansible_host }}_show_basic_arp.yml"
+        dest: "/opt/librenms/librenms-ansible-inventory-plugin/output/\
+               {{ ansible_host }}_show_basic_arp.yml"
         content: |
-          {{ arp_result | to_nice_yaml }}
+          ip: {{ arp_result.ip }}
+          arp_entries:
+          {{ arp_result.arp_entries | to_nice_yaml(indent=4) | indent(2, True) }}
+          status: {{ arp_result.status }}
 
     # ==========================================
     # FAIL IF SCRIPT FAILED
@@ -244,4 +261,5 @@
 
     - name: Display result file
       ansible.builtin.debug:
-        msg: "ARP table collected successfully. Result saved to output/{{ ansible_host }}_show_basic_arp.yml"
+        msg: "ARP table collected successfully.\
+              Result saved to output/{{ ansible_host }}_show_basic_arp.yml"

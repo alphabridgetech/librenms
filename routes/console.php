@@ -252,7 +252,7 @@ Artisan::command('backup:startup-configs', function () {
     $this->info("Starting startup-config backups for " . $devices->count() . " devices (Interval: {$intervalDays} day(s)) using TFTP server: " . $tftpServer);
 
     $pluginPath = base_path('librenms-ansible-inventory-plugin');
-    $playbook = "{$pluginPath}/playbooks/tftpexport.yml";
+    $playbook = "{$pluginPath}/playbooks/tftp/tftpexport.yml";
 
     foreach ($devices as $device) {
         $hostname = $device->hostname;

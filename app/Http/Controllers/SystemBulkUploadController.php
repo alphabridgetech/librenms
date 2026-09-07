@@ -311,7 +311,7 @@ class SystemBulkUploadController extends Controller
         $inventoryContent = $this->generateInventoryYaml($hostname, $device->hostname, $ansibleUser, $ansiblePassword, $snmpCommunity);
         file_put_contents($hosts, $inventoryContent);
 
-        $playbook = $this->pluginPath . "/playbooks/tftpupload.yml";
+        $playbook = $this->pluginPath . "/playbooks/tftp/tftpupload.yml";
 
         $tftpServer = \DB::table('config')->where('config_name', 'tftp_server_ip')->value('config_value');
         if (empty($tftpServer) || $tftpServer === 'localhost' || $tftpServer === '127.0.0.1') {

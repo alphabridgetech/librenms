@@ -850,7 +850,7 @@ class BackupController extends Controller
                 }
 
                 $pluginPath = base_path('librenms-ansible-inventory-plugin');
-                $playbook = "{$pluginPath}/playbooks/tftpexport.yml";
+                $playbook = "{$pluginPath}/playbooks/tftp/tftpexport.yml";
                 $hostname = $device->hostname;
                 $ipOrHost = !empty($device->overwrite_ip) ? $device->overwrite_ip : $device->hostname;
                 $hostsFile = "{$pluginPath}/hosts/{$hostname}.yml";
