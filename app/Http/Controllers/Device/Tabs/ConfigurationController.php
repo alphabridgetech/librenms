@@ -328,6 +328,8 @@ class ConfigurationController implements DeviceTab
             $tabs[] = ['name' => __('MTU configuration'), 'url' => 'mtuconfig'];
             $tabs[] = ['name' => __('LLDP configuration'), 'url' => 'lldpconfig'];
             $tabs[] = ['name' => __('ARP configuration'), 'url' => 'arpconfig'];
+            $tabs[] = ['name' => __('BackupLink configuration'), 'url' => 'backuplinkconfig'];
+            $tabs[] = ['name' => __('Port Channel'), 'url' => 'portchannelconfig'];
         }
 
         return $tabs;

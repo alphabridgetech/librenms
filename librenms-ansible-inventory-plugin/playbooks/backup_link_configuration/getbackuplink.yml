@@ -1,0 +1,377 @@
+# ============================================================================
+# File        : getbackuplink.yml
+# Feature     : BackupLink Protocol Global Configuration - GET
+# Device      : ABTPL AS210T Ethernet Switch
+#
+# Purpose:
+#   Collect BackupLink Protocol Global Configuration.
+#
+# CLI:
+#   show backup-link-group <GROUP_ID>
+#
+# Output:
+#   output/<device_ip>_backuplink.yml
+#
+# Output Format:
+#   Simple YAML
+# ============================================================================
+
+- name: Get BackupLink Protocol Global Configuration
+  hosts: alphabridge_devices
+  gather_facts: no
+
+  vars:
+
+    # BackupLink supports Group IDs 1 through 8
+    backup_group_ids:
+      - 1
+      - 2
+      - 3
+      - 4
+      - 5
+      - 6
+      - 7
+      - 8
+
+  tasks:
+
+    # ========================================================================
+    # Create Python SSH Script
+    # ========================================================================
+
+    - name: Create Python SSH script for BackupLink GET
+      ansible.builtin.copy:
+        dest: "/opt/librenms/librenms-ansible-inventory-plugin/tmp/get_backuplink.py"
+        mode: "0755"
+        content: |
+          #!/usr/bin/env python3
+
+          import paramiko
+          import time
+          import re
+          import sys
+
+          HOST = "{{ ansible_host }}"
+          USER = "{{ ansible_user }}"
+          PASSWORD = "{{ ansible_password }}"
+
+          GROUP_IDS = list(range(1, 9))
+
+          # ==================================================================
+          # Read CLI output until prompt
+          # ==================================================================
+
+          def read_until_prompt(shell, timeout=10):
+
+              buf = ""
+              end = time.time() + timeout
+
+              while time.time() < end:
+
+                  if shell.recv_ready():
+
+                      data = shell.recv(65535).decode(
+                          errors="ignore"
+                      )
+
+                      buf += data
+
+                      if re.search(
+                          r'Switch(?:_config)?[#>]\s*$',
+                          buf
+                      ):
+                          return buf
+
+                      end = time.time() + 1
+
+                  else:
+                      time.sleep(0.1)
+
+              return buf
+
+          # ==================================================================
+          # Send command
+          # ==================================================================
+
+          def send(shell, command, wait=0.7):
+
+              shell.send(command + "\n")
+
+              time.sleep(wait)
+
+              return read_until_prompt(shell)
+
+          # ==================================================================
+          # Clean CLI Output
+          # ==================================================================
+
+          def clean_output(text):
+
+              text = text.replace("\r", "")
+
+              text = re.sub(
+                  r'\x1b\[[0-9;?]*[ -/]*[@-~]',
+                  '',
+                  text
+              )
+
+              return text
+
+          # ==================================================================
+          # Parse BackupLink Group
+          # ==================================================================
+
+          def parse_group(group_id, result):
+
+              result = clean_output(result)
+
+              mode_match = re.search(
+                  r'Preemption Mode\s*:\s*(.+)',
+                  result,
+                  re.IGNORECASE
+              )
+
+              delay_match = re.search(
+                  r'Preemption Delay\s*:\s*(\d+)',
+                  result,
+                  re.IGNORECASE
+              )
+
+              # --------------------------------------------------------------
+              # Group is not configured
+              # --------------------------------------------------------------
+
+              if not mode_match:
+                  return None
+
+              cli_mode = mode_match.group(1).strip()
+
+              # --------------------------------------------------------------
+              # Convert CLI mode to GUI mode
+              # --------------------------------------------------------------
+
+              if cli_mode.lower() == "bandwidth":
+
+                  gui_mode = (
+                      "High Bandwidth Port Preempt First"
+                  )
+
+              elif cli_mode.lower() == "active":
+
+                  gui_mode = (
+                      "Active Port Preempt First"
+                  )
+
+              elif cli_mode.lower() == "forced":
+
+                  gui_mode = (
+                      "Active Port Preempt First"
+                  )
+
+              elif cli_mode.lower() in [
+                  "none",
+                  "no preemption"
+              ]:
+
+                  gui_mode = "No Preemption"
+
+              else:
+
+                  gui_mode = cli_mode
+
+              # --------------------------------------------------------------
+              # Delay
+              # --------------------------------------------------------------
+
+              if delay_match:
+                  gui_delay = delay_match.group(1)
+              else:
+                  gui_delay = "0"
+
+              return {
+                  "group_id": str(group_id),
+                  "preemption_mode": gui_mode,
+                  "preemption_delay": gui_delay
+              }
+
+          # ==================================================================
+          # Create Simple YAML Output
+          # ==================================================================
+
+          def create_yaml(rows):
+
+              print("ip: " + HOST)
+              print("backuplink_global_configuration:")
+
+              if rows:
+
+                  for row in rows:
+
+                      print(
+                          "    - group_id: "
+                          + row["group_id"]
+                      )
+
+                      print(
+                          "      preemption_mode: "
+                          + row["preemption_mode"]
+                      )
+
+                      print(
+                          "      preemption_delay: "
+                          + row["preemption_delay"]
+                      )
+
+              else:
+
+                  print("    []")
+
+          # ==================================================================
+          # SSH Connection
+          # ==================================================================
+
+          ssh = paramiko.SSHClient()
+
+          ssh.set_missing_host_key_policy(
+              paramiko.AutoAddPolicy()
+          )
+
+          try:
+
+              ssh.connect(
+                  HOST,
+                  username=USER,
+                  password=PASSWORD,
+                  look_for_keys=False,
+                  allow_agent=False,
+                  timeout=10,
+                  banner_timeout=10,
+                  auth_timeout=10
+              )
+
+              shell = ssh.invoke_shell()
+
+              time.sleep(1)
+
+              first = read_until_prompt(shell)
+
+              # ==============================================================
+              # Enter enable mode
+              # ==============================================================
+
+              if "Switch>" in first:
+
+                  shell.send("enable\n")
+
+                  time.sleep(0.5)
+
+                  enable_output = read_until_prompt(shell)
+
+                  if "assword" in enable_output:
+
+                      shell.send(PASSWORD + "\n")
+
+                      time.sleep(0.5)
+
+                      read_until_prompt(shell)
+
+              # ==============================================================
+              # Get every BackupLink group
+              # ==============================================================
+
+              all_groups = []
+
+              for group_id in GROUP_IDS:
+
+                  command = (
+                      f"show backup-link-group {group_id}"
+                  )
+
+                  result = send(
+                      shell,
+                      command,
+                      wait=0.7
+                  )
+
+                  parsed = parse_group(
+                      group_id,
+                      result
+                  )
+
+                  if parsed:
+
+                      all_groups.append(parsed)
+
+              # ==============================================================
+              # Close SSH
+              # ==============================================================
+
+              shell.close()
+              ssh.close()
+
+              # ==============================================================
+              # Sort by Group ID
+              # ==============================================================
+
+              all_groups.sort(
+                  key=lambda x: int(x["group_id"])
+              )
+
+              # ==============================================================
+              # Create YAML
+              # ==============================================================
+
+              create_yaml(all_groups)
+
+              sys.exit(0)
+
+          except Exception as e:
+
+              try:
+                  shell.close()
+              except Exception:
+                  pass
+
+              try:
+                  ssh.close()
+              except Exception:
+                  pass
+
+              print(
+                  "BackupLink GET failed: "
+                  + str(e),
+                  file=sys.stderr
+              )
+
+              sys.exit(1)
+
+    # ========================================================================
+    # Run GET Script
+    # ========================================================================
+
+    - name: Run BackupLink GET script
+      ansible.builtin.command: >
+        /opt/librenms/librenms-ansible-inventory-plugin/bin/python3
+        /opt/librenms/librenms-ansible-inventory-plugin/tmp/get_backuplink.py
+      register: backup_get
+      changed_when: false
+      failed_when: backup_get.rc != 0
+
+    # ========================================================================
+    # Save GET YAML Output
+    # ========================================================================
+
+    - name: Save BackupLink GET YAML
+      ansible.builtin.copy:
+        dest: "/opt/librenms/librenms-ansible-inventory-plugin/output/{{ ansible_host }}_backuplink.yml"
+        content: |
+          {{ backup_get.stdout }}
+      delegate_to: localhost
+
+    # ========================================================================
+    # Display GET YAML Output
+    # ========================================================================
+
+    - name: Display BackupLink GET YAML
+      ansible.builtin.debug:
+        msg: "{{ backup_get.stdout }}"

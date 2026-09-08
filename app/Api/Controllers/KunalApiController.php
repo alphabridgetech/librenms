@@ -1209,6 +1209,281 @@ public function getvlan($hostname)
         ]);
     }
 
+    #------------------------------------------------------------
+    #          BACKUPLINK PROTOCOL GLOBAL CONFIGURATION - SHOW
+    #------------------------------------------------------------
+    public function getbackuplink($hostname)
+    {
+        $playbook = "{$this->pluginPath}/playbooks/backup_link_configuration/getbackuplink.yml";
+        $hosts    = "{$this->pluginPath}/hosts/{$hostname}.yml";
+        $yamlFile = "{$this->pluginPath}/output/{$hostname}_backuplink.yml";
+
+        // If we already have a result from a previous run, serve it immediately
+        // and kick off a fresh SSH fetch in the background for next time.
+        if (file_exists($yamlFile)) {
+            $cached = yaml_parse_file($yamlFile);
+            $groups = is_array($cached['backuplink_global_configuration'] ?? null) ? $cached['backuplink_global_configuration'] : [];
+
+            $this->runAnsibleAsync($playbook, $hosts);
+
+            return $this->success([
+                "ip"     => $cached['ip'] ?? $hostname,
+                "groups" => $groups,
+                "cached" => true,
+            ]);
+        }
+
+        // No cached result yet (first load) - fetch synchronously.
+        $ansibleOutput = $this->runAnsible($playbook, $hosts);
+
+        if (!file_exists($yamlFile)) {
+            return $this->error("BackupLink output file not found", $ansibleOutput);
+        }
+
+        $data = yaml_parse_file($yamlFile);
+        $groups = is_array($data['backuplink_global_configuration'] ?? null) ? $data['backuplink_global_configuration'] : [];
+
+        return $this->success([
+            "ip"     => $data['ip'] ?? $hostname,
+            "groups" => $groups,
+            "cached" => false,
+        ]);
+    }
+
+    #------------------------------------------------------------
+    #          BACKUPLINK PROTOCOL GLOBAL CONFIGURATION - ADD/DELETE
+    #------------------------------------------------------------
+    public function setbackuplink(Request $request, $hostname)
+    {
+        $data = $request->validate([
+            'operation'         => 'required|in:add,delete',
+            'group_id'          => 'required|integer|min:1|max:8',
+            'preemption_mode'   => 'required_if:operation,add|in:none,forced,bandwidth',
+            'preemption_delay'  => 'nullable|integer|min:0',
+        ]);
+
+        $playbook = "{$this->pluginPath}/playbooks/backup_link_configuration/setbackuplink.yml";
+        $hosts    = "{$this->pluginPath}/hosts/{$hostname}.yml";
+
+        $extraVars = [
+            'operation' => $data['operation'],
+            'group_id'  => $data['group_id'],
+        ];
+
+        if ($data['operation'] === 'add') {
+            $extraVars['preemption_mode'] = $data['preemption_mode'];
+            $extraVars['preemption_delay'] = $data['preemption_delay'] ?? 0;
+        }
+
+        $ansibleOutput = $this->runAnsible($playbook, $hosts, $extraVars);
+
+        if (!str_contains($ansibleOutput, 'Status: Success')) {
+            return $this->error('BackupLink configuration failed', $ansibleOutput);
+        }
+
+        return $this->success([
+            "message" => $data['operation'] === 'add'
+                ? "BackupLink group {$data['group_id']} configured"
+                : "BackupLink group {$data['group_id']} deleted",
+            "raw" => $ansibleOutput,
+        ]);
+    }
+
+    #------------------------------------------------------------
+    #          PORT CHANNEL (AGGREGATE GROUP) - SHOW
+    #------------------------------------------------------------
+    public function getportaggregate($hostname)
+    {
+        $playbook = "{$this->pluginPath}/playbooks/port_channel/port_aggregate_details.yml";
+        $hosts    = "{$this->pluginPath}/hosts/{$hostname}.yml";
+        $yamlFile = "{$this->pluginPath}/output/{$hostname}_port_aggregate_details.yml";
+
+        // If we already have a result from a previous run, serve it immediately
+        // and kick off a fresh SSH fetch in the background for next time.
+        if (file_exists($yamlFile)) {
+            $cached = yaml_parse_file($yamlFile);
+            $groups = is_array($cached['groups'] ?? null) ? $cached['groups'] : [];
+
+            $this->runAnsibleAsync($playbook, $hosts);
+
+            return $this->success([
+                "ip"     => $cached['ip'] ?? $hostname,
+                "groups" => $groups,
+                "cached" => true,
+            ]);
+        }
+
+        // No cached result yet (first load) - fetch synchronously.
+        $ansibleOutput = $this->runAnsible($playbook, $hosts);
+
+        if (!file_exists($yamlFile)) {
+            return $this->error("Port aggregate output file not found", $ansibleOutput);
+        }
+
+        $data = yaml_parse_file($yamlFile);
+        if (($data['status'] ?? null) !== 'success') {
+            return $this->error($data['error'] ?? 'Failed to read port aggregate details', $data);
+        }
+
+        $groups = is_array($data['groups'] ?? null) ? $data['groups'] : [];
+
+        return $this->success([
+            "ip"     => $data['ip'] ?? $hostname,
+            "groups" => $groups,
+            "cached" => false,
+        ]);
+    }
+
+    #------------------------------------------------------------
+    #          PORT CHANNEL (AGGREGATE GROUP) - ADD/CONFIGURE
+    #------------------------------------------------------------
+    public function addportaggregate(Request $request, $hostname)
+    {
+        $data = $request->validate([
+            'aggregate_group' => 'required|in:P1,P2,P3,P4,P5,P6,P7,P8',
+            'mode'            => 'required|in:static,lacp active,lacp passive',
+            'ports'           => 'required|string',
+        ]);
+
+        $playbook = "{$this->pluginPath}/playbooks/port_channel/port_aggregate_config.yml";
+        $hosts    = "{$this->pluginPath}/hosts/{$hostname}.yml";
+        $yamlFile = "{$this->pluginPath}/output/{$hostname}_port_aggregate_config.yml";
+
+        // mode may contain a space ("lacp active"/"lacp passive") - use the
+        // JSON extra-vars helper so ansible doesn't mis-split it on whitespace.
+        $ansibleOutput = $this->runAnsiblejs($playbook, $hosts, [
+            'aggregate_group' => $data['aggregate_group'],
+            'mode'            => $data['mode'],
+            'ports'           => $data['ports'],
+        ]);
+
+        if (!file_exists($yamlFile)) {
+            return $this->error("Port aggregate config output file not found", $ansibleOutput);
+        }
+
+        $result = yaml_parse_file($yamlFile);
+        if (($result['status'] ?? null) !== 'success') {
+            return $this->error($result['error'] ?? 'Failed to configure port aggregate group', $result);
+        }
+
+        return $this->success([
+            "message" => "Aggregate group {$data['aggregate_group']} configured ({$data['mode']}) with ports {$data['ports']}",
+            "raw"     => $result,
+        ]);
+    }
+
+    #------------------------------------------------------------
+    #          PORT CHANNEL (AGGREGATE GROUP) - EDIT
+    #------------------------------------------------------------
+    public function editportaggregate(Request $request, $hostname)
+    {
+        $data = $request->validate([
+            'aggregate_group' => 'required|in:p1,p2,p3,p4,p5,p6,p7,p8',
+            'mode'            => 'required|in:static,lacp active,lacp passive',
+            'add_ports'       => 'nullable|string',
+            'remove_ports'    => 'nullable|string',
+        ]);
+
+        $playbook = "{$this->pluginPath}/playbooks/port_channel/port_aggregate_edit.yml";
+        $hosts    = "{$this->pluginPath}/hosts/{$hostname}.yml";
+        $yamlFile = "{$this->pluginPath}/output/{$hostname}_port_aggregation_edit.yml";
+
+        $extraVars = [
+            'aggregate_group' => $data['aggregate_group'],
+            'mode'            => $data['mode'],
+        ];
+        if (!empty($data['add_ports'])) {
+            $extraVars['add_ports'] = $data['add_ports'];
+        }
+        if (!empty($data['remove_ports'])) {
+            $extraVars['remove_ports'] = $data['remove_ports'];
+        }
+
+        $ansibleOutput = $this->runAnsiblejs($playbook, $hosts, $extraVars);
+
+        if (!file_exists($yamlFile)) {
+            return $this->error("Port aggregate edit output file not found", $ansibleOutput);
+        }
+
+        $result = yaml_parse_file($yamlFile);
+        if (($result['status'] ?? null) !== 'success') {
+            return $this->error($result['error'] ?? 'Failed to edit port aggregate group', $result);
+        }
+
+        return $this->success([
+            "message" => "Aggregate group {$data['aggregate_group']} updated",
+            "raw"     => $result,
+        ]);
+    }
+
+    #------------------------------------------------------------
+    #          PORT CHANNEL (AGGREGATE GROUP) - DELETE
+    #------------------------------------------------------------
+    public function deleteportaggregate(Request $request, $hostname)
+    {
+        $data = $request->validate([
+            'port_id' => 'required|in:p1,p2,p3,p4,p5,p6,p7,p8',
+        ]);
+
+        $playbook = "{$this->pluginPath}/playbooks/port_channel/port_aggregate_delete.yml";
+        $hosts    = "{$this->pluginPath}/hosts/{$hostname}.yml";
+        $yamlFile = "{$this->pluginPath}/output/{$hostname}_port_aggregation_config_delete.yml";
+
+        $ansibleOutput = $this->runAnsible($playbook, $hosts, [
+            'port_id' => $data['port_id'],
+        ]);
+
+        if (!file_exists($yamlFile)) {
+            return $this->error("Port aggregate delete output file not found", $ansibleOutput);
+        }
+
+        $result = yaml_parse_file($yamlFile);
+        if (($result['status'] ?? null) !== 'success') {
+            return $this->error($result['error'] ?? 'Failed to delete port channel interface', $result);
+        }
+
+        return $this->success([
+            "message" => "Port channel interface {$data['port_id']} deleted",
+            "raw"     => $result,
+        ]);
+    }
+
+    #------------------------------------------------------------
+    #          PORT CHANNEL GROUP LOAD BALANCING - SET
+    #------------------------------------------------------------
+    public function setportchannelloadbalance(Request $request, $hostname)
+    {
+        $data = $request->validate([
+            'port' => 'required|in:p1,p2,p3,p4,p5,p6,p7,p8',
+            'mode' => 'required|in:SRC MAC,DST MAC,BOTH MAC,SRC IP,DST IP,BOTH IP',
+        ]);
+
+        $playbook = "{$this->pluginPath}/playbooks/port_channel/port_channel_load_balancing.yml";
+        $hosts    = "{$this->pluginPath}/hosts/{$hostname}.yml";
+        $yamlFile = "{$this->pluginPath}/output/{$hostname}_port_channel_load_balancing.yml";
+
+        // mode contains a space ("SRC MAC", etc.) - use the JSON extra-vars
+        // helper so ansible doesn't mis-split it on whitespace.
+        $ansibleOutput = $this->runAnsiblejs($playbook, $hosts, [
+            'port' => $data['port'],
+            'mode' => $data['mode'],
+        ]);
+
+        if (!file_exists($yamlFile)) {
+            return $this->error("Port channel load balancing output file not found", $ansibleOutput);
+        }
+
+        $result = yaml_parse_file($yamlFile);
+        if (($result['status'] ?? null) !== 'success') {
+            return $this->error($result['error'] ?? 'Failed to configure load balancing', $result);
+        }
+
+        return $this->success([
+            "message" => "Load balancing mode \"{$data['mode']}\" applied to {$data['port']}",
+            "raw"     => $result,
+        ]);
+    }
+
 
 
 

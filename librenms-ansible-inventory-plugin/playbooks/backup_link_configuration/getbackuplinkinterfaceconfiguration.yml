@@ -1,0 +1,564 @@
+# ============================================================================
+# File        : getbackuplinkinterfaceconfiguration.yml
+# Feature     : BackupLink Protocol - Interface Configuration
+# Device      : ABTPL AS210T Ethernet Switch
+#
+# Purpose:
+#   Collect the complete BackupLink Protocol Interface Configuration
+#   from the switch and display/save it as simple YAML.
+#
+# Information Collected:
+#   - Port
+#   - Group ID
+#   - Interface Attribute
+#   - MMU Attribute
+#   - Share-load VLAN
+#
+# CLI Commands Used:
+#   - enable
+#   - config
+#   - show running-config
+#
+# Output:
+#   output/192.168.2.1_backuplink_interface_configuration.yml
+#
+# Note:
+#   This playbook is READ-ONLY.
+# ============================================================================
+
+---
+- name: Get BackupLink Protocol Interface Configuration
+  hosts: alphabridge_devices
+  gather_facts: no
+
+  tasks:
+
+    # ========================================================================
+    # PREPARE PYTHON SSH SCRIPT
+    # ========================================================================
+
+    - name: Prepare BackupLink GET script
+      ansible.builtin.copy:
+        dest: "/home/gayatri/ansible/tmp/get_backuplink_interface.py"
+        mode: '0755'
+        content: |
+          #!/usr/bin/env python3
+
+          import paramiko
+          import time
+          import re
+          import sys
+
+
+          HOST = "{{ ansible_host }}"
+          USER = "{{ ansible_user }}"
+          PASSWORD = "{{ ansible_password }}"
+
+
+          # ==================================================================
+          # CLEAN CLI OUTPUT
+          # ==================================================================
+
+          def clean_output(text):
+
+              text = text.replace("\r", "")
+
+              text = re.sub(
+                  r"\x1b\[[0-9;?]*[A-Za-z]",
+                  "",
+                  text
+              )
+
+              return text
+
+
+          # ==================================================================
+          # READ UNTIL PROMPT
+          # ==================================================================
+
+          def read_until_prompt(
+              shell,
+              prompt_regex,
+              timeout=10
+          ):
+
+              buffer = ""
+
+              end_time = time.time() + timeout
+
+              while time.time() < end_time:
+
+                  if shell.recv_ready():
+
+                      data = shell.recv(
+                          65535
+                      ).decode(
+                          errors="ignore"
+                      )
+
+                      buffer += data
+
+                      if re.search(
+                          prompt_regex,
+                          buffer
+                      ):
+
+                          return buffer
+
+                  else:
+
+                      time.sleep(0.1)
+
+              return buffer
+
+
+          # ==================================================================
+          # SEND COMMAND
+          # ==================================================================
+
+          def send_command(
+              shell,
+              command,
+              prompt_regex,
+              timeout=10
+          ):
+
+              shell.send(
+                  command + "\n"
+              )
+
+              time.sleep(0.5)
+
+              return read_until_prompt(
+                  shell,
+                  prompt_regex,
+                  timeout
+              )
+
+
+          # ==================================================================
+          # GET COMPLETE RUNNING CONFIGURATION
+          # ==================================================================
+
+          def get_running_config(shell):
+
+              shell.send(
+                  "show running-config\n"
+              )
+
+              output = ""
+
+              end_time = time.time() + 30
+
+              while time.time() < end_time:
+
+                  if shell.recv_ready():
+
+                      data = shell.recv(
+                          65535
+                      ).decode(
+                          errors="ignore"
+                      )
+
+                      output += data
+
+                      # ------------------------------------------------------
+                      # HANDLE PAGINATION
+                      # ------------------------------------------------------
+
+                      if (
+                          "--More--" in data
+                          or
+                          "More" in data
+                      ):
+
+                          shell.send(" ")
+
+                          time.sleep(0.2)
+
+                          continue
+
+                      # ------------------------------------------------------
+                      # CONFIGURATION PROMPT
+                      # ------------------------------------------------------
+
+                      if re.search(
+                          r"Switch_config#\s*$",
+                          clean_output(output)
+                      ):
+
+                          break
+
+                  else:
+
+                      time.sleep(0.1)
+
+              return clean_output(output)
+
+
+          # ==================================================================
+          # PARSE BACKUPLINK INTERFACE CONFIGURATION
+          # ==================================================================
+
+          def parse_backuplink(config):
+
+              rows = []
+
+              interface_pattern = re.compile(
+                  r"interface\s+GigaEthernet(\d+/\d+)\s*\n"
+                  r"(.*?)(?=\ninterface\s+|\Z)",
+                  re.IGNORECASE | re.DOTALL
+              )
+
+
+              for match in interface_pattern.finditer(config):
+
+                  port = match.group(1)
+
+                  interface_config = match.group(2)
+
+
+                  # ----------------------------------------------------------
+                  # FIND BACKUPLINK GROUP AND ROLE
+                  # ----------------------------------------------------------
+
+                  group_match = re.search(
+                      r"^\s*backup-link-group\s+(\d+)\s+"
+                      r"(active|backup)\s*$",
+                      interface_config,
+                      re.MULTILINE | re.IGNORECASE
+                  )
+
+
+                  if not group_match:
+
+                      continue
+
+
+                  group_id = group_match.group(1)
+
+                  role = group_match.group(2).lower()
+
+
+                  # ----------------------------------------------------------
+                  # CONVERT ROLE TO UI VALUE
+                  # ----------------------------------------------------------
+
+                  if role == "active":
+
+                      interface_attribute = "Active Port"
+
+                  else:
+
+                      interface_attribute = "Backup Port"
+
+
+                  # ----------------------------------------------------------
+                  # FIND MMU ATTRIBUTE
+                  # ----------------------------------------------------------
+
+                  mmu_match = re.search(
+                      r"^\s*backup-link-group\s+mmu\s+"
+                      r"(transmit|receive)\s*$",
+                      interface_config,
+                      re.MULTILINE | re.IGNORECASE
+                  )
+
+
+                  if mmu_match:
+
+                      mmu_attribute = (
+                          mmu_match.group(1).capitalize()
+                      )
+
+                  else:
+
+                      mmu_attribute = ""
+
+
+                  # ----------------------------------------------------------
+                  # FIND SHARE-LOAD VLAN
+                  # ----------------------------------------------------------
+
+                  vlan_match = re.search(
+                      r"^\s*share-load\s+vlan\s+(\d+)\s*$",
+                      interface_config,
+                      re.MULTILINE | re.IGNORECASE
+                  )
+
+
+                  if vlan_match:
+
+                      share_load_vlan = vlan_match.group(1)
+
+                  else:
+
+                      share_load_vlan = ""
+
+
+                  # ----------------------------------------------------------
+                  # ADD ROW
+                  # ----------------------------------------------------------
+
+                  rows.append(
+                      {
+                          "port":
+                              "g" + port,
+
+                          "group_id":
+                              group_id,
+
+                          "interface_attribute":
+                              interface_attribute,
+
+                          "mmu_attribute":
+                              mmu_attribute,
+
+                          "share_load_vlan":
+                              share_load_vlan
+                      }
+                  )
+
+
+              # =================================================================
+              # SORT BY PORT NUMBER
+              # =================================================================
+
+              rows.sort(
+                  key=lambda x: (
+                      int(
+                          x["port"].split("/")[0][1:]
+                      ),
+                      int(
+                          x["port"].split("/")[1]
+                      )
+                  )
+              )
+
+
+              return rows
+
+
+          # ==================================================================
+          # CREATE SIMPLE YAML OUTPUT
+          # ==================================================================
+
+          def create_yaml(rows):
+
+              print(
+                  "ip: " + HOST
+              )
+
+              print("")
+
+              print(
+                  "backuplink_interface_configuration:"
+              )
+
+
+              for row in rows:
+
+                  print(
+                      "    - port: " +
+                      row["port"]
+                  )
+
+                  print(
+                      "      group_id: " +
+                      row["group_id"]
+                  )
+
+                  print(
+                      "      interface_attribute: " +
+                      row["interface_attribute"]
+                  )
+
+                  print(
+                      '      mmu_attribute: "' +
+                      row["mmu_attribute"] +
+                      '"'
+                  )
+
+                  print(
+                      '      share_load_vlan: "' +
+                      row["share_load_vlan"] +
+                      '"'
+                  )
+
+
+          # ==================================================================
+          # SSH CONNECTION
+          # ==================================================================
+
+          ssh = paramiko.SSHClient()
+
+          ssh.set_missing_host_key_policy(
+              paramiko.AutoAddPolicy()
+          )
+
+
+          try:
+
+              # ==============================================================
+              # CONNECT
+              # ==============================================================
+
+              ssh.connect(
+                  HOST,
+                  username=USER,
+                  password=PASSWORD,
+                  look_for_keys=False,
+                  allow_agent=False,
+                  timeout=10,
+                  banner_timeout=10,
+                  auth_timeout=10
+              )
+
+
+              shell = ssh.invoke_shell()
+
+              time.sleep(1)
+
+
+              initial = clean_output(
+                  read_until_prompt(
+                      shell,
+                      r"[#>]\s*$",
+                      timeout=5
+                  )
+              )
+
+
+              # ==============================================================
+              # ENTER ENABLE MODE
+              # ==============================================================
+
+              if re.search(
+                  r"Switch>\s*$",
+                  initial
+              ):
+
+                  output = send_command(
+                      shell,
+                      "enable",
+                      r"Switch#\s*$",
+                      timeout=5
+                  )
+
+
+                  if not re.search(
+                      r"Switch#\s*$",
+                      clean_output(output)
+                  ):
+
+                      raise Exception(
+                          "Unable to enter enable mode."
+                      )
+
+
+              # ==============================================================
+              # ENTER CONFIGURATION MODE
+              # ==============================================================
+
+              output = send_command(
+                  shell,
+                  "config",
+                  r"Switch_config#\s*$",
+                  timeout=5
+              )
+
+
+              if not re.search(
+                  r"Switch_config#\s*$",
+                  clean_output(output)
+              ):
+
+                  raise Exception(
+                      "Unable to enter configuration mode."
+                  )
+
+
+              # ==============================================================
+              # COLLECT COMPLETE RUNNING CONFIGURATION
+              # ==============================================================
+
+              running_config = get_running_config(
+                  shell
+              )
+
+
+              # ==============================================================
+              # PARSE BACKUPLINK DATA
+              # ==============================================================
+
+              rows = parse_backuplink(
+                  running_config
+              )
+
+
+              # ==============================================================
+              # CREATE SIMPLE YAML
+              # ==============================================================
+
+              create_yaml(rows)
+
+              sys.exit(0)
+
+
+          except Exception as exc:
+
+              print(
+                  "BACKUPLINK_GET_FAILED"
+              )
+
+              print(
+                  "ERROR: " + str(exc)
+              )
+
+              sys.exit(1)
+
+
+          finally:
+
+              try:
+
+                  ssh.close()
+
+              except Exception:
+
+                  pass
+
+
+    # ========================================================================
+    # COLLECT CONFIGURATION
+    # ========================================================================
+
+    - name: Collect BackupLink interface configuration
+      ansible.builtin.command:
+        cmd: >
+          /usr/bin/python3
+          /home/gayatri/ansible/tmp/get_backuplink_interface.py
+      register: backuplink_get
+      changed_when: false
+      failed_when: backuplink_get.rc != 0
+
+
+    # ========================================================================
+    # SAVE SIMPLE YAML OUTPUT
+    # ========================================================================
+
+    - name: Save BackupLink configuration
+      ansible.builtin.copy:
+        dest: "{{ playbook_dir }}/../output/{{ ansible_host }}_backuplink_interface_configuration.yml"
+        content: |
+          {{ backuplink_get.stdout }}
+      delegate_to: localhost
+
+
+    # ========================================================================
+    # DISPLAY SIMPLE YAML OUTPUT
+    # ========================================================================
+
+    - name: Display BackupLink configuration
+      ansible.builtin.debug:
+        msg: "{{ backuplink_get.stdout }}"

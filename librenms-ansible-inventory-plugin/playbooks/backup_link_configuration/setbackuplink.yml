@@ -1,0 +1,289 @@
+# ============================================================================
+# File        : setbackuplink.yml
+# Feature     : BackupLink Protocol Global Configuration - SET
+# Device      : ABTPL AS210T Ethernet Switch
+#
+# Operations:
+#   1. Add BackupLink Group
+#   2. Delete BackupLink Group
+#
+# UI Parameters:
+#   Group ID
+#   Preemption Mode
+#       - none
+#       - forced
+#       - bandwidth
+#   Preemption Delay
+#
+# Output:
+#   output/<device_ip>_backuplink_set.yml
+# ============================================================================
+
+- name: Configure BackupLink Protocol Global Configuration
+  hosts: alphabridge_devices
+  gather_facts: no
+
+  tasks:
+
+    # ========================================================================
+    # Validate Operation
+    # ========================================================================
+
+    - name: Validate Operation
+      ansible.builtin.assert:
+        that:
+          - operation is defined
+          - operation | lower in ['add', 'delete']
+        fail_msg: "operation must be add or delete."
+
+    # ========================================================================
+    # Validate Group ID
+    # ========================================================================
+
+    - name: Validate Group ID
+      ansible.builtin.assert:
+        that:
+          - group_id is defined
+          - group_id | int >= 1
+          - group_id | int <= 8
+        fail_msg: "group_id must be between 1 and 8."
+
+    # ========================================================================
+    # Validate Preemption Mode
+    # ========================================================================
+
+    - name: Validate Preemption Mode
+      ansible.builtin.assert:
+        that:
+          - preemption_mode is defined
+          - preemption_mode | lower in ['none', 'forced', 'bandwidth']
+        fail_msg: "preemption_mode must be none, forced or bandwidth."
+      when: operation | lower == 'add'
+
+    # ========================================================================
+    # Validate Preemption Delay
+    # ========================================================================
+
+    - name: Validate Preemption Delay
+      ansible.builtin.assert:
+        that:
+          - preemption_delay is defined
+          - preemption_delay | int >= 0
+        fail_msg: "preemption_delay is required and must be >= 0."
+      when:
+        - operation | lower == 'add'
+        - preemption_mode | lower != 'none'
+
+    # ========================================================================
+    # Create Python SSH Script
+    # ========================================================================
+
+    - name: Create Python SSH script for BackupLink SET
+      ansible.builtin.copy:
+        dest: "/opt/librenms/librenms-ansible-inventory-plugin/tmp/set_backuplink.py"
+        mode: "0755"
+        content: |
+          #!/usr/bin/env python3
+
+          import paramiko
+          import time
+          import re
+          import sys
+
+          HOST = "{{ ansible_host }}"
+          USER = "{{ ansible_user }}"
+          PASSWORD = "{{ ansible_password }}"
+
+          OP = "{{ operation | lower }}"
+          GROUP = int("{{ group_id }}")
+          MODE = "{{ preemption_mode | default('none') | lower }}"
+          DELAY = "{{ preemption_delay | default('') }}"
+
+          # ==================================================================
+          # Read CLI output until prompt
+          # ==================================================================
+
+          def read_until_prompt(shell, timeout=10):
+
+              buf = ""
+              end = time.time() + timeout
+
+              while time.time() < end:
+
+                  if shell.recv_ready():
+
+                      data = shell.recv(65535).decode(
+                          errors="ignore"
+                      )
+
+                      buf += data
+
+                      if re.search(
+                          r'Switch(?:_config)?[#>]\s*$',
+                          buf
+                      ):
+                          return buf
+
+                      end = time.time() + 1
+
+                  else:
+                      time.sleep(0.1)
+
+              return buf
+
+          # ==================================================================
+          # Send command
+          # ==================================================================
+
+          def send(shell, command, wait=0.5):
+
+              shell.send(command + "\n")
+              time.sleep(wait)
+
+              return read_until_prompt(shell)
+
+          # ==================================================================
+          # SSH Connection
+          # ==================================================================
+
+          ssh = paramiko.SSHClient()
+
+          ssh.set_missing_host_key_policy(
+              paramiko.AutoAddPolicy()
+          )
+
+          ssh.connect(
+              HOST,
+              username=USER,
+              password=PASSWORD,
+              look_for_keys=False,
+              allow_agent=False,
+              timeout=10,
+              banner_timeout=10,
+              auth_timeout=10
+          )
+
+          shell = ssh.invoke_shell()
+
+          time.sleep(1)
+
+          first = read_until_prompt(shell)
+
+          # ==================================================================
+          # Enter enable mode
+          # ==================================================================
+
+          if "Switch>" in first:
+
+              shell.send("enable\n")
+
+              time.sleep(0.5)
+
+              enable_output = read_until_prompt(shell)
+
+              if "assword" in enable_output:
+
+                  shell.send(PASSWORD + "\n")
+
+                  time.sleep(0.5)
+
+                  read_until_prompt(shell)
+
+          # ==================================================================
+          # Enter configuration mode
+          # ==================================================================
+
+          send(shell, "config")
+
+          # ==================================================================
+          # ADD BackupLink Group
+          # ==================================================================
+
+          if OP == "add":
+
+              if MODE == "none":
+
+                  send(
+                      shell,
+                      f"backup-link-group {GROUP}"
+                  )
+
+              elif MODE == "forced":
+
+                  send(
+                      shell,
+                      f"backup-link-group {GROUP} "
+                      f"preemption-mode forced "
+                      f"delay {DELAY}"
+                  )
+
+              elif MODE == "bandwidth":
+
+                  send(
+                      shell,
+                      f"backup-link-group {GROUP} "
+                      f"preemption-mode bandwidth "
+                      f"delay {DELAY}"
+                  )
+
+          # ==================================================================
+          # DELETE BackupLink Group
+          # ==================================================================
+
+          elif OP == "delete":
+
+              send(
+                  shell,
+                  f"no backup-link-group {GROUP}"
+              )
+
+          # ==================================================================
+          # Exit configuration mode
+          # ==================================================================
+
+          send(shell, "exit")
+
+          shell.close()
+          ssh.close()
+
+          # ==================================================================
+          # SET SUCCESS OUTPUT
+          # ==================================================================
+
+          print("BackupLink Protocol Global Configuration")
+          print("Operation: " + OP)
+          print("Group ID: " + str(GROUP))
+          print("Status: Success")
+
+          sys.exit(0)
+
+    # ========================================================================
+    # Run SET Script
+    # ========================================================================
+
+    - name: Run BackupLink SET script
+      ansible.builtin.command: >
+        /opt/librenms/librenms-ansible-inventory-plugin/bin/python3
+        /opt/librenms/librenms-ansible-inventory-plugin/tmp/set_backuplink.py
+      register: backup_set
+      changed_when: false
+      failed_when: backup_set.rc != 0
+
+    # ========================================================================
+    # Save SET Output
+    # ========================================================================
+
+    - name: Save BackupLink SET output
+      ansible.builtin.copy:
+        dest: "/opt/librenms/librenms-ansible-inventory-plugin/output/{{ ansible_host }}_backuplink_set.yml"
+        content: |
+          {{ backup_set.stdout }}
+      delegate_to: localhost
+
+    # ========================================================================
+    # Display SET Result
+    # ========================================================================
+
+    - name: Display BackupLink SET result
+      ansible.builtin.debug:
+        msg: "{{ backup_set.stdout }}"

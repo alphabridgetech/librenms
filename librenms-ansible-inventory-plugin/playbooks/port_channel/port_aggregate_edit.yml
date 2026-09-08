@@ -1,0 +1,631 @@
+# ==========================================
+# port_aggregation_edit.yml
+# Created on Sept 2, 2026 by Vikash Kumar (vikash.kumar@alphabrige.tech).
+#
+# Copyright (c), ALPHA BRIDGE, Inc.
+# 357D, Udyog Vihar Industrial Area Phase VI, Sector 37, Gurugram, Haryana.
+#
+# All rights reserved.
+#
+# This software is the confidential and proprietary information of ALPHA BRIDGE,
+# Inc. ("Confidential Information"). You shall not disclose such Confidential
+# Information and shall use it only in accordance with the terms of the 
+# license agreement you entered into with ALPHA BRIDGE.
+#
+# =============================================================================
+# Playbook Name : Port Aggregation Edit
+# =============================================================================
+#
+# Description:
+# Edits an EXISTING port aggregation group on AlphaBridge
+# switches over SSH. "Aggregation Group" (p1-p8) identifies which group you're
+# editing and CANNOT be changed here - only Mode and the member port list
+# (moved between "Configured port List" and "Available Port List") are editable.
+#
+# To enforce this, the playbook:
+#   1. Runs "show aggregator-group detail" FIRST and finds
+#      the group matching aggregate_group.
+#   2. Fails if that group doesn't exist yet (use
+#      port_aggregate_config.yml to create one).
+#   3. Only then applies changes.
+#
+# Input vars:
+#   aggregate_group - p1 through p8 (identifies the group -
+#                     must already exist; not changed by
+#                     this playbook)
+#   mode            - "static", "lacp active", or
+#                     "lacp passive". Applied to every port
+#                     that ends up configured on this group
+#                     (existing members you keep, plus any
+#                     you add) so the whole group stays on
+#                     one consistent mode, matching the
+#                     single Mode dropdown in the UI.
+#   add_ports       - (optional) comma-separated ports to
+#                     move from Available -> Configured,
+#                     e.g. "g0/2,g0/6"
+#   remove_ports    - (optional) comma-separated ports to
+#                     move from Configured -> Available,
+#                     e.g. "g0/7". Must currently be
+#                     configured on this group.
+#
+# Example:
+# ansible-playbook -i inventory/192.168.2.245.yml \
+#   playbooks/port_aggregation_edit.yml \
+#   -e aggregate_group=p1 -e mode=static \
+#   -e add_ports=g0/2,g0/6 -e remove_ports=g0/7
+#
+# Output:
+# output/<switch_ip>_port_aggregation_edit.yml
+# =============================================================================
+
+- name: Port aggregation edit
+  hosts: alphabridge_devices
+  gather_facts: no
+
+  tasks:
+
+    # ==========================================
+    # Validate required input variables are present
+    # ==========================================
+
+    - name: Validate required input variables are provided
+      ansible.builtin.assert:
+        that:
+          - aggregate_group is defined
+          - mode is defined
+        fail_msg: >
+          You must pass aggregate_group and mode, e.g.
+          -e aggregate_group=p1 -e mode=static
+
+    # ==========================================
+    # Validate aggregate_group (p1-p8, locked identifier)
+    # ==========================================
+
+    - name: Normalize aggregate_group
+      ansible.builtin.set_fact:
+        aggregate_group_normalized: >-
+          {{ aggregate_group | lower | trim }}
+
+    - name: Validate aggregate_group is p1 through p8
+      ansible.builtin.assert:
+        that:
+          - >-
+            aggregate_group_normalized in [
+            'p1', 'p2', 'p3', 'p4',
+            'p5', 'p6', 'p7', 'p8']
+        fail_msg: >
+          aggregate_group must be p1 through p8
+          (got: {{ aggregate_group }})
+
+    - name: Derive numeric aggregator-group id
+      ansible.builtin.set_fact:
+        aggregate_group_id: "{{ aggregate_group_normalized[1:] }}"
+
+    # ==========================================
+    # Validate mode
+    # ==========================================
+
+    - name: Normalize mode
+      ansible.builtin.set_fact:
+        mode_normalized: "{{ mode | lower | trim }}"
+
+    - name: Validate mode is static, lacp active, or lacp passive
+      ansible.builtin.assert:
+        that:
+          - mode_normalized in ['static', 'lacp active', 'lacp passive']
+        fail_msg: >
+          mode must be 'static', 'lacp active' or
+          'lacp passive' (got: {{ mode }})
+
+    # ==========================================
+    # Validate add_ports / remove_ports (optional)
+    # ==========================================
+
+    - name: Split add_ports into a list
+      ansible.builtin.set_fact:
+        add_port_list: >-
+          {{ (add_ports | default('')).split(',')
+          | map('trim') | select('!=', '') | list }}
+
+    - name: Split remove_ports into a list
+      ansible.builtin.set_fact:
+        remove_port_list: >-
+          {{ (remove_ports | default('')).split(',')
+          | map('trim') | select('!=', '') | list }}
+
+    - name: Validate every add_port is g0/1 through g0/10
+      ansible.builtin.assert:
+        that:
+          - >-
+            item in [
+            'g0/1', 'g0/2', 'g0/3', 'g0/4', 'g0/5',
+            'g0/6', 'g0/7', 'g0/8', 'g0/9', 'g0/10']
+        fail_msg: >
+          Each add_ports entry must be g0/1 through g0/10
+          (got: {{ item }})
+      loop: "{{ add_port_list }}"
+
+    - name: Validate every remove_port is g0/1 through g0/10
+      ansible.builtin.assert:
+        that:
+          - >-
+            item in [
+            'g0/1', 'g0/2', 'g0/3', 'g0/4', 'g0/5',
+            'g0/6', 'g0/7', 'g0/8', 'g0/9', 'g0/10']
+        fail_msg: >
+          Each remove_ports entry must be g0/1 through
+          g0/10 (got: {{ item }})
+      loop: "{{ remove_port_list }}"
+
+    - name: >-
+        Validate add_ports and remove_ports don't overlap
+      ansible.builtin.assert:
+        that:
+          - >-
+            (add_port_list | intersect(remove_port_list))
+            | length == 0
+        fail_msg: >
+          A port cannot be in both add_ports and
+          remove_ports at the same time.
+
+    # ==========================================
+    # Create Python SSH Script
+    # ==========================================
+
+    - name: >-
+        Create Python SSH Script for port aggregation edit
+      ansible.builtin.copy:
+        dest: "/opt/librenms/librenms-ansible-inventory-plugin/tmp/\
+               port_aggregation_edit_exec.py"
+        mode: '0755'
+        content: |
+          #!/usr/bin/env python3
+
+          import paramiko
+          import time
+          import re
+          import json
+
+          HOST = "{{ ansible_host }}"
+          USER = "{{ ansible_user }}"
+          PASSWORD = "{{ ansible_password }}"
+
+          AGGREGATE_GROUP = "{{ aggregate_group_normalized }}"
+          AGGREGATE_GROUP_ID = "{{ aggregate_group_id }}"
+          MODE = "{{ mode_normalized }}"
+          ADD_PORTS = [
+              p.strip() for p in
+              "{{ add_port_list | join(',') }}".split(',')
+              if p.strip()
+          ]
+          REMOVE_PORTS = [
+              p.strip() for p in
+              "{{ remove_port_list | join(',') }}".split(',')
+              if p.strip()
+          ]
+
+          PROMPT_RE = r'[>#]\s*$'
+
+          VALID_GROUPS = {f"p{n}" for n in range(1, 9)}
+          VALID_PORTS = {f"g0/{n}" for n in range(1, 11)}
+          PORT_NAME_MAP = {
+              f"g0/{n}": f"GigaEthernet0/{n}"
+              for n in range(1, 11)
+          }
+
+
+          def read_until_prompt(shell, prompt_re, timeout=10):
+              buf = ""
+              end_time = time.time() + timeout
+
+              while time.time() < end_time:
+                  if shell.recv_ready():
+                      chunk = shell.recv(65535).decode(
+                          errors="ignore"
+                      )
+                      buf += chunk
+
+                      if re.search(prompt_re, buf):
+                          return buf
+                  else:
+                      time.sleep(0.1)
+
+              return buf
+
+
+          def send_cmd(
+              shell, cmd, timeout=10, check_errors=True
+          ):
+              """Send a CLI command, wait for the prompt,
+              optionally raise on switch-reported errors.
+              Returns the raw output."""
+              shell.send(
+                  cmd if cmd.endswith("\n") else cmd + "\n"
+              )
+              output = read_until_prompt(
+                  shell, PROMPT_RE, timeout=timeout
+              )
+
+              if check_errors and re.search(
+                  r'%err|invalid|error', output, re.IGNORECASE
+              ):
+                  raise Exception(
+                      f"'{cmd.strip()}' rejected by switch: "
+                      f"{output.strip()}"
+                  )
+
+              return output
+
+
+          def aggregator_group_cmd(group_id, mode):
+              mode_word = {
+                  "static": "static",
+                  "lacp active": "active",
+                  "lacp passive": "passive",
+              }.get(mode)
+
+              if mode_word is None:
+                  raise Exception(f"Unsupported mode: {mode}")
+
+              return f"aggregator-group {group_id} mode {mode_word}"
+
+
+          # "Group: 1  Speed: 10  interval: 30" style header
+          group_header_re = re.compile(
+              r'^Group:\s*(\d+)\s+Speed:', re.MULTILINE
+          )
+
+          group_split_re = re.compile(
+              r'(?=^Group:\s*\d+\b)', re.MULTILINE
+          )
+
+          # "Port: g0/6" then a couple lines later
+          # "Status: Down   Individual" then
+          # "Aggregator-group : 1    Mode : Static"
+          port_block_re = re.compile(
+              r'Port:\s*(\S+)\s*\n'
+              r'\s*Status:\s*(\S+)\s+(\S+)\s*\n'
+              r'\s*Aggregator-group\s*:\s*(\d+)'
+              r'\s+Mode\s*:\s*(\S+)'
+          )
+
+          ansi_re = re.compile(
+              r'\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])'
+          )
+
+          shell = None
+          ssh = None
+
+          try:
+              # ==================================
+              # RE-VALIDATE INPUTS (defense in
+              # depth, in case this script is ever
+              # invoked outside the playbook)
+              # ==================================
+
+              if AGGREGATE_GROUP not in VALID_GROUPS:
+                  raise Exception(
+                      f"Invalid aggregate_group "
+                      f"'{AGGREGATE_GROUP}': must be p1-p8"
+                  )
+
+              if MODE not in (
+                  "static", "lacp active", "lacp passive"
+              ):
+                  raise Exception(
+                      f"Invalid mode '{MODE}'"
+                  )
+
+              for port in ADD_PORTS + REMOVE_PORTS:
+                  if port not in VALID_PORTS:
+                      raise Exception(
+                          f"Invalid port '{port}': must be "
+                          f"g0/1 through g0/10"
+                      )
+
+              if set(ADD_PORTS) & set(REMOVE_PORTS):
+                  raise Exception(
+                      "A port cannot be in both ADD_PORTS "
+                      "and REMOVE_PORTS"
+                  )
+
+              # ==================================
+              # SSH CONNECTION
+              # ==================================
+
+              ssh = paramiko.SSHClient()
+              ssh.set_missing_host_key_policy(
+                  paramiko.AutoAddPolicy()
+              )
+
+              ssh.connect(
+                  HOST,
+                  username=USER,
+                  password=PASSWORD,
+                  look_for_keys=False,
+                  allow_agent=False,
+                  timeout=10
+              )
+
+              shell = ssh.invoke_shell()
+              time.sleep(0.5)
+
+              # ==================================
+              # LOGIN BANNER / INITIAL PROMPT
+              # ==================================
+
+              read_until_prompt(shell, PROMPT_RE, timeout=5)
+
+              # ==================================
+              # ENABLE, DISABLE PAGING
+              # ==================================
+
+              send_cmd(
+                  shell, "enable",
+                  timeout=5, check_errors=False
+              )
+              send_cmd(
+                  shell, "terminal length 0",
+                  timeout=5, check_errors=False
+              )
+
+              # ==================================
+              # FETCH CURRENT STATE AND ENFORCE
+              # THAT THE GROUP ALREADY EXISTS
+              # ==================================
+
+              pre_check_output = send_cmd(
+                  shell, "show aggregator-group detail",
+                  timeout=10, check_errors=False
+              )
+              pre_check_output = ansi_re.sub(
+                  "", pre_check_output
+              )
+
+              existing_ports = []
+              found_group = False
+
+              for chunk in group_split_re.split(
+                  pre_check_output
+              ):
+                  header_match = group_header_re.search(
+                      chunk
+                  )
+                  if not header_match:
+                      continue
+
+                  if header_match.group(1) != AGGREGATE_GROUP_ID:
+                      continue
+
+                  found_group = True
+
+                  for port_match in port_block_re.finditer(
+                      chunk
+                  ):
+                      existing_ports.append(
+                          port_match.group(1)
+                      )
+
+              if not found_group:
+                  raise Exception(
+                      f"Aggregation group "
+                      f"'{AGGREGATE_GROUP}' was not found "
+                      f"in 'show aggregator-group detail'. "
+                      f"This playbook only edits an "
+                      f"existing group - use "
+                      f"port_aggregate_config.yml to "
+                      f"create it first."
+                  )
+
+              missing = set(REMOVE_PORTS) - set(existing_ports)
+              if missing:
+                  raise Exception(
+                      f"Cannot remove {sorted(missing)}: "
+                      f"not currently configured on "
+                      f"{AGGREGATE_GROUP} "
+                      f"(configured ports: "
+                      f"{sorted(existing_ports)})"
+                  )
+
+              kept_ports = [
+                  p for p in existing_ports
+                  if p not in REMOVE_PORTS
+              ]
+              final_ports = sorted(
+                  set(kept_ports) | set(ADD_PORTS)
+              )
+
+              # ==================================
+              # ENTER CONFIG / SELECT THE GROUP
+              # ==================================
+
+              send_cmd(shell, "config", timeout=10)
+              send_cmd(
+                  shell, f"interface {AGGREGATE_GROUP}",
+                  timeout=10
+              )
+              send_cmd(
+                  shell, "exit",
+                  timeout=5, check_errors=False
+              )
+
+              # ==================================
+              # REMOVE PORTS
+              # ==================================
+
+              for port in REMOVE_PORTS:
+                  full_name = PORT_NAME_MAP[port]
+                  send_cmd(
+                      shell, f"interface {full_name}",
+                      timeout=10
+                  )
+                  send_cmd(
+                      shell, "no aggregator-group",
+                      timeout=10
+                  )
+                  send_cmd(
+                      shell, "exit",
+                      timeout=5, check_errors=False
+                  )
+
+              # ==================================
+              # (RE)APPLY MODE TO EVERY PORT THAT
+              # STAYS CONFIGURED (kept + newly added)
+              # so the whole group is consistent.
+              # ==================================
+
+              for port in final_ports:
+                  full_name = PORT_NAME_MAP[port]
+
+                  send_cmd(
+                      shell, f"interface {full_name}",
+                      timeout=10
+                  )
+                  send_cmd(
+                      shell, "no aggregator-group",
+                      timeout=10
+                  )
+                  send_cmd(
+                      shell, "exit",
+                      timeout=5, check_errors=False
+                  )
+
+                  send_cmd(
+                      shell, f"interface {full_name}",
+                      timeout=10
+                  )
+                  send_cmd(
+                      shell,
+                      aggregator_group_cmd(
+                          AGGREGATE_GROUP_ID, MODE
+                      ),
+                      timeout=10
+                  )
+                  send_cmd(
+                      shell, "exit",
+                      timeout=5, check_errors=False
+                  )
+
+              # ==================================
+              # EXIT CONFIG MODE
+              # ==================================
+
+              send_cmd(
+                  shell, "exit",
+                  timeout=5, check_errors=False
+              )
+
+              # ==================================
+              # VERIFY WITH show aggregator-group
+              # ==================================
+
+              detail_output = send_cmd(
+                  shell, "show aggregator-group detail",
+                  timeout=10, check_errors=False
+              )
+              detail_output = ansi_re.sub("", detail_output)
+
+              # ==================================
+              # SAVE CONFIG (persist running-config)
+              # ==================================
+
+              write_output = send_cmd(
+                  shell, "write",
+                  timeout=15, check_errors=False
+              )
+              if re.search(
+                  r'%err|invalid|error|fail',
+                  write_output, re.IGNORECASE
+              ):
+                  raise Exception(
+                      "'write' (save config) rejected "
+                      f"by switch: {write_output.strip()}"
+                  )
+
+              # ==================================
+              # CLOSE SSH / RETURN JSON
+              # ==================================
+
+              shell.close()
+              ssh.close()
+
+              print(json.dumps({
+                  "ip": HOST,
+                  "status": "success",
+              }))
+
+          except Exception as e:
+              try:
+                  if shell:
+                      shell.close()
+                  if ssh:
+                      ssh.close()
+              except:
+                  pass
+
+              print(json.dumps({
+                  "ip": HOST,
+                  "status": "failed",
+                  "error": str(e)
+              }))
+
+    # ==========================================
+    # EXECUTE PYTHON SCRIPT
+    # ==========================================
+
+    - name: Execute port aggregation edit script
+      ansible.builtin.command:
+        cmd: >
+          /opt/librenms/librenms-ansible-inventory-plugin/bin/python3
+          /opt/librenms/librenms-ansible-inventory-plugin/tmp/\
+          port_aggregation_edit_exec.py
+      register: aggregate_raw
+      changed_when: false
+      failed_when: false
+
+    # ==========================================
+    # CONVERT JSON RESULT
+    # ==========================================
+
+    - name: Convert port aggregation edit result to JSON
+      ansible.builtin.set_fact:
+        aggregate_result: "{{ aggregate_raw.stdout | from_json }}"
+
+    # ==========================================
+    # DISPLAY RESULT
+    # ==========================================
+
+    - name: Display port aggregation edit result
+      ansible.builtin.debug:
+        var: aggregate_result
+
+    # ==========================================
+    # SAVE RESULT
+    # ==========================================
+
+    - name: Save port aggregation edit result
+      ansible.builtin.copy:
+        dest: "/opt/librenms/librenms-ansible-inventory-plugin/output/\
+              {{ ansible_host }}_port_aggregation_edit.yml"
+        content: |
+          {{ aggregate_result | to_nice_yaml }}
+
+    # ==========================================
+    # FAIL IF COMMAND FAILED
+    # ==========================================
+
+    - name: Fail if port aggregation edit failed
+      ansible.builtin.fail:
+        msg: "{{ aggregate_result.error }}"
+      when: aggregate_result.status == "failed"
+
+    # ==========================================
+    # FINAL MESSAGE
+    # ==========================================
+
+    - name: Display result file
+      ansible.builtin.debug:
+        msg: >
+          Aggregation group {{ aggregate_group }} updated
+          on {{ ansible_host }} (mode {{ mode }}). Result
+          saved to output/{{ ansible_host }}_port_aggregation_edit.yml

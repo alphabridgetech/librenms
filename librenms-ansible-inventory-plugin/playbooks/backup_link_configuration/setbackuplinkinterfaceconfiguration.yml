@@ -1,0 +1,854 @@
+# ============================================================================
+# File        : setbackuplinkinterfaceconfiguration.yml
+# Feature     : BackupLink Protocol - Interface Configuration
+# Device      : ABTPL AS210T Ethernet Switch
+#
+# Purpose:
+#   Configure BackupLink settings on a switch interface and verify that the
+#   configuration was successfully applied.
+#
+# Configuration Parameters:
+#   - Port
+#   - Group ID
+#   - Interface Attribute
+#   - MMU Attribute
+#   - Share-load VLAN
+#
+# SET Output:
+#   Creates a separate success file containing ONLY the success status.
+#
+# Success Output File:
+#   output/192.168.2.1_backuplink_interface_success.yml
+#
+# GET Output:
+#   The complete BackupLink interface table is generated separately by:
+#   getbackuplinkinterfaceconfiguration.yml
+#
+# Created on  : Sep 02, 2026
+# Created by  : Gayatri Mendiratta (Gayatri.Mendiratta@alphabridge.tech)
+#
+# Copyright (c), ALPHA BRIDGE, Inc.
+# Address     : 357D, Udyog Vihar Industrial Area Phase VI,
+#               Sector 37, Gurugram, Haryana.
+#
+# All rights reserved.
+#
+# This software is the confidential and proprietary information of
+# ALPHA BRIDGE, Inc. ("Confidential Information"). You shall not disclose
+# such Confidential Information and shall use it only in accordance with
+# the terms of the license agreement you entered into with ALPHA BRIDGE.
+# ============================================================================
+---
+- name: Configure BackupLink Protocol Interface
+  hosts: alphabridge_devices
+  gather_facts: no
+
+  tasks:
+
+    # ========================================================================
+    # VALIDATE INTERFACE
+    # ========================================================================
+
+    - name: Validate interface port
+      ansible.builtin.assert:
+        that:
+          - interface_port is defined
+          - interface_port | string | regex_search('^g0/(1|2|3|4|5|6|7|8|9|10)$')
+        fail_msg: >
+          Invalid interface_port '{{ interface_port | default('NOT PROVIDED') }}'.
+          Valid ports are g0/1 through g0/10.
+        success_msg: >
+          Interface '{{ interface_port }}' is valid.
+
+    # ========================================================================
+    # VALIDATE GROUP ID
+    # ========================================================================
+
+    - name: Validate BackupLink group ID
+      ansible.builtin.assert:
+        that:
+          - group_id is defined
+          - group_id | string | regex_search('^[1-8]$')
+        fail_msg: >
+          Invalid group_id '{{ group_id | default('NOT PROVIDED') }}'.
+          BackupLink group ID must be between 1 and 8.
+        success_msg: >
+          BackupLink group '{{ group_id }}' is valid.
+
+    # ========================================================================
+    # VALIDATE INTERFACE ATTRIBUTE
+    # ========================================================================
+
+    - name: Validate interface attribute
+      ansible.builtin.assert:
+        that:
+          - interface_attribute is defined
+          - interface_attribute in ['Active Port', 'Backup Port']
+        fail_msg: >
+          Invalid interface_attribute
+          '{{ interface_attribute | default('NOT PROVIDED') }}'.
+          Valid values are Active Port or Backup Port.
+        success_msg: >
+          Interface attribute '{{ interface_attribute }}' is valid.
+
+    # ========================================================================
+    # VALIDATE MMU ATTRIBUTE
+    # ========================================================================
+
+    - name: Validate MMU attribute
+      ansible.builtin.assert:
+        that:
+          - mmu_attribute is defined
+          - mmu_attribute in ['Transmit', 'Receive']
+        fail_msg: >
+          Invalid mmu_attribute
+          '{{ mmu_attribute | default('NOT PROVIDED') }}'.
+          Valid values are Transmit or Receive.
+        success_msg: >
+          MMU attribute '{{ mmu_attribute }}' is valid.
+
+    # ========================================================================
+    # ACTIVE PORT
+    # ========================================================================
+
+    - name: Active Port - Share-load VLAN not required
+      ansible.builtin.debug:
+        msg: "Active Port selected. Share-load VLAN is not applicable."
+      when: interface_attribute == 'Active Port'
+
+    # ========================================================================
+    # BACKUP PORT
+    # ========================================================================
+
+    - name: Backup Port - validate Share-load VLAN
+      ansible.builtin.assert:
+        that:
+          - share_load_vlan is defined
+          - share_load_vlan | string | regex_search('^[0-9]+$')
+          - (share_load_vlan | int) >= 1
+          - (share_load_vlan | int) <= 4094
+        fail_msg: >
+          Invalid share_load_vlan '{{ share_load_vlan | default('NOT PROVIDED') }}'.
+          VLAN must be between 1 and 4094.
+        success_msg: >
+          Share-load VLAN '{{ share_load_vlan }}' is valid.
+      when: interface_attribute == 'Backup Port'
+
+    # ========================================================================
+    # SET VLAN VALUE
+    # ========================================================================
+
+    - name: Set configured VLAN
+      ansible.builtin.set_fact:
+        configured_vlan: >-
+          {{
+            share_load_vlan
+            if interface_attribute == 'Backup Port'
+            and share_load_vlan is defined
+            else ''
+          }}
+
+    # ========================================================================
+    # DISPLAY CONFIGURATION INPUT
+    # ========================================================================
+
+    - name: Display BackupLink configuration
+      ansible.builtin.debug:
+        msg:
+          - "------------------------------------------------------------"
+          - "BackupLink Interface Configuration"
+          - "------------------------------------------------------------"
+          - "Interface           : {{ interface_port }}"
+          - "Group ID            : {{ group_id }}"
+          - "Interface Attribute : {{ interface_attribute }}"
+          - "MMU Attribute       : {{ mmu_attribute }}"
+          - "Share-load VLAN     : {{ configured_vlan if configured_vlan | length > 0 else 'Not Applicable' }}"
+          - "------------------------------------------------------------"
+
+    # ========================================================================
+    # PREPARE PYTHON SSH SCRIPT
+    # ========================================================================
+
+    - name: Prepare BackupLink configuration script
+      ansible.builtin.copy:
+        dest: "/home/gayatri/ansible/tmp/set_backuplink_interface.py"
+        mode: '0755'
+        content: |
+          #!/usr/bin/env python3
+
+          import paramiko
+          import time
+          import re
+          import sys
+
+          HOST = "{{ ansible_host }}"
+          USER = "{{ ansible_user }}"
+          PASSWORD = "{{ ansible_password }}"
+
+          INTERFACE_PORT = "{{ interface_port }}"
+          GROUP_ID = "{{ group_id }}"
+          INTERFACE_ATTRIBUTE = "{{ interface_attribute }}"
+          MMU_ATTRIBUTE = "{{ mmu_attribute }}"
+          SHARE_LOAD_VLAN = "{{ configured_vlan }}"
+
+          INTERFACE_NAME = (
+              "GigaEthernet" +
+              INTERFACE_PORT.replace("g", "")
+          )
+
+
+          def clean_output(text):
+              text = text.replace("\r", "")
+              text = re.sub(
+                  r"\x1b\[[0-9;?]*[A-Za-z]",
+                  "",
+                  text
+              )
+              return text
+
+
+          def read_until_prompt(shell, prompt_regex, timeout=10):
+
+              buffer = ""
+              end_time = time.time() + timeout
+
+              while time.time() < end_time:
+
+                  if shell.recv_ready():
+
+                      data = shell.recv(65535).decode(
+                          errors="ignore"
+                      )
+
+                      buffer += data
+
+                      if re.search(prompt_regex, buffer):
+                          return buffer
+
+                  else:
+                      time.sleep(0.1)
+
+              return buffer
+
+
+          def send_command(
+              shell,
+              command,
+              prompt_regex,
+              timeout=10
+          ):
+
+              shell.send(command + "\n")
+
+              time.sleep(0.5)
+
+              return read_until_prompt(
+                  shell,
+                  prompt_regex,
+                  timeout
+              )
+
+
+          def has_hard_cli_error(output):
+
+              patterns = [
+                  r"%\s*Invalid",
+                  r"%\s*Unknown",
+                  r"%\s*Incomplete",
+                  r"%\s*Ambiguous",
+                  r"Unknown command",
+                  r"Invalid input",
+                  r"Invalid command",
+                  r"Too many parameters",
+                  r"Error:"
+              ]
+
+              for pattern in patterns:
+
+                  if re.search(
+                      pattern,
+                      output,
+                      re.IGNORECASE
+                  ):
+                      return True
+
+              return False
+
+
+          def extract_interface_config(
+              full_config,
+              interface_name
+          ):
+
+              pattern = (
+                  r"interface\s+"
+                  + re.escape(interface_name)
+                  + r"\s*\n"
+                  r"(.*?)(?=\ninterface\s+|\Z)"
+              )
+
+              match = re.search(
+                  pattern,
+                  full_config,
+                  re.IGNORECASE | re.DOTALL
+              )
+
+              if match:
+                  return match.group(1).strip()
+
+              return ""
+
+
+          def get_running_config(shell):
+
+              shell.send(
+                  "show running-config\n"
+              )
+
+              output = ""
+
+              end_time = time.time() + 30
+
+              while time.time() < end_time:
+
+                  if shell.recv_ready():
+
+                      data = shell.recv(65535).decode(
+                          errors="ignore"
+                      )
+
+                      output += data
+
+                      if (
+                          "--More--" in data
+                          or
+                          "More" in data
+                      ):
+
+                          shell.send(" ")
+                          time.sleep(0.2)
+                          continue
+
+                      if re.search(
+                          r"Switch_config#\s*$",
+                          clean_output(output)
+                      ):
+
+                          break
+
+                  else:
+
+                      time.sleep(0.1)
+
+              return output
+
+
+          ssh = paramiko.SSHClient()
+
+          ssh.set_missing_host_key_policy(
+              paramiko.AutoAddPolicy()
+          )
+
+
+          try:
+
+              # ==============================================================
+              # CONNECT TO SWITCH
+              # ==============================================================
+
+              ssh.connect(
+                  HOST,
+                  username=USER,
+                  password=PASSWORD,
+                  look_for_keys=False,
+                  allow_agent=False,
+                  timeout=10,
+                  banner_timeout=10,
+                  auth_timeout=10
+              )
+
+              shell = ssh.invoke_shell()
+
+              time.sleep(1)
+
+              initial = clean_output(
+                  read_until_prompt(
+                      shell,
+                      r"[#>]\s*$",
+                      timeout=5
+                  )
+              )
+
+
+              # ==============================================================
+              # ENABLE MODE
+              # ==============================================================
+
+              if re.search(
+                  r"Switch>\s*$",
+                  initial
+              ):
+
+                  output = send_command(
+                      shell,
+                      "enable",
+                      r"Switch#\s*$",
+                      timeout=5
+                  )
+
+                  if not re.search(
+                      r"Switch#\s*$",
+                      clean_output(output)
+                  ):
+
+                      raise Exception(
+                          "Unable to enter enable mode."
+                      )
+
+
+              # ==============================================================
+              # CONFIGURATION MODE
+              # ==============================================================
+
+              output = send_command(
+                  shell,
+                  "config",
+                  r"Switch_config#\s*$",
+                  timeout=5
+              )
+
+              if not re.search(
+                  r"Switch_config#\s*$",
+                  clean_output(output)
+              ):
+
+                  raise Exception(
+                      "Unable to enter configuration mode."
+                  )
+
+
+              # ==============================================================
+              # GET CURRENT INTERFACE CONFIGURATION
+              # ==============================================================
+
+              current_output = send_command(
+                  shell,
+                  "show running-config interface "
+                  + INTERFACE_NAME,
+                  r"Switch_config#\s*$",
+                  timeout=10
+              )
+
+              current_output = clean_output(
+                  current_output
+              )
+
+
+              # ==============================================================
+              # FIND EXISTING AGGREGATION
+              # ==============================================================
+
+              aggregation_ids = re.findall(
+                  r"^\s*aggregator-group\s+(\d+)",
+                  current_output,
+                  re.MULTILINE | re.IGNORECASE
+              )
+
+              aggregation_ids = list(
+                  dict.fromkeys(aggregation_ids)
+              )
+
+
+              # ==============================================================
+              # FIND EXISTING BACKUPLINK GROUP
+              # ==============================================================
+
+              existing_groups = re.findall(
+                  r"^\s*backup-link-group\s+(\d+)",
+                  current_output,
+                  re.MULTILINE | re.IGNORECASE
+              )
+
+              existing_groups = list(
+                  dict.fromkeys(existing_groups)
+              )
+
+
+              # ==============================================================
+              # ENTER INTERFACE MODE
+              # ==============================================================
+
+              output = send_command(
+                  shell,
+                  "interface " + INTERFACE_NAME,
+                  r"Switch_config_g0/[0-9]+#\s*$",
+                  timeout=5
+              )
+
+              if not re.search(
+                  r"Switch_config_g0/[0-9]+#\s*$",
+                  clean_output(output)
+              ):
+
+                  raise Exception(
+                      "Unable to enter interface mode."
+                  )
+
+
+              # ==============================================================
+              # REMOVE EXISTING AGGREGATION
+              # ==============================================================
+
+              for aggregation_id in aggregation_ids:
+
+                  command = (
+                      "no aggregator-group "
+                      + aggregation_id
+                  )
+
+                  output = send_command(
+                      shell,
+                      command,
+                      r"Switch_config_g0/[0-9]+#\s*$",
+                      timeout=10
+                  )
+
+                  if has_hard_cli_error(
+                      clean_output(output)
+                  ):
+
+                      raise Exception(
+                          "Unable to remove aggregation."
+                      )
+
+
+              # ==============================================================
+              # REMOVE EXISTING BACKUPLINK GROUP
+              # ==============================================================
+
+              for old_group in existing_groups:
+
+                  command = (
+                      "no backup-link-group "
+                      + old_group
+                  )
+
+                  output = send_command(
+                      shell,
+                      command,
+                      r"Switch_config_g0/[0-9]+#\s*$",
+                      timeout=10
+                  )
+
+                  if has_hard_cli_error(
+                      clean_output(output)
+                  ):
+
+                      raise Exception(
+                          "Unable to remove existing BackupLink group."
+                      )
+
+
+              # ==============================================================
+              # REMOVE EXISTING MMU
+              # ==============================================================
+
+              send_command(
+                  shell,
+                  "no backup-link-group mmu",
+                  r"Switch_config_g0/[0-9]+#\s*$",
+                  timeout=10
+              )
+
+
+              # ==============================================================
+              # APPLY BACKUPLINK ROLE
+              # ==============================================================
+
+              if INTERFACE_ATTRIBUTE == "Active Port":
+                  role = "active"
+              else:
+                  role = "backup"
+
+
+              role_command = (
+                  "backup-link-group "
+                  + GROUP_ID
+                  + " "
+                  + role
+              )
+
+
+              output = send_command(
+                  shell,
+                  role_command,
+                  r"Switch_config_g0/[0-9]+#\s*$",
+                  timeout=10
+              )
+
+              output = clean_output(output)
+
+              if has_hard_cli_error(output):
+
+                  raise Exception(
+                      "BackupLink role configuration failed."
+                  )
+
+
+              # ==============================================================
+              # APPLY MMU
+              # ==============================================================
+
+              if MMU_ATTRIBUTE == "Transmit":
+                  mmu = "transmit"
+              else:
+                  mmu = "receive"
+
+
+              mmu_command = (
+                  "backup-link-group mmu "
+                  + mmu
+              )
+
+
+              output = send_command(
+                  shell,
+                  mmu_command,
+                  r"Switch_config_g0/[0-9]+#\s*$",
+                  timeout=10
+              )
+
+              output = clean_output(output)
+
+
+              # ==============================================================
+              # APPLY SHARE-LOAD VLAN
+              # ==============================================================
+
+              if (
+                  INTERFACE_ATTRIBUTE == "Backup Port"
+                  and
+                  SHARE_LOAD_VLAN != ""
+              ):
+
+                  vlan_command = (
+                      "share-load vlan "
+                      + SHARE_LOAD_VLAN
+                  )
+
+
+                  output = send_command(
+                      shell,
+                      vlan_command,
+                      r"Switch_config_g0/[0-9]+#\s*$",
+                      timeout=10
+                  )
+
+                  output = clean_output(output)
+
+                  if has_hard_cli_error(output):
+
+                      raise Exception(
+                          "Share-load VLAN configuration failed."
+                      )
+
+
+              # ==============================================================
+              # EXIT INTERFACE MODE
+              # ==============================================================
+
+              send_command(
+                  shell,
+                  "exit",
+                  r"Switch_config#\s*$",
+                  timeout=5
+              )
+
+
+              # ==============================================================
+              # GET FINAL CONFIGURATION
+              # ==============================================================
+
+              final_config = clean_output(
+                  get_running_config(shell)
+              )
+
+
+              interface_config = extract_interface_config(
+                  final_config,
+                  INTERFACE_NAME
+              )
+
+
+              # ==============================================================
+              # VERIFY ROLE
+              # ==============================================================
+
+              expected_role = (
+                  "backup-link-group "
+                  + GROUP_ID
+                  + " "
+                  + role
+              )
+
+
+              role_verified = bool(
+                  re.search(
+                      r"^\s*"
+                      + re.escape(expected_role)
+                      + r"\s*$",
+                      interface_config,
+                      re.MULTILINE | re.IGNORECASE
+                  )
+              )
+
+
+              # ==============================================================
+              # VERIFY MMU
+              # ==============================================================
+
+              expected_mmu = (
+                  "backup-link-group mmu "
+                  + mmu
+              )
+
+
+              mmu_verified = bool(
+                  re.search(
+                      r"^\s*"
+                      + re.escape(expected_mmu)
+                      + r"\s*$",
+                      interface_config,
+                      re.MULTILINE | re.IGNORECASE
+                  )
+              )
+
+
+              # ==============================================================
+              # VERIFY VLAN
+              # ==============================================================
+
+              vlan_verified = True
+
+
+              if (
+                  INTERFACE_ATTRIBUTE == "Backup Port"
+                  and
+                  SHARE_LOAD_VLAN != ""
+              ):
+
+                  expected_vlan = (
+                      "share-load vlan "
+                      + SHARE_LOAD_VLAN
+                  )
+
+
+                  vlan_verified = bool(
+                      re.search(
+                          r"^\s*"
+                          + re.escape(expected_vlan)
+                          + r"\s*$",
+                          interface_config,
+                          re.MULTILINE | re.IGNORECASE
+                      )
+                  )
+
+
+              # ==============================================================
+              # VERIFY AGGREGATION REMOVED
+              # ==============================================================
+
+              aggregation_remaining = bool(
+                  re.search(
+                      r"^\s*aggregator-group\s+",
+                      interface_config,
+                      re.MULTILINE | re.IGNORECASE
+                  )
+              )
+
+
+              # ==============================================================
+              # FINAL VERIFICATION
+              # ==============================================================
+
+              if (
+                  role_verified
+                  and
+                  mmu_verified
+                  and
+                  vlan_verified
+                  and
+                  not aggregation_remaining
+              ):
+
+                  print(
+                      "BACKUPLINK_CONFIGURATION_SUCCESS"
+                  )
+
+                  sys.exit(0)
+
+
+              print(
+                  "BACKUPLINK_CONFIGURATION_FAILED"
+              )
+
+              sys.exit(1)
+
+
+          except Exception as exc:
+
+              print(
+                  "BACKUPLINK_CONFIGURATION_FAILED"
+              )
+
+              print(
+                  "ERROR: " + str(exc)
+              )
+
+              sys.exit(1)
+
+
+          finally:
+
+              try:
+                  ssh.close()
+              except Exception:
+                  pass
+
+
+    # ========================================================================
+    # CONFIGURE SWITCH
+    # ========================================================================
+
+    - name: Configure BackupLink on switch
+      ansible.builtin.command:
+        cmd: >
+          /usr/bin/python3
+          /home/gayatri/ansible/tmp/set_backuplink_interface.py
+      register: backuplink_result
+      changed_when: backuplink_result.rc == 0
+      failed_when: backuplink_result.rc != 0
+
+    # ========================================================================
+    # SAVE ONLY SUCCESS MESSAGE
+    # ========================================================================
+
+    - name: Save BackupLink success message
+      ansible.builtin.copy:
+        dest: "{{ playbook_dir }}/../output/{{ ansible_host }}_backuplink_interface_success.yml"
+        content: |
+          BackupLink Protocol Interface Configuration
+
+          Status: SUCCESS
+
+          Configuration applied and verified successfully.
+      when: backuplink_result.rc == 0
+
+    # ========================================================================
+    # DISPLAY SUCCESS
+    # ========================================================================
+
+    - name: Display BackupLink configuration result
+      ansible.builtin.debug:
+        msg: "BACKUPLINK CONFIGURATION SUCCESS"
+      when: backuplink_result.rc == 0

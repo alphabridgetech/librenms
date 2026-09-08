@@ -1,0 +1,335 @@
+# ==========================================
+# port_aggregate_config_delete.yml
+# Created on Sept 2, 2026 by Vikash Kumar(vikash.kumar@alphabrige.tech).
+#
+# Copyright (c), ALPHA BRIDGE, Inc.
+# 357D, Udyog Vihar Industrial Area Phase VI, Sector 37, Gurugram, Haryana.
+#
+# All rights reserved.
+#
+# This software is the confidential and proprietary information of ALPHA BRIDGE,
+# Inc. ("Confidential Information"). You shall not disclose such Confidential
+# Information and shall use it only in accordance with the terms of the
+# license agreement you entered into with ALPHA BRIDGE.
+#
+# =============================================================================
+# Playbook Name : Port Aggregate Config Delete
+# =============================================================================
+#
+# Description:
+# Deletes a port-channel (aggregate group) interface on
+# AlphaBridge switches over SSH using:
+#   no interface <port_id>
+#
+# Input vars:
+#   port_id - p1 through p8 (accepted case-insensitively,
+#             e.g. "P1" or "p1"; always sent to the switch
+#             in lowercase, matching the confirmed command
+#             "no interface p1")
+#
+# Command sequence sent:
+#   config
+#   no interface <port_id>
+#   exit
+#   write
+#
+# Example:
+# ansible-playbook -i inventory/192.168.2.245.yml \
+#   playbooks/port_aggregate_config_delete.yml \
+#   -e port_id=p1
+#
+# Output:
+# output/<switch_ip>_port_aggregation_config_delete.yml
+# =============================================================================
+
+- name: Port aggregation config delete
+  hosts: alphabridge_devices
+  gather_facts: no
+
+  tasks:
+
+    # ==========================================
+    # Validate required input variables are present
+    # ==========================================
+
+    - name: Validate required input variables are provided
+      ansible.builtin.assert:
+        that:
+          - port_id is defined
+        fail_msg: >
+          You must pass port_id, e.g. -e port_id=p1
+
+    # ==========================================
+    # Validate port_id (p1-p8)
+    # ==========================================
+
+    - name: Normalize port_id
+      ansible.builtin.set_fact:
+        port_id_normalized: "{{ port_id | lower | trim }}"
+
+    - name: Validate port_id is p1 through p8
+      ansible.builtin.assert:
+        that:
+          - >-
+            port_id_normalized in [
+            'p1', 'p2', 'p3', 'p4',
+            'p5', 'p6', 'p7', 'p8']
+        fail_msg: >
+          port_id must be p1 through p8 (got: {{ port_id }})
+
+    # ==========================================
+    # Create Python SSH Script
+    # ==========================================
+
+    - name: >-
+        Create Python SSH Script for port aggregate
+        config delete
+      ansible.builtin.copy:
+        dest: "/opt/librenms/librenms-ansible-inventory-plugin/\
+               tmp/port_aggregation_config_delete_exec.py"
+        mode: '0755'
+        content: |
+          #!/usr/bin/env python3
+
+          import paramiko
+          import time
+          import re
+          import json
+
+          HOST = "{{ ansible_host }}"
+          USER = "{{ ansible_user }}"
+          PASSWORD = "{{ ansible_password }}"
+          PORT_ID = "{{ port_id_normalized }}"
+
+          PROMPT_RE = r'[>#]\s*$'
+
+          VALID_PORTS = {f"p{n}" for n in range(1, 9)}
+
+
+          def read_until_prompt(shell, prompt_re, timeout=10):
+              buf = ""
+              end_time = time.time() + timeout
+
+              while time.time() < end_time:
+                  if shell.recv_ready():
+                      chunk = shell.recv(65535).decode(
+                          errors="ignore"
+                      )
+                      buf += chunk
+
+                      if re.search(prompt_re, buf):
+                          return buf
+                  else:
+                      time.sleep(0.1)
+
+              return buf
+
+
+          def send_cmd(
+              shell, cmd, timeout=10, check_errors=True
+          ):
+              """Send a CLI command, wait for the prompt,
+              optionally raise on switch-reported errors.
+              Returns the raw output."""
+              shell.send(
+                  cmd if cmd.endswith("\n") else cmd + "\n"
+              )
+              output = read_until_prompt(
+                  shell, PROMPT_RE, timeout=timeout
+              )
+
+              if check_errors and re.search(
+                  r'%err|invalid|error', output, re.IGNORECASE
+              ):
+                  raise Exception(
+                      f"'{cmd.strip()}' rejected by switch: "
+                      f"{output.strip()}"
+                  )
+
+              return output
+
+
+          shell = None
+          ssh = None
+
+          try:
+              # ==================================
+              # RE-VALIDATE INPUTS (defense in
+              # depth, in case this script is ever
+              # invoked outside the playbook)
+              # ==================================
+
+              if PORT_ID not in VALID_PORTS:
+                  raise Exception(
+                      f"Invalid port_id '{PORT_ID}': must "
+                      f"be p1 through p8"
+                  )
+
+              # ==================================
+              # SSH CONNECTION
+              # ==================================
+
+              ssh = paramiko.SSHClient()
+              ssh.set_missing_host_key_policy(
+                  paramiko.AutoAddPolicy()
+              )
+
+              ssh.connect(
+                  HOST,
+                  username=USER,
+                  password=PASSWORD,
+                  look_for_keys=False,
+                  allow_agent=False,
+                  timeout=10
+              )
+
+              shell = ssh.invoke_shell()
+              time.sleep(0.5)
+
+              # ==================================
+              # LOGIN BANNER / INITIAL PROMPT
+              # ==================================
+
+              read_until_prompt(shell, PROMPT_RE, timeout=5)
+
+              # ==================================
+              # ENABLE, DISABLE PAGING, ENTER CONFIG
+              # ==================================
+
+              send_cmd(
+                  shell, "enable",
+                  timeout=5, check_errors=False
+              )
+              send_cmd(
+                  shell, "terminal length 0",
+                  timeout=5, check_errors=False
+              )
+              send_cmd(shell, "config", timeout=10)
+
+              # ==================================
+              # DELETE THE PORT-CHANNEL INTERFACE
+              # ==================================
+
+              send_cmd(
+                  shell, f"no interface {PORT_ID}",
+                  timeout=10
+              )
+
+              # ==================================
+              # EXIT CONFIG MODE
+              # ==================================
+
+              send_cmd(
+                  shell, "exit",
+                  timeout=5, check_errors=False
+              )
+
+              # ==================================
+              # SAVE CONFIG (persist running-config)
+              # NOTE: "write" was not part of what
+              # you confirmed for this command;
+              # included for consistency with other
+              # config playbooks. Remove if not
+              # applicable here.
+              # ==================================
+
+              write_output = send_cmd(
+                  shell, "write",
+                  timeout=15, check_errors=False
+              )
+              if re.search(
+                  r'%err|invalid|error|fail',
+                  write_output, re.IGNORECASE
+              ):
+                  raise Exception(
+                      "'write' (save config) rejected "
+                      f"by switch: {write_output.strip()}"
+                  )
+
+              # ==================================
+              # CLOSE SSH / RETURN JSON
+              # ==================================
+
+              shell.close()
+              ssh.close()
+
+              print(json.dumps({
+                  "ip": HOST,
+                  "status": "success",
+              }))
+
+          except Exception as e:
+              try:
+                  if shell:
+                      shell.close()
+                  if ssh:
+                      ssh.close()
+              except:
+                  pass
+
+              print(json.dumps({
+                  "ip": HOST,
+                  "status": "failed",
+                  "error": str(e)
+              }))
+
+    # ==========================================
+    # EXECUTE PYTHON SCRIPT
+    # ==========================================
+
+    - name: Execute port aggregate config delete script
+      ansible.builtin.command:
+        cmd: >
+          /opt/librenms/librenms-ansible-inventory-plugin/bin/python3
+          /opt/librenms/librenms-ansible-inventory-plugin/tmp/\
+          port_aggregation_config_delete_exec.py
+      register: config_raw
+      changed_when: false
+      failed_when: false
+
+    # ==========================================
+    # CONVERT JSON RESULT
+    # ==========================================
+
+    - name: Convert config delete result to JSON
+      ansible.builtin.set_fact:
+        config_result: "{{ config_raw.stdout | from_json }}"
+
+    # ==========================================
+    # DISPLAY RESULT
+    # ==========================================
+
+    - name: Display config delete result
+      ansible.builtin.debug:
+        var: config_result
+
+    # ==========================================
+    # SAVE RESULT
+    # ==========================================
+
+    - name: Save config delete result
+      ansible.builtin.copy:
+        dest: "/opt/librenms/librenms-ansible-inventory-plugin/output/\
+             {{ ansible_host }}_port_aggregation_config_delete.yml"
+        content: |
+          {{ config_result | to_nice_yaml }}
+
+    # ==========================================
+    # FAIL IF COMMAND FAILED
+    # ==========================================
+
+    - name: Fail if port config delete failed
+      ansible.builtin.fail:
+        msg: "{{ config_result.error }}"
+      when: config_result.status == "failed"
+
+    # ==========================================
+    # FINAL MESSAGE
+    # ==========================================
+
+    - name: Display result file
+      ansible.builtin.debug:
+        msg: >
+          Port {{ port_id }} deleted on {{ ansible_host }}.
+          Result saved to
+          output/{{ ansible_host }}_port_aggregation_config_delete.yml

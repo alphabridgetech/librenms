@@ -82,6 +82,13 @@ Route::prefix('v0')->group(function () {
         Route::post('arp/add/{hostname}', [App\Api\Controllers\KunalApiController::class, 'addbasicarp'])->name('arp.add');
         Route::post('arp/edit/{hostname}', [App\Api\Controllers\KunalApiController::class, 'editbasicarp'])->name('arp.edit');
         Route::post('arp/delete/{hostname}', [App\Api\Controllers\KunalApiController::class, 'deletebasicarp'])->name('arp.delete');
+        Route::get('backuplink/show/{hostname}', [App\Api\Controllers\KunalApiController::class, 'getbackuplink'])->name('backuplink.show');
+        Route::post('backuplink/set/{hostname}', [App\Api\Controllers\KunalApiController::class, 'setbackuplink'])->name('backuplink.set');
+        Route::get('portchannel/show/{hostname}', [App\Api\Controllers\KunalApiController::class, 'getportaggregate'])->name('portchannel.show');
+        Route::post('portchannel/add/{hostname}', [App\Api\Controllers\KunalApiController::class, 'addportaggregate'])->name('portchannel.add');
+        Route::post('portchannel/edit/{hostname}', [App\Api\Controllers\KunalApiController::class, 'editportaggregate'])->name('portchannel.edit');
+        Route::post('portchannel/delete/{hostname}', [App\Api\Controllers\KunalApiController::class, 'deleteportaggregate'])->name('portchannel.delete');
+        Route::post('portchannel/loadbalance/{hostname}', [App\Api\Controllers\KunalApiController::class, 'setportchannelloadbalance'])->name('portchannel.loadbalance');
         Route::post('tftpupload/{hostname}', [App\Api\Controllers\KunalApiController::class, 'tftpupload'])->name('tftpupload');
         Route::post('tftpexport/{hostname}', [App\Api\Controllers\KunalApiController::class, 'tftpexport'])->name('tftpexport'); 
         Route::post('tftp/schedule', [App\Api\Controllers\KunalApiController::class, 'saveTftpSchedule'])->name('tftp.schedule');
