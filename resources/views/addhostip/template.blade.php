@@ -257,6 +257,9 @@ switchport pvid @{{value}}
 
                             <input type="hidden" name="direct_commands" id="direct_commands" value="">
                             <input type="hidden" name="use_template_commands" id="use_template_commands" value="1">
+                            <input type="hidden" name="loaded_template_name" id="loaded_template_name_hidden" value="">
+                            <input type="hidden" name="template_folder" id="template_folder_hidden" value="">
+                            <input type="hidden" name="field_values" id="field_values" value="">
 
                             <div class="form-group">
                                 <div class="col-sm-offset-3 col-sm-9">
@@ -665,6 +668,33 @@ switchport pvid @{{value}}
             // =============================================
             // RIGHT: Load + Use Template
             // =============================================
+            function collectFieldValuesForSave() {
+                const values = {};
+                $('#dynamic_form_fields .dynamic-field-row').each(function() {
+                    const $field = $(this);
+                    const label = $field.data('label') || '';
+                    const type = $field.data('type');
+                    if (!label || type === 'putonlycmd') return;
+
+                    if (type === 'checkbox') {
+                        values[label] = $field.find('.dynamic-field-value').is(':checked');
+                    } else if (type === 'dynamic_list') {
+                        const rows = [];
+                        $field.find('.dynamic-row-item').each(function() {
+                            const row = {};
+                            $(this).find('.dynamic-row-input').each(function() {
+                                row[$(this).data('var')] = $(this).val() || '';
+                            });
+                            rows.push(row);
+                        });
+                        values[label] = rows;
+                    } else {
+                        values[label] = $field.find('.dynamic-field-value').val() || '';
+                    }
+                });
+                return values;
+            }
+
             function generateCommands() {
                 let coreCommands = [];
 
@@ -921,6 +951,8 @@ switchport pvid @{{value}}
                     if (!templateMatchesHardware((loadedTemplate.hardware_models || []).join(','))) {
                         alert('The loaded template "' + loadedTemplate.name + '" does not apply to this device\'s hardware model. Please pick a matching template.');
                         $('#load_template').val('').trigger('change');
+                    } else {
+                        fetchLastTemplateValues($(this).val(), loadedTemplate.name, loadedTemplate.template_folder || '');
                     }
                 }
 
@@ -1092,6 +1124,62 @@ switchport pvid @{{value}}
                 });
             });
 
+            function fetchLastTemplateValues(deviceId, templateName, templateFolder) {
+                $.ajax({
+                    url: "{{ route('addhost.template.last-values') }}",
+                    type: 'GET',
+                    data: { device_id: deviceId, template_name: templateName, template_folder: templateFolder },
+                    success: function(response) {
+                        if (!response.success || !response.found) return;
+
+                        if (response.field_values) {
+                            Object.keys(response.field_values).forEach(function(label) {
+                                const $row = $('#dynamic_form_fields .dynamic-field-row').filter(function() {
+                                    return $(this).data('label') === label;
+                                });
+                                if (!$row.length) return; // template edited/renamed since save - skip, best effort only
+
+                                const type = $row.data('type');
+                                const val = response.field_values[label];
+
+                                if (type === 'checkbox') {
+                                    $row.find('.dynamic-field-value').prop('checked', !!val).trigger('change');
+                                } else if (type === 'dynamic_list') {
+                                    const adder = window._dynamicListAdders && window._dynamicListAdders[label];
+                                    if (adder && Array.isArray(val)) {
+                                        $row.find('.dynamic-rules-list').empty();
+                                        val.forEach(rowVals => adder(rowVals));
+                                    }
+                                } else {
+                                    $row.find('.dynamic-field-value').val(val).trigger('change');
+                                }
+                            });
+                        }
+
+                        if (response.port_mode) {
+                            $('input[name="port_mode"][value="' + response.port_mode + '"]').prop('checked', true).trigger('change');
+                        }
+                        if (response.pvid) $('#pvid').val(response.pvid);
+                        if (response.custom_commands) $('#custom_commands').val(response.custom_commands);
+
+                        if (response.selected_interfaces && Object.keys(response.selected_interfaces).length > 0) {
+                            // Takes precedence over the template's own embedded `interfaces` default
+                            // (pendingTemplateInterfaces) - this reflects what THIS device actually
+                            // had last time, not the template's generic default.
+                            pendingTemplateInterfaces = response.selected_interfaces;
+                            Object.keys(response.selected_interfaces).forEach(function(devId) {
+                                const $sel = $('#group_device_' + devId + ' .device-interface-select');
+                                if ($sel.length) {
+                                    $sel.val(response.selected_interfaces[devId]).trigger('change');
+                                }
+                            });
+                        }
+
+                        updateSelectedCount();
+                    }
+                });
+            }
+
             function fetchInterfacesForDevices() {
                 const selectedDeviceId = $('#device_select').val();
                 const $interfaceContainer = $('#interfaces_dynamic_container');
@@ -1157,6 +1245,7 @@ switchport pvid @{{value}}
             function renderDynamicFormFields(fields) {
                 const $container = $('#dynamic_form_fields');
                 $container.empty();
+                window._dynamicListAdders = {};
 
                 if (!fields || fields.length === 0) {
                     $container.hide();
@@ -1266,6 +1355,9 @@ switchport pvid @{{value}}
                             updateSelectedCount();
                         }
 
+                        window._dynamicListAdders = window._dynamicListAdders || {};
+                        window._dynamicListAdders[field.label] = addDynamicRuleRow;
+
                         $fieldContainer.find('.add-dynamic-rule-btn').on('click', function() {
                             addDynamicRuleRow({});
                         });
@@ -1321,6 +1413,8 @@ switchport pvid @{{value}}
                     const type = template.type || 'other';
 
                     $('#template_name').val(template.name);
+                    $('#loaded_template_name_hidden').val(template.name);
+                    $('#template_folder_hidden').val(template.template_folder || '');
                     $('#template_config_section').show();
                     if (isDevMode) {
                         $('#deleteTemplateBtn').show();
@@ -1390,8 +1484,15 @@ switchport pvid @{{value}}
                             updateSelectedCount();
                         }
                     }
+
+                    const deviceIdForLookup = $('#device_select').val();
+                    if (deviceIdForLookup) {
+                        fetchLastTemplateValues(deviceIdForLookup, template.name, template.template_folder || '');
+                    }
                 } else {
                     $('#template_name').val('');
+                    $('#loaded_template_name_hidden').val('');
+                    $('#template_folder_hidden').val('');
                     $('#template_config_section').hide();
                     $('#deleteTemplateBtn').hide();
                     $('#editTemplateBtn').hide();
@@ -1529,6 +1630,8 @@ switchport pvid @{{value}}
 
                 const processingHtml = '<div class="alert alert-info" id="processingAlert"><i class="fa fa-spinner fa-spin"></i> Processing...</div>';
                 $('.panel:first').before(processingHtml);
+
+                $('#field_values').val(JSON.stringify(collectFieldValuesForSave()));
 
                 const formData = new FormData(this);
                 formData.append('valid_ips', JSON.stringify(validIPs));

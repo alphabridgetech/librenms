@@ -12,6 +12,8 @@
 # Output:
 #   output/<device_ip>_backuplink.yml
 #
+#command:ansible-playbook -i inventory/192.168.200.244 playbooks/getbackup.yml
+#
 # Output Format:
 #   Simple YAML
 # ============================================================================
@@ -76,8 +78,9 @@
 
                       buf += data
 
+                      # Detect any switch prompt ending with # or >
                       if re.search(
-                          r'Switch(?:_config)?[#>]\s*$',
+                          r'[^\r\n]+[#>]\s*$',
                           buf
                       ):
                           return buf
@@ -85,6 +88,7 @@
                       end = time.time() + 1
 
                   else:
+
                       time.sleep(0.1)
 
               return buf
@@ -259,7 +263,10 @@
               # Enter enable mode
               # ==============================================================
 
-              if "Switch>" in first:
+              if re.search(
+                  r'[^\r\n]+>\s*$',
+                  first
+              ):
 
                   shell.send("enable\n")
 

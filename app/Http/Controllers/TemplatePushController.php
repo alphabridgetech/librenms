@@ -103,6 +103,37 @@ class TemplatePushController extends Controller
         return $this->processPushNetworkCommand($request);
     }
 
+    public function getLastTemplateValues(Request $request)
+    {
+        $this->authorize('create', \App\Models\CustomMib::class);
+
+        $request->validate([
+            'device_id' => 'required|integer',
+            'template_name' => 'required|string',
+            'template_folder' => 'nullable|string',
+        ]);
+
+        $row = \App\Models\TemplatePushValue::where('device_id', $request->input('device_id'))
+            ->where('template_name', $request->input('template_name'))
+            ->where('template_folder', $request->input('template_folder') ?? '')
+            ->latest()
+            ->first();
+
+        if (!$row) {
+            return response()->json(['success' => true, 'found' => false]);
+        }
+
+        return response()->json([
+            'success' => true,
+            'found' => true,
+            'field_values' => $row->field_values,
+            'port_mode' => $row->port_mode,
+            'pvid' => $row->pvid,
+            'custom_commands' => $row->custom_commands,
+            'selected_interfaces' => $row->selected_interfaces,
+        ]);
+    }
+
     public function storeTemplate(Request $request)
     {
         $name = $request->template_name;

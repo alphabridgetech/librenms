@@ -117,6 +117,34 @@ trait HandlesPushConfiguration
         Eventlog::log($message, $device, 'template_push', $isFailed ? Severity::Error : Severity::Ok);
     }
 
+    /**
+     * Remember what was submitted for this device+template so the Template
+     * Push page can pre-fill the form next time the same combination is
+     * loaded. Saved regardless of push success/failure - a bad SSH attempt
+     * shouldn't cost the user their typed values. Never allowed to block
+     * the actual push.
+     */
+    protected function saveTemplatePushValues(Request $request, Device $device): void
+    {
+        try {
+            \App\Models\TemplatePushValue::upsertFor(
+                $device->device_id,
+                $request->input('loaded_template_name'),
+                $request->input('template_folder'),
+                [
+                    'field_values' => $request->filled('field_values') ? json_decode($request->input('field_values'), true) : null,
+                    'port_mode' => $request->input('port_mode'),
+                    'pvid' => $request->input('pvid'),
+                    'custom_commands' => $request->input('custom_commands'),
+                    'selected_interfaces' => $request->input('selected_interfaces') ?: null,
+                    'user_id' => Auth::check() ? Auth::user()->user_id : null,
+                ]
+            );
+        } catch (\Exception $e) {
+            Log::warning('Failed to save template push values: ' . $e->getMessage());
+        }
+    }
+
     protected function processPush(Request $request)
     {
         $this->initAnsible();
@@ -342,11 +370,15 @@ trait HandlesPushConfiguration
         foreach ($validIPs as $ip) {
             $hostnameip = trim($ip);
             $device = Device::where('hostname', $hostnameip)->orWhere('overwrite_ip', $hostnameip)->first();
-            
+
+            if ($device && $request->filled('loaded_template_name')) {
+                $this->saveTemplatePushValues($request, $device);
+            }
+
             $reqUser = $request->input('ansible_user', 'admin');
             $reqPass = $request->input('ansible_password', 'admin');
             $reqCommunity = $request->input('snmp_community', 'public');
-            
+
             $ansibleUser = ($device && !empty($device->ssh_user)) ? $device->ssh_user : $reqUser;
             $ansiblePassword = ($device && !empty($device->ssh_pass)) ? $device->ssh_pass : $reqPass;
             $snmpCommunity = ($device && !empty($device->community)) ? $device->community : $reqCommunity;

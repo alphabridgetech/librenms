@@ -242,6 +242,7 @@ Route::middleware(['auth', 'license'])->group(function () {
     Route::post('addhost/template/save', [TemplatePushController::class, 'addHostTemplateSave'])->name('addhost.template.save');
     Route::post('addhost/template/store', [TemplatePushController::class, 'storeTemplate'])->name('addhost.template.store');
     Route::post('addhost/template/delete', [TemplatePushController::class, 'destroyTemplate'])->name('addhost.template.delete');
+    Route::get('addhost/template/last-values', [TemplatePushController::class, 'getLastTemplateValues'])->name('addhost.template.last-values');
     Route::get('addhost/ip/file-content', [SystemBulkUploadController::class, 'getUploadedFileContent'])->name('addhost.ip.file-content');
     Route::post('addhost/ports/fetch', [TemplatePushController::class, 'getDevicePorts'])->name('addhost.ports.fetch');
     // Add to routes/web.php for testing
