@@ -171,7 +171,7 @@
 
     - name: Prepare BackupLink configuration script
       ansible.builtin.copy:
-        dest: "/home/gayatri/ansible/tmp/set_backuplink_interface.py"
+        dest: "/opt/librenms/librenms-ansible-inventory-plugin/tmp/set_backuplink_interface.py"
         mode: '0755'
         content: |
           #!/usr/bin/env python3
@@ -824,7 +824,7 @@
       ansible.builtin.command:
         cmd: >
           /usr/bin/python3
-          /home/gayatri/ansible/tmp/set_backuplink_interface.py
+          /opt/librenms/librenms-ansible-inventory-plugin/tmp/set_backuplink_interface.py
       register: backuplink_result
       changed_when: backuplink_result.rc == 0
       failed_when: backuplink_result.rc != 0

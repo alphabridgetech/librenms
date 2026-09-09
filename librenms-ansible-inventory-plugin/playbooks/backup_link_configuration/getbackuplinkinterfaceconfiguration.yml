@@ -39,7 +39,7 @@
 
     - name: Prepare BackupLink GET script
       ansible.builtin.copy:
-        dest: "/home/gayatri/ansible/tmp/get_backuplink_interface.py"
+        dest: "/opt/librenms/librenms-ansible-inventory-plugin/tmp/get_backuplink_interface.py"
         mode: '0755'
         content: |
           #!/usr/bin/env python3
@@ -537,7 +537,7 @@
       ansible.builtin.command:
         cmd: >
           /usr/bin/python3
-          /home/gayatri/ansible/tmp/get_backuplink_interface.py
+          /opt/librenms/librenms-ansible-inventory-plugin/tmp/get_backuplink_interface.py
       register: backuplink_get
       changed_when: false
       failed_when: backuplink_get.rc != 0

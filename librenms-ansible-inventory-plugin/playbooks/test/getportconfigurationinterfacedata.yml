@@ -1,0 +1,449 @@
+# ============================================================================
+# File        : getportconfigurationinterfacedata.yml
+# Feature     : Port Configuration - GET
+#
+# Purpose:
+#   Get Port Configuration data for GigaEthernet interfaces.
+#
+# CLI:
+#   show interface GigaEthernet 0/<port>
+#
+# Command:
+#   ansible-playbook -i 192.168.2.1.yml playbooks/getportconfigurationinterfacedata.yml
+#
+# Output:
+#   /opt/librenms/librenms-ansible-inventory-plugin/output/<IP>_port_configuration.yml
+# ============================================================================
+
+---
+- name: Get Port Configuration
+  hosts: all
+  gather_facts: no
+
+  vars:
+    device_ip: "{{ ansible_host | default(inventory_hostname) }}"
+    script_file: "/opt/librenms/librenms-ansible-inventory-plugin/tmp/get_port_configuration.py"
+    output_file: "/opt/librenms/librenms-ansible-inventory-plugin/output/{{ device_ip }}_port_configuration.yml"
+
+    # Switch has GigaEthernet ports 1 to 6
+    interface_count: 6
+
+  tasks:
+
+    # ------------------------------------------------------------------------
+    # Create directories
+    # ------------------------------------------------------------------------
+
+    - name: Create script directory
+      file:
+        path: "/opt/librenms/librenms-ansible-inventory-plugin/tmp"
+        state: directory
+        mode: '0755'
+      delegate_to: localhost
+
+    - name: Create output directory
+      file:
+        path: "/opt/librenms/librenms-ansible-inventory-plugin/output"
+        state: directory
+        mode: '0755'
+      delegate_to: localhost
+
+    # ------------------------------------------------------------------------
+    # Create Python SSH GET script
+    # ------------------------------------------------------------------------
+
+    - name: Create Port Configuration GET script
+      copy:
+        dest: "{{ script_file }}"
+        mode: '0755'
+        content: |
+          #!/usr/bin/env python3
+
+          import paramiko
+          import time
+          import re
+          import sys
+
+          HOST = "{{ device_ip }}"
+          USERNAME = "{{ ansible_user | default('admin') }}"
+          PASSWORD = "{{ ansible_password | default('admin') }}"
+
+          INTERFACE_COUNT = {{ interface_count }}
+
+          try:
+
+              # ============================================================
+              # SSH CONNECTION
+              # ============================================================
+
+              ssh = paramiko.SSHClient()
+              ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+
+              ssh.connect(
+                  HOST,
+                  username=USERNAME,
+                  password=PASSWORD,
+                  look_for_keys=False,
+                  allow_agent=False,
+                  timeout=10,
+                  banner_timeout=10,
+                  auth_timeout=10
+              )
+
+              shell = ssh.invoke_shell()
+              shell.settimeout(2)
+
+              time.sleep(2)
+
+              # Clear initial output
+              while shell.recv_ready():
+                  shell.recv(65535)
+
+              # ============================================================
+              # READ SWITCH OUTPUT
+              # ============================================================
+
+              def read_output(timeout=8):
+
+                  output = ""
+                  end_time = time.time() + timeout
+
+                  while time.time() < end_time:
+
+                      try:
+
+                          if shell.recv_ready():
+
+                              chunk = shell.recv(65535).decode(
+                                  errors="ignore"
+                              )
+
+                              output += chunk
+
+                              # Handle pagination
+                              if "--More--" in chunk:
+                                  shell.send(" ")
+                                  end_time = time.time() + 3
+
+                          else:
+                              time.sleep(0.1)
+
+                      except Exception:
+                          break
+
+                  # Remove ANSI escape sequences
+                  output = re.sub(
+                      r'\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])',
+                      '',
+                      output
+                  )
+
+                  output = output.replace("\r", "")
+                  output = output.replace("--More--", "")
+
+                  return output
+
+              # ============================================================
+              # ENABLE MODE
+              # ============================================================
+
+              first_output = read_output()
+
+              if re.search(
+                  r'[^\r\n]+>\s*$',
+                  first_output
+              ):
+
+                  shell.send("enable\n")
+                  time.sleep(1)
+
+                  enable_output = read_output()
+
+                  if "assword" in enable_output:
+
+                      shell.send(PASSWORD + "\n")
+                      time.sleep(1)
+
+                      read_output()
+
+              # ============================================================
+              # DISABLE PAGING
+              # ============================================================
+
+              shell.send("terminal length 0\n")
+              time.sleep(1)
+
+              read_output()
+
+              # ============================================================
+              # GET DATA FOR EACH INTERFACE
+              # ============================================================
+
+              rows = []
+
+              for port in range(1, INTERFACE_COUNT + 1):
+
+                  interface_type = "GigaEthernet"
+                  interface_number = "0/" + str(port)
+                  interface_name = (
+                      interface_type + interface_number
+                  )
+
+                  # --------------------------------------------------------
+                  # Command
+                  # --------------------------------------------------------
+
+                  command = (
+                      "show interface "
+                      + interface_type
+                      + " "
+                      + interface_number
+                  )
+
+                  # Clear old output
+                  while shell.recv_ready():
+                      shell.recv(65535)
+
+                  shell.send(command + "\n")
+
+                  time.sleep(1)
+
+                  out = read_output(8)
+
+                  # ========================================================
+                  # CHECK COMMAND ERROR
+                  # ========================================================
+
+                  if re.search(
+                      r'Unknown command|Invalid command|Error',
+                      out,
+                      re.IGNORECASE
+                  ):
+
+                      continue
+
+                  # ========================================================
+                  # STATUS
+                  # ========================================================
+
+                  status = "Enable"
+
+                  if re.search(
+                      r'administratively\s+down',
+                      out,
+                      re.IGNORECASE
+                  ):
+
+                      status = "Disable"
+
+                  # ========================================================
+                  # SPEED
+                  # ========================================================
+
+                  speed = "Auto"
+
+                  speed_match = re.search(
+                      r'(\d+)\s*Mb/s',
+                      out,
+                      re.IGNORECASE
+                  )
+
+                  if speed_match:
+
+                      speed_value = speed_match.group(1)
+
+                      speed_map = {
+                          "10": "10M",
+                          "100": "100M",
+                          "1000": "1000M",
+                          "10000": "10000M"
+                      }
+
+                      speed = speed_map.get(
+                          speed_value,
+                          speed_value + "M"
+                      )
+
+                  # ========================================================
+                  # DUPLEX
+                  # ========================================================
+
+                  duplex = "Auto"
+
+                  duplex_match = re.search(
+                      r'(Half|Full)-duplex',
+                      out,
+                      re.IGNORECASE
+                  )
+
+                  if duplex_match:
+
+                      duplex = (
+                          duplex_match.group(1).title()
+                      )
+
+                  # ========================================================
+                  # FLOW CONTROL
+                  # ========================================================
+
+                  flow_control = "Auto"
+
+                  flow_match = re.search(
+                      r'Flow-Control\s+(On|Off)',
+                      out,
+                      re.IGNORECASE
+                  )
+
+                  if flow_match:
+
+                      flow_control = (
+                          flow_match.group(1).title()
+                      )
+
+                  # ========================================================
+                  # MEDIUM
+                  # ========================================================
+
+                  medium = "Auto"
+
+                  hardware_match = re.search(
+                      r'Hardware\s+is\s+([^\r\n]+)',
+                      out,
+                      re.IGNORECASE
+                  )
+
+                  if hardware_match:
+
+                      hardware = hardware_match.group(1).strip()
+
+                      if re.search(
+                          r'Giga-TX|Copper',
+                          hardware,
+                          re.IGNORECASE
+                      ):
+
+                          medium = "Copper"
+
+                      elif re.search(
+                          r'Giga-FX|Fiber',
+                          hardware,
+                          re.IGNORECASE
+                      ):
+
+                          medium = "Fiber"
+
+                  # ========================================================
+                  # FIBER AUTO
+                  # ========================================================
+
+                  fiber_auto = "Auto"
+
+                  fiber_match = re.search(
+                      r'Fiber[-_ ]?Auto\s+(On|Off)',
+                      out,
+                      re.IGNORECASE
+                  )
+
+                  if fiber_match:
+
+                      fiber_auto = (
+                          fiber_match.group(1).title()
+                      )
+
+                  # ========================================================
+                  # PORT NAME
+                  # ========================================================
+
+                  port_name = (
+                      "giga0/" + str(port)
+                  )
+
+                  # ========================================================
+                  # STORE DATA
+                  # ========================================================
+
+                  rows.append({
+                      "port": port_name,
+                      "interface": interface_name,
+                      "status": status,
+                      "speed": speed,
+                      "duplex": duplex,
+                      "flow_control": flow_control,
+                      "medium": medium,
+                      "fiber_auto": fiber_auto
+                  })
+
+              # ============================================================
+              # CLOSE SSH
+              # ============================================================
+
+              shell.close()
+              ssh.close()
+
+              # ============================================================
+              # OUTPUT
+              # ============================================================
+
+              print("IP: " + HOST)
+              print("")
+              print("port_configuration:")
+
+              for row in rows:
+
+                  print("  - port: " + row["port"])
+                  print("    interface: " + row["interface"])
+                  print("    status: " + row["status"])
+                  print("    speed: " + row["speed"])
+                  print("    duplex: " + row["duplex"])
+                  print("    flow_control: " + row["flow_control"])
+                  print("    medium: " + row["medium"])
+                  print("    fiber_auto: " + row["fiber_auto"])
+
+              sys.exit(0)
+
+          except Exception as e:
+
+              print(
+                  "ERROR|"
+                  + str(e).replace("\n", " ")
+              )
+
+              sys.exit(1)
+
+    # ------------------------------------------------------------------------
+    # Execute GET
+    # ------------------------------------------------------------------------
+
+    - name: Execute Port Configuration GET
+      command: python3 "{{ script_file }}"
+      register: port_get_result
+      ignore_errors: yes
+
+    # ------------------------------------------------------------------------
+    # Save GET output
+    # ------------------------------------------------------------------------
+
+    - name: Save Port Configuration GET output
+      copy:
+        dest: "{{ output_file }}"
+        content: |
+          {{ port_get_result.stdout }}
+      delegate_to: localhost
+
+    # ------------------------------------------------------------------------
+    # Display GET result
+    # ------------------------------------------------------------------------
+
+    - name: Display Port Configuration GET result
+      debug:
+        msg: |
+          {{ port_get_result.stdout }}
+
+    # ------------------------------------------------------------------------
+    # Fail if GET failed
+    # ------------------------------------------------------------------------
+
+    - name: Fail if Port Configuration GET failed
+      fail:
+        msg: "{{ port_get_result.stdout | default(port_get_result.stderr) }}"
+      when: port_get_result.rc != 0

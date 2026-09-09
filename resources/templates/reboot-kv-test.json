@@ -1,0 +1,17 @@
+{
+    "name": "reboot kv test",
+    "type": "form",
+    "hostname": "",
+    "interfaces": [],
+    "hardware_models": [],
+    "fields": [
+        {
+            "label": "reboot",
+            "type": "dropdown",
+            "options": "yes:rebbot n,no:",
+            "command": null,
+            "required": true
+        }
+    ],
+    "created_at": "2026-09-09 11:07:55"
+}

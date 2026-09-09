@@ -85,8 +85,7 @@
         Create Python SSH Script for port aggregate
         config delete
       ansible.builtin.copy:
-        dest: "/opt/librenms/librenms-ansible-inventory-plugin/\
-               tmp/port_aggregation_config_delete_exec.py"
+        dest: "/opt/librenms/librenms-ansible-inventory-plugin/tmp/port_aggregation_config_delete_exec.py"
         mode: '0755'
         content: |
           #!/usr/bin/env python3
@@ -281,7 +280,7 @@
       ansible.builtin.command:
         cmd: >
           /opt/librenms/librenms-ansible-inventory-plugin/bin/python3
-          /opt/librenms/librenms-ansible-inventory-plugin/tmp/\
+          /opt/librenms/librenms-ansible-inventory-plugin/tmp/
           port_aggregation_config_delete_exec.py
       register: config_raw
       changed_when: false
@@ -309,7 +308,7 @@
 
     - name: Save config delete result
       ansible.builtin.copy:
-        dest: "/opt/librenms/librenms-ansible-inventory-plugin/output/\
+        dest: "/opt/librenms/librenms-ansible-inventory-plugin/output/
              {{ ansible_host }}_port_aggregation_config_delete.yml"
         content: |
           {{ config_result | to_nice_yaml }}
