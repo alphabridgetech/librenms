@@ -3,13 +3,22 @@
     "type": "form",
     "hostname": "",
     "interfaces": [],
+    "hardware_models": [],
     "fields": [
         {
             "label": "LAG-ID",
             "type": "text",
             "options": null,
-            "command": "aggregator-group {{value}} mode lacp active"
+            "command": "aggregator-group {{value}} mode lacp active",
+            "required": true
+        },
+        {
+            "label": null,
+            "type": "text",
+            "options": null,
+            "command": "{{interface}}",
+            "required": true
         }
     ],
-    "created_at": "2026-07-08 12:27:34"
+    "created_at": "2026-09-09 15:12:54"
 }

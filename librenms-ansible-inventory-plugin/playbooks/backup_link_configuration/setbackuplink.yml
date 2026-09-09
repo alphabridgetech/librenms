@@ -1,32 +1,26 @@
 # ============================================================================
 # File        : setbackuplink.yml
 # Feature     : BackupLink Protocol Global Configuration - SET
-# Device      : ABTPL AS210T Ethernet Switch
 #
-# Operations:
-#   1. Add BackupLink Group
-#   2. Delete BackupLink Group
+# Usage:
+# ansible-playbook -i 192.168.2.245.yml playbooks/setbackuplink.yml \
+# -e "operation=add group_id=1 preemption_mode=none preemption_delay=0"
 #
-# UI Parameters:
-#   Group ID
-#   Preemption Mode
-#       - none
-#       - forced
-#       - bandwidth
-#   Preemption Delay
-#
-# Output:
-#   output/<device_ip>_backuplink_set.yml
 # ============================================================================
 
+---
 - name: Configure BackupLink Protocol Global Configuration
   hosts: alphabridge_devices
   gather_facts: no
 
+  vars:
+    output_dir: "/opt/librenms/librenms-ansible-inventory-plugin/output"
+    temp_script: "/opt/librenms/librenms-ansible-inventory-plugin/tmp/set_backuplink.py"
+
   tasks:
 
     # ========================================================================
-    # Validate Operation
+    # VALIDATION
     # ========================================================================
 
     - name: Validate Operation
@@ -36,10 +30,6 @@
           - operation | lower in ['add', 'delete']
         fail_msg: "operation must be add or delete."
 
-    # ========================================================================
-    # Validate Group ID
-    # ========================================================================
-
     - name: Validate Group ID
       ansible.builtin.assert:
         that:
@@ -47,10 +37,6 @@
           - group_id | int >= 1
           - group_id | int <= 8
         fail_msg: "group_id must be between 1 and 8."
-
-    # ========================================================================
-    # Validate Preemption Mode
-    # ========================================================================
 
     - name: Validate Preemption Mode
       ansible.builtin.assert:
@@ -60,27 +46,23 @@
         fail_msg: "preemption_mode must be none, forced or bandwidth."
       when: operation | lower == 'add'
 
-    # ========================================================================
-    # Validate Preemption Delay
-    # ========================================================================
-
     - name: Validate Preemption Delay
       ansible.builtin.assert:
         that:
           - preemption_delay is defined
           - preemption_delay | int >= 0
-        fail_msg: "preemption_delay is required and must be >= 0."
+        fail_msg: "preemption_delay must be >= 0."
       when:
         - operation | lower == 'add'
         - preemption_mode | lower != 'none'
 
     # ========================================================================
-    # Create Python SSH Script
+    # CREATE PYTHON SCRIPT
     # ========================================================================
 
     - name: Create Python SSH script for BackupLink SET
       ansible.builtin.copy:
-        dest: "/opt/librenms/librenms-ansible-inventory-plugin/tmp/set_backuplink.py"
+        dest: "{{ temp_script }}"
         mode: "0755"
         content: |
           #!/usr/bin/env python3
@@ -91,8 +73,8 @@
           import sys
 
           HOST = "{{ ansible_host }}"
-          USER = "{{ ansible_user }}"
-          PASSWORD = "{{ ansible_password }}"
+          USER = "{{ ansible_user | default('admin') }}"
+          PASSWORD = "{{ ansible_password | default('admin') }}"
 
           OP = "{{ operation | lower }}"
           GROUP = int("{{ group_id }}")
@@ -100,50 +82,162 @@
           DELAY = "{{ preemption_delay | default('') }}"
 
           # ==================================================================
-          # Read CLI output until prompt
+          # GENERIC PROMPTS
           # ==================================================================
 
-          def read_until_prompt(shell, timeout=10):
+          USER_PROMPT_RE = re.compile(
+              r'(?m)^[^\r\n]*>\s*$'
+          )
 
-              buf = ""
-              end = time.time() + timeout
+          ENABLE_PROMPT_RE = re.compile(
+              r'(?m)^[^\r\n]*#\s*$'
+          )
 
-              while time.time() < end:
+          CONFIG_PROMPT_RE = re.compile(
+              r'(?m)^[^\r\n]*_config#\s*$'
+          )
+
+          ERROR_PATTERNS = [
+              r'%\s*Invalid',
+              r'%\s*Incomplete',
+              r'%\s*Ambiguous',
+              r'%\s*Unknown',
+              r'%\s*Error',
+              r'%\s*Failed',
+              r'Invalid input',
+              r'Invalid command',
+              r'Unknown command',
+              r'Incomplete command',
+              r'Ambiguous command',
+              r'Command not found',
+              r'Error:',
+              r'ERROR:',
+              r'Failed:'
+          ]
+
+          # ==================================================================
+          # CLEAN OUTPUT
+          # ==================================================================
+
+          def clean(text):
+
+              text = re.sub(
+                  r'\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])',
+                  '',
+                  text
+              )
+
+              text = text.replace('\r', '')
+              text = text.replace('--More--', '')
+              text = text.replace('-- More --', '')
+
+              return text
+
+          # ==================================================================
+          # READ EVERYTHING UNTIL OUTPUT BECOMES IDLE
+          # ==================================================================
+
+          def read_output(shell, timeout=10):
+
+              output = ""
+
+              end_time = time.time() + timeout
+              last_received = time.time()
+
+              while time.time() < end_time:
 
                   if shell.recv_ready():
 
                       data = shell.recv(65535).decode(
+                          "utf-8",
                           errors="ignore"
                       )
 
-                      buf += data
+                      output += data
+                      last_received = time.time()
 
-                      if re.search(
-                          r'Switch(?:_config)?[#>]\s*$',
-                          buf
-                      ):
-                          return buf
+                      if "--More--" in data:
+                          shell.send(" ")
 
-                      end = time.time() + 1
+                      if "-- More --" in data:
+                          shell.send(" ")
 
                   else:
+
+                      if output and (
+                          time.time() - last_received >= 1.0
+                      ):
+                          break
+
                       time.sleep(0.1)
 
-              return buf
+              return clean(output)
 
           # ==================================================================
-          # Send command
+          # CLEAR CHANNEL
           # ==================================================================
 
-          def send(shell, command, wait=0.5):
+          def clear_channel(shell):
+
+              time.sleep(0.3)
+
+              while shell.recv_ready():
+
+                  shell.recv(65535)
+
+          # ==================================================================
+          # SEND COMMAND AND WAIT
+          # ==================================================================
+
+          def send_command(shell, command, wait=1.5):
+
+              clear_channel(shell)
 
               shell.send(command + "\n")
+
               time.sleep(wait)
 
-              return read_until_prompt(shell)
+              return read_output(
+                  shell,
+                  timeout=10
+              )
 
           # ==================================================================
-          # SSH Connection
+          # CHECK CLI ERROR
+          # ==================================================================
+
+          def has_cli_error(output):
+
+              for pattern in ERROR_PATTERNS:
+
+                  if re.search(
+                      pattern,
+                      output,
+                      re.IGNORECASE
+                  ):
+                      return True
+
+              return False
+
+          # ==================================================================
+          # GET LAST PROMPT
+          # ==================================================================
+
+          def get_last_prompt(output):
+
+              lines = [
+                  line.strip()
+                  for line in output.splitlines()
+                  if line.strip()
+              ]
+
+              if not lines:
+                  return ""
+
+              return lines[-1]
+
+          # ==================================================================
+          # MAIN
           # ==================================================================
 
           ssh = paramiko.SSHClient()
@@ -152,138 +246,561 @@
               paramiko.AutoAddPolicy()
           )
 
-          ssh.connect(
-              HOST,
-              username=USER,
-              password=PASSWORD,
-              look_for_keys=False,
-              allow_agent=False,
-              timeout=10,
-              banner_timeout=10,
-              auth_timeout=10
-          )
+          try:
 
-          shell = ssh.invoke_shell()
+              # ==============================================================
+              # CONNECT
+              # ==============================================================
 
-          time.sleep(1)
-
-          first = read_until_prompt(shell)
-
-          # ==================================================================
-          # Enter enable mode
-          # ==================================================================
-
-          if "Switch>" in first:
-
-              shell.send("enable\n")
-
-              time.sleep(0.5)
-
-              enable_output = read_until_prompt(shell)
-
-              if "assword" in enable_output:
-
-                  shell.send(PASSWORD + "\n")
-
-                  time.sleep(0.5)
-
-                  read_until_prompt(shell)
-
-          # ==================================================================
-          # Enter configuration mode
-          # ==================================================================
-
-          send(shell, "config")
-
-          # ==================================================================
-          # ADD BackupLink Group
-          # ==================================================================
-
-          if OP == "add":
-
-              if MODE == "none":
-
-                  send(
-                      shell,
-                      f"backup-link-group {GROUP}"
-                  )
-
-              elif MODE == "forced":
-
-                  send(
-                      shell,
-                      f"backup-link-group {GROUP} "
-                      f"preemption-mode forced "
-                      f"delay {DELAY}"
-                  )
-
-              elif MODE == "bandwidth":
-
-                  send(
-                      shell,
-                      f"backup-link-group {GROUP} "
-                      f"preemption-mode bandwidth "
-                      f"delay {DELAY}"
-                  )
-
-          # ==================================================================
-          # DELETE BackupLink Group
-          # ==================================================================
-
-          elif OP == "delete":
-
-              send(
-                  shell,
-                  f"no backup-link-group {GROUP}"
+              ssh.connect(
+                  HOST,
+                  username=USER,
+                  password=PASSWORD,
+                  look_for_keys=False,
+                  allow_agent=False,
+                  timeout=15,
+                  banner_timeout=15,
+                  auth_timeout=15
               )
 
-          # ==================================================================
-          # Exit configuration mode
-          # ==================================================================
+              shell = ssh.invoke_shell()
 
-          send(shell, "exit")
+              time.sleep(2)
 
-          shell.close()
-          ssh.close()
+              initial_output = read_output(
+                  shell,
+                  timeout=5
+              )
 
-          # ==================================================================
-          # SET SUCCESS OUTPUT
-          # ==================================================================
+              # ==============================================================
+              # DETERMINE CURRENT MODE
+              # ==============================================================
 
-          print("BackupLink Protocol Global Configuration")
-          print("Operation: " + OP)
-          print("Group ID: " + str(GROUP))
-          print("Status: Success")
+              current_prompt = get_last_prompt(
+                  initial_output
+              )
 
-          sys.exit(0)
+              # ==============================================================
+              # USER EXEC MODE
+              #
+              # Example:
+              # AS212XTS_>
+              # ==============================================================
+
+              if USER_PROMPT_RE.search(
+                  current_prompt
+              ):
+
+                  # ----------------------------------------------------------
+                  # Send ENABLE
+                  # ----------------------------------------------------------
+
+                  enable_output = send_command(
+                      shell,
+                      "enable",
+                      wait=2
+                  )
+
+                  # ----------------------------------------------------------
+                  # Handle password prompt if present
+                  # ----------------------------------------------------------
+
+                  if re.search(
+                      r'password\s*:',
+                      enable_output,
+                      re.IGNORECASE
+                  ):
+
+                      enable_output = send_command(
+                          shell,
+                          PASSWORD,
+                          wait=2
+                      )
+
+                  # ----------------------------------------------------------
+                  # Check for CLI error
+                  # ----------------------------------------------------------
+
+                  if has_cli_error(
+                      enable_output
+                  ):
+
+                      print(
+                          "ERROR|Enable command failed\n"
+                          + enable_output
+                      )
+
+                      ssh.close()
+                      sys.exit(1)
+
+                  # ----------------------------------------------------------
+                  # IMPORTANT:
+                  # Verify actual ENABLE prompt.
+                  #
+                  # Must NOT still be >
+                  # ==============================================================
+
+                  enable_prompt = get_last_prompt(
+                      enable_output
+                  )
+
+                  if USER_PROMPT_RE.search(
+                      enable_prompt
+                  ):
+
+                      # ------------------------------------------------------
+                      # Retry enable once
+                      # ------------------------------------------------------
+
+                      enable_output = send_command(
+                          shell,
+                          "enable",
+                          wait=2
+                      )
+
+                      enable_prompt = get_last_prompt(
+                          enable_output
+                      )
+
+                  # ----------------------------------------------------------
+                  # Still not enabled
+                  # ----------------------------------------------------------
+
+                  if USER_PROMPT_RE.search(
+                      enable_prompt
+                  ):
+
+                      print(
+                          "ERROR|Failed to enter enable mode\n"
+                          + enable_output
+                      )
+
+                      ssh.close()
+                      sys.exit(1)
+
+                  # ----------------------------------------------------------
+                  # Verify # prompt
+                  # ----------------------------------------------------------
+
+                  if not ENABLE_PROMPT_RE.search(
+                      enable_prompt
+                  ):
+
+                      print(
+                          "ERROR|Enable prompt not detected\n"
+                          + enable_output
+                      )
+
+                      ssh.close()
+                      sys.exit(1)
+
+              # ==============================================================
+              # ENTER CONFIG MODE
+              #
+              # This command is sent ONLY after enable mode is confirmed.
+              # ==============================================================
+
+              config_output = send_command(
+                  shell,
+                  "config",
+                  wait=2
+              )
+
+              # ==============================================================
+              # CHECK CONFIG COMMAND ERROR
+              # ==============================================================
+
+              if has_cli_error(
+                  config_output
+              ):
+
+                  print(
+                      "ERROR|Configuration mode failed\n"
+                      + config_output
+                  )
+
+                  ssh.close()
+                  sys.exit(1)
+
+              # ==============================================================
+              # VERIFY CONFIG MODE
+              #
+              # Example:
+              # AS212XTS__config#
+              # ==============================================================
+
+              config_prompt = get_last_prompt(
+                  config_output
+              )
+
+              if not CONFIG_PROMPT_RE.search(
+                  config_prompt
+              ):
+
+                  print(
+                      "ERROR|Configuration mode not detected\n"
+                      + config_output
+                  )
+
+                  ssh.close()
+                  sys.exit(1)
+
+              # ==============================================================
+              # BUILD BACKUPLINK COMMAND
+              # ==============================================================
+
+              if OP == "add":
+
+                  if MODE == "none":
+
+                      command = (
+                          f"backup-link-group {GROUP}"
+                      )
+
+                  elif MODE == "forced":
+
+                      command = (
+                          f"backup-link-group {GROUP} "
+                          f"preemption-mode forced "
+                          f"delay {DELAY}"
+                      )
+
+                  elif MODE == "bandwidth":
+
+                      command = (
+                          f"backup-link-group {GROUP} "
+                          f"preemption-mode bandwidth "
+                          f"delay {DELAY}"
+                      )
+
+                  else:
+
+                      print(
+                          "ERROR|Invalid preemption mode"
+                      )
+
+                      ssh.close()
+                      sys.exit(1)
+
+              elif OP == "delete":
+
+                  command = (
+                      f"no backup-link-group {GROUP}"
+                  )
+
+              else:
+
+                  print(
+                      "ERROR|Invalid operation"
+                  )
+
+                  ssh.close()
+                  sys.exit(1)
+
+              # ==============================================================
+              # EXECUTE BACKUPLINK COMMAND
+              # ==============================================================
+
+              set_output = send_command(
+                  shell,
+                  command,
+                  wait=2
+              )
+
+              if has_cli_error(
+                  set_output
+              ):
+
+                  print(
+                      "ERROR|BackupLink SET command failed\n"
+                      + set_output
+                  )
+
+                  ssh.close()
+                  sys.exit(1)
+
+              # ==============================================================
+              # EXIT CONFIG MODE
+              # ==============================================================
+
+              exit_output = send_command(
+                  shell,
+                  "exit",
+                  wait=2
+              )
+
+              if has_cli_error(
+                  exit_output
+              ):
+
+                  print(
+                      "ERROR|Failed to exit configuration mode\n"
+                      + exit_output
+                  )
+
+                  ssh.close()
+                  sys.exit(1)
+
+              # ==============================================================
+              # VERIFY BACKUPLINK
+              # ==============================================================
+
+              verify_output = send_command(
+                  shell,
+                  f"show backup-link-group {GROUP}",
+                  wait=2
+              )
+
+              if has_cli_error(
+                  verify_output
+              ):
+
+                  print(
+                      "ERROR|BackupLink verification failed\n"
+                      + verify_output
+                  )
+
+                  ssh.close()
+                  sys.exit(1)
+
+              verify_clean = clean(
+                  verify_output
+              )
+
+              # ==============================================================
+              # ADD VERIFICATION
+              # ==============================================================
+
+              if OP == "add":
+
+                  if not re.search(
+                      r'Preemption\s+Mode\s*:',
+                      verify_clean,
+                      re.IGNORECASE
+                  ):
+
+                      print(
+                          "ERROR|BackupLink Group "
+                          + str(GROUP)
+                          + " was not found after SET\n"
+                          + verify_clean
+                      )
+
+                      ssh.close()
+                      sys.exit(1)
+
+                  # --------------------------------------------------------
+                  # NONE
+                  # --------------------------------------------------------
+
+                  if MODE == "none":
+
+                      if not re.search(
+                          r'Preemption\s+Mode\s*:\s*'
+                          r'(?:No\s+Preempt|None)',
+                          verify_clean,
+                          re.IGNORECASE
+                      ):
+
+                          print(
+                              "ERROR|Preemption mode verification failed\n"
+                              + verify_clean
+                          )
+
+                          ssh.close()
+                          sys.exit(1)
+
+                  # --------------------------------------------------------
+                  # FORCED
+                  # --------------------------------------------------------
+
+                  elif MODE == "forced":
+
+                      if not re.search(
+                          r'Preemption\s+Mode\s*:\s*Forced',
+                          verify_clean,
+                          re.IGNORECASE
+                      ):
+
+                          print(
+                              "ERROR|Forced mode verification failed\n"
+                              + verify_clean
+                          )
+
+                          ssh.close()
+                          sys.exit(1)
+
+                      delay_match = re.search(
+                          r'Preemption\s+Delay\s*:\s*(\d+)',
+                          verify_clean,
+                          re.IGNORECASE
+                      )
+
+                      if not delay_match:
+
+                          print(
+                              "ERROR|Preemption delay not found\n"
+                              + verify_clean
+                          )
+
+                          ssh.close()
+                          sys.exit(1)
+
+                      if int(
+                          delay_match.group(1)
+                      ) != int(DELAY):
+
+                          print(
+                              "ERROR|Preemption delay mismatch\n"
+                              + verify_clean
+                          )
+
+                          ssh.close()
+                          sys.exit(1)
+
+                  # --------------------------------------------------------
+                  # BANDWIDTH
+                  # --------------------------------------------------------
+
+                  elif MODE == "bandwidth":
+
+                      if not re.search(
+                          r'Preemption\s+Mode\s*:\s*Bandwidth',
+                          verify_clean,
+                          re.IGNORECASE
+                      ):
+
+                          print(
+                              "ERROR|Bandwidth mode verification failed\n"
+                              + verify_clean
+                          )
+
+                          ssh.close()
+                          sys.exit(1)
+
+                      delay_match = re.search(
+                          r'Preemption\s+Delay\s*:\s*(\d+)',
+                          verify_clean,
+                          re.IGNORECASE
+                      )
+
+                      if not delay_match:
+
+                          print(
+                              "ERROR|Preemption delay not found\n"
+                              + verify_clean
+                          )
+
+                          ssh.close()
+                          sys.exit(1)
+
+                      if int(
+                          delay_match.group(1)
+                      ) != int(DELAY):
+
+                          print(
+                              "ERROR|Preemption delay mismatch\n"
+                              + verify_clean
+                          )
+
+                          ssh.close()
+                          sys.exit(1)
+
+              # ==============================================================
+              # DELETE VERIFICATION
+              # ==============================================================
+
+              elif OP == "delete":
+
+                  if re.search(
+                      r'Preemption\s+Mode\s*:',
+                      verify_clean,
+                      re.IGNORECASE
+                  ):
+
+                      print(
+                          "ERROR|BackupLink Group "
+                          + str(GROUP)
+                          + " still exists after DELETE\n"
+                          + verify_clean
+                      )
+
+                      ssh.close()
+                      sys.exit(1)
+
+              # ==============================================================
+              # SUCCESS
+              # ==============================================================
+
+              print(
+                  "BackupLink Protocol Global Configuration"
+              )
+
+              print(
+                  "Operation: " + OP
+              )
+
+              print(
+                  "Group ID: " + str(GROUP)
+              )
+
+              print(
+                  "Status: Success"
+              )
+
+              ssh.close()
+
+              sys.exit(0)
+
+          except Exception as e:
+
+              print(
+                  "ERROR|" + str(e)
+              )
+
+              try:
+                  ssh.close()
+              except:
+                  pass
+
+              sys.exit(1)
 
     # ========================================================================
-    # Run SET Script
+    # RUN SCRIPT
     # ========================================================================
 
     - name: Run BackupLink SET script
-      ansible.builtin.command: >
-        /opt/librenms/librenms-ansible-inventory-plugin/bin/python3
-        /opt/librenms/librenms-ansible-inventory-plugin/tmp/set_backuplink.py
+      ansible.builtin.command:
+        cmd: "python3 {{ temp_script }}"
       register: backup_set
       changed_when: false
-      failed_when: backup_set.rc != 0
+      failed_when: false
+      delegate_to: localhost
 
     # ========================================================================
-    # Save SET Output
+    # SAVE OUTPUT
     # ========================================================================
 
     - name: Save BackupLink SET output
       ansible.builtin.copy:
-        dest: "/opt/librenms/librenms-ansible-inventory-plugin/output/{{ ansible_host }}_backuplink_set.yml"
-        content: |
-          {{ backup_set.stdout }}
+        dest: "{{ output_dir }}/{{ ansible_host }}_backuplink_set.yml"
+        mode: "0644"
+        content: "{{ backup_set.stdout }}\n"
       delegate_to: localhost
 
     # ========================================================================
-    # Display SET Result
+    # DISPLAY RESULT
     # ========================================================================
 
     - name: Display BackupLink SET result
       ansible.builtin.debug:
         msg: "{{ backup_set.stdout }}"
+
+    # ========================================================================
+    # FAIL IF SET FAILED
+    # ========================================================================
+
+    - name: Fail if BackupLink SET failed
+      ansible.builtin.fail:
+        msg: "{{ backup_set.stdout | default('BackupLink SET failed') }}"
+      when: backup_set.rc != 0

@@ -3,31 +3,43 @@
     "type": "form",
     "hostname": "",
     "interfaces": [],
+    "hardware_models": [],
     "fields": [
         {
             "label": "Ingress (1= 64kbps)",
             "type": "text",
             "options": null,
-            "command": "switchport rate-limit  {{value}} ingress"
+            "command": "switchport rate-limit  {{value}} ingress",
+            "required": true
         },
         {
             "label": "Egress (1= 64kbps)",
             "type": "text",
             "options": null,
-            "command": "switchport rate-limit  {{value}} egress"
+            "command": "switchport rate-limit  {{value}} egress",
+            "required": true
         },
         {
             "label": null,
             "type": "putonlycmd",
             "options": null,
-            "command": "!"
+            "command": "!",
+            "required": true
         },
         {
             "label": "Burst-size",
             "type": "dropdown",
             "options": "low:rate-limit burst-size low, Middle:rate-limit burst-size middle, High:rate-limit burst-size high",
-            "command": null
+            "command": null,
+            "required": true
+        },
+        {
+            "label": null,
+            "type": "text",
+            "options": null,
+            "command": "{{interface}}",
+            "required": true
         }
     ],
-    "created_at": "2026-07-08 11:16:12"
+    "created_at": "2026-09-09 15:12:16"
 }

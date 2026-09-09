@@ -1,10 +1,10 @@
 # ============================================================================
 # File        : getbackuplink.yml
 # Feature     : BackupLink Protocol Global Configuration - GET
-# Device      : ABTPL AS210T Ethernet Switch
+# Device      : ABTPL Ethernet Switch
 #
 # Purpose:
-#   Collect BackupLink Protocol Global Configuration.
+#   Dynamically collect all configured BackupLink Protocol Global Groups.
 #
 # CLI:
 #   show backup-link-group <GROUP_ID>
@@ -12,28 +12,21 @@
 # Output:
 #   output/<device_ip>_backuplink.yml
 #
-#command:ansible-playbook -i inventory/192.168.200.244 playbooks/getbackup.yml
-#
-# Output Format:
-#   Simple YAML
+# Notes:
+#   - No hostname is hard-coded.
+#   - No fixed BackupLink group list is used.
+#   - Group IDs are discovered dynamically from CLI output.
+#   - Only configured groups are returned.
 # ============================================================================
 
+---
 - name: Get BackupLink Protocol Global Configuration
   hosts: alphabridge_devices
   gather_facts: no
 
   vars:
-
-    # BackupLink supports Group IDs 1 through 8
-    backup_group_ids:
-      - 1
-      - 2
-      - 3
-      - 4
-      - 5
-      - 6
-      - 7
-      - 8
+    temp_script: "/opt/librenms/librenms-ansible-inventory-plugin/tmp/get_backuplink.py"
+    output_file: "/opt/librenms/librenms-ansible-inventory-plugin/output/{{ ansible_host }}_backuplink.yml"
 
   tasks:
 
@@ -43,7 +36,7 @@
 
     - name: Create Python SSH script for BackupLink GET
       ansible.builtin.copy:
-        dest: "/opt/librenms/librenms-ansible-inventory-plugin/tmp/get_backuplink.py"
+        dest: "{{ temp_script }}"
         mode: "0755"
         content: |
           #!/usr/bin/env python3
@@ -57,98 +50,181 @@
           USER = "{{ ansible_user }}"
           PASSWORD = "{{ ansible_password }}"
 
-          GROUP_IDS = list(range(1, 9))
+          # ==================================================================
+          # Generic prompts
+          #
+          # Examples:
+          #   Switch>
+          #   Switch#
+          #   AS212XTS_>
+          #   AS212XTS_#
+          #   AS212XTS__config#
+          #
+          # No hostname is hard-coded.
+          # ==================================================================
+
+          USER_PROMPT_RE = re.compile(
+              r'(?m)^[^\r\n]*>\s*$'
+          )
+
+          ENABLE_PROMPT_RE = re.compile(
+              r'(?m)^[^\r\n]*#\s*$'
+          )
+
+          CONFIG_PROMPT_RE = re.compile(
+              r'(?m)^[^\r\n]*_config#\s*$'
+          )
 
           # ==================================================================
-          # Read CLI output until prompt
+          # Clean CLI output
           # ==================================================================
 
-          def read_until_prompt(shell, timeout=10):
+          def clean_output(text):
 
-              buf = ""
-              end = time.time() + timeout
+              text = re.sub(
+                  r'\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])',
+                  '',
+                  text
+              )
 
-              while time.time() < end:
+              text = text.replace("\r", "")
+              text = text.replace("--More--", "")
+              text = text.replace("-- More --", "")
+
+              return text
+
+          # ==================================================================
+          # Read output until CLI becomes idle
+          #
+          # Do not stop on the first prompt occurrence.
+          # ==================================================================
+
+          def read_output(shell, timeout=15):
+
+              output = ""
+
+              end_time = time.time() + timeout
+              last_data_time = time.time()
+
+              while time.time() < end_time:
 
                   if shell.recv_ready():
 
                       data = shell.recv(65535).decode(
+                          "utf-8",
                           errors="ignore"
                       )
 
-                      buf += data
+                      output += data
+                      last_data_time = time.time()
 
-                      # Detect any switch prompt ending with # or >
-                      if re.search(
-                          r'[^\r\n]+[#>]\s*$',
-                          buf
-                      ):
-                          return buf
+                      if "--More--" in data:
+                          shell.send(" ")
 
-                      end = time.time() + 1
+                      if "-- More --" in data:
+                          shell.send(" ")
 
                   else:
 
+                      if output and (
+                          time.time() - last_data_time >= 1.0
+                      ):
+                          break
+
                       time.sleep(0.1)
 
-              return buf
+              return clean_output(output)
+
+          # ==================================================================
+          # Clear pending data
+          # ==================================================================
+
+          def clear_channel(shell):
+
+              time.sleep(0.2)
+
+              while shell.recv_ready():
+                  shell.recv(65535)
 
           # ==================================================================
           # Send command
           # ==================================================================
 
-          def send(shell, command, wait=0.7):
+          def send_command(shell, command, wait=1.0):
+
+              clear_channel(shell)
 
               shell.send(command + "\n")
 
               time.sleep(wait)
 
-              return read_until_prompt(shell)
-
-          # ==================================================================
-          # Clean CLI Output
-          # ==================================================================
-
-          def clean_output(text):
-
-              text = text.replace("\r", "")
-
-              text = re.sub(
-                  r'\x1b\[[0-9;?]*[ -/]*[@-~]',
-                  '',
-                  text
+              return read_output(
+                  shell,
+                  timeout=15
               )
 
-              return text
+          # ==================================================================
+          # Get last non-empty line
+          # ==================================================================
+
+          def last_line(output):
+
+              lines = [
+                  line.strip()
+                  for line in output.splitlines()
+                  if line.strip()
+              ]
+
+              if not lines:
+                  return ""
+
+              return lines[-1]
 
           # ==================================================================
-          # Parse BackupLink Group
+          # Parse BackupLink group
           # ==================================================================
 
           def parse_group(group_id, result):
 
               result = clean_output(result)
 
-              mode_match = re.search(
-                  r'Preemption Mode\s*:\s*(.+)',
+              # --------------------------------------------------------------
+              # Ignore CLI errors
+              # --------------------------------------------------------------
+
+              if re.search(
+                  r'(Invalid|Incomplete|Ambiguous|Unknown command|Error)',
                   result,
                   re.IGNORECASE
-              )
+              ):
 
-              delay_match = re.search(
-                  r'Preemption Delay\s*:\s*(\d+)',
+                  return None
+
+              # --------------------------------------------------------------
+              # Find Preemption Mode
+              # --------------------------------------------------------------
+
+              mode_match = re.search(
+                  r'Preemption\s+Mode\s*:\s*(.+)',
                   result,
                   re.IGNORECASE
               )
 
               # --------------------------------------------------------------
-              # Group is not configured
+              # If no Preemption Mode exists, group is not configured
               # --------------------------------------------------------------
 
               if not mode_match:
                   return None
 
               cli_mode = mode_match.group(1).strip()
+
+              # Remove prompt if it appears on same line
+              cli_mode = re.sub(
+                  r'\s+[A-Za-z0-9_.-]+(?:_[A-Za-z0-9_.-]+)*[>#]\s*$',
+                  '',
+                  cli_mode
+              ).strip()
 
               # --------------------------------------------------------------
               # Convert CLI mode to GUI mode
@@ -174,7 +250,8 @@
 
               elif cli_mode.lower() in [
                   "none",
-                  "no preemption"
+                  "no preemption",
+                  "no-preemption"
               ]:
 
                   gui_mode = "No Preemption"
@@ -184,12 +261,21 @@
                   gui_mode = cli_mode
 
               # --------------------------------------------------------------
-              # Delay
+              # Preemption Delay
               # --------------------------------------------------------------
 
+              delay_match = re.search(
+                  r'Preemption\s+Delay\s*:\s*(\d+)',
+                  result,
+                  re.IGNORECASE
+              )
+
               if delay_match:
+
                   gui_delay = delay_match.group(1)
+
               else:
+
                   gui_delay = "0"
 
               return {
@@ -199,36 +285,155 @@
               }
 
           # ==================================================================
-          # Create Simple YAML Output
+          # Dynamically discover BackupLink Group IDs
+          # ==================================================================
+          #
+          # First try:
+          #
+          #   show backup-link-group
+          #
+          # If the device displays all configured groups, extract their IDs.
+          #
+          # If the device requires a group ID, use the command help output
+          # to determine the supported group range dynamically.
+          # ==================================================================
+
+          def discover_group_ids(shell):
+
+              group_ids = set()
+
+              # --------------------------------------------------------------
+              # Try show command without group ID
+              # --------------------------------------------------------------
+
+              result = send_command(
+                  shell,
+                  "show backup-link-group",
+                  wait=1.5
+              )
+
+              # --------------------------------------------------------------
+              # Extract Group IDs from output
+              #
+              # Supported forms:
+              #
+              # Group 1
+              # Group ID: 1
+              # Backup Link Group 1
+              # backup-link-group 1
+              # --------------------------------------------------------------
+
+              patterns = [
+
+                  r'(?im)^\s*Group\s+(?:ID\s*[:=]\s*)?(\d+)\s*$',
+
+                  r'(?im)^\s*Group\s+ID\s*[:=]\s*(\d+)',
+
+                  r'(?im)Backup[\s-]*Link[\s-]*Group\s+(\d+)',
+
+                  r'(?im)backup-link-group\s+(\d+)'
+
+              ]
+
+              for pattern in patterns:
+
+                  for match in re.finditer(
+                      pattern,
+                      result
+                  ):
+
+                      group_ids.add(
+                          int(match.group(1))
+                      )
+
+              # --------------------------------------------------------------
+              # If all-group command did not expose IDs, inspect help.
+              # --------------------------------------------------------------
+
+              if not group_ids:
+
+                  help_output = send_command(
+                      shell,
+                      "show backup-link-group ?",
+                      wait=1
+                  )
+
+                  # ----------------------------------------------------------
+                  # Look for numeric range
+                  #
+                  # Examples:
+                  #   <1-8>
+                  #   (1-8)
+                  #   1-8
+                  # ----------------------------------------------------------
+
+                  range_matches = re.findall(
+                      r'(\d+)\s*[-–]\s*(\d+)',
+                      help_output
+                  )
+
+                  for start, end in range_matches:
+
+                      start = int(start)
+                      end = int(end)
+
+                      if (
+                          start >= 1
+                          and end >= start
+                          and end - start <= 255
+                      ):
+
+                          for group_id in range(
+                              start,
+                              end + 1
+                          ):
+
+                              group_ids.add(
+                                  group_id
+                              )
+
+              return sorted(
+                  group_ids
+              )
+
+          # ==================================================================
+          # Create YAML output
           # ==================================================================
 
           def create_yaml(rows):
 
-              print("ip: " + HOST)
-              print("backuplink_global_configuration:")
+              print(
+                  "ip: " + HOST
+              )
 
-              if rows:
+              print(
+                  "backuplink_global_configuration:"
+              )
 
-                  for row in rows:
+              if not rows:
 
-                      print(
-                          "    - group_id: "
-                          + row["group_id"]
-                      )
+                  print(
+                      "    []"
+                  )
 
-                      print(
-                          "      preemption_mode: "
-                          + row["preemption_mode"]
-                      )
+                  return
 
-                      print(
-                          "      preemption_delay: "
-                          + row["preemption_delay"]
-                      )
+              for row in rows:
 
-              else:
+                  print(
+                      "    - group_id: "
+                      + row["group_id"]
+                  )
 
-                  print("    []")
+                  print(
+                      "      preemption_mode: "
+                      + row["preemption_mode"]
+                  )
+
+                  print(
+                      "      preemption_delay: "
+                      + row["preemption_delay"]
+                  )
 
           # ==================================================================
           # SSH Connection
@@ -240,7 +445,13 @@
               paramiko.AutoAddPolicy()
           )
 
+          shell = None
+
           try:
+
+              # ==============================================================
+              # CONNECT
+              # ==============================================================
 
               ssh.connect(
                   HOST,
@@ -248,56 +459,116 @@
                   password=PASSWORD,
                   look_for_keys=False,
                   allow_agent=False,
-                  timeout=10,
-                  banner_timeout=10,
-                  auth_timeout=10
+                  timeout=15,
+                  banner_timeout=15,
+                  auth_timeout=15
               )
 
               shell = ssh.invoke_shell()
 
-              time.sleep(1)
-
-              first = read_until_prompt(shell)
+              time.sleep(2)
 
               # ==============================================================
-              # Enter enable mode
+              # Read initial prompt
               # ==============================================================
 
-              if re.search(
-                  r'[^\r\n]+>\s*$',
+              first = read_output(
+                  shell,
+                  timeout=5
+              )
+
+              current_prompt = last_line(
                   first
+              )
+
+              # ==============================================================
+              # ENTER ENABLE MODE
+              # ==============================================================
+
+              if USER_PROMPT_RE.search(
+                  current_prompt
               ):
 
-                  shell.send("enable\n")
+                  enable_output = send_command(
+                      shell,
+                      "enable",
+                      wait=2
+                  )
 
-                  time.sleep(0.5)
+                  # ----------------------------------------------------------
+                  # Handle password prompt
+                  # ----------------------------------------------------------
 
-                  enable_output = read_until_prompt(shell)
+                  if re.search(
+                      r'password\s*:',
+                      enable_output,
+                      re.IGNORECASE
+                  ):
 
-                  if "assword" in enable_output:
+                      enable_output = send_command(
+                          shell,
+                          PASSWORD,
+                          wait=2
+                      )
 
-                      shell.send(PASSWORD + "\n")
+                  # ----------------------------------------------------------
+                  # Verify enable mode
+                  # ----------------------------------------------------------
 
-                      time.sleep(0.5)
+                  enable_prompt = last_line(
+                      enable_output
+                  )
 
-                      read_until_prompt(shell)
+                  if USER_PROMPT_RE.search(
+                      enable_prompt
+                  ):
+
+                      print(
+                          "BackupLink GET failed: "
+                          "Unable to enter enable mode",
+                          file=sys.stderr
+                      )
+
+                      sys.exit(1)
+
+                  if not ENABLE_PROMPT_RE.search(
+                      enable_prompt
+                  ):
+
+                      print(
+                          "BackupLink GET failed: "
+                          "Enable prompt not detected",
+                          file=sys.stderr
+                      )
+
+                      sys.exit(1)
 
               # ==============================================================
-              # Get every BackupLink group
+              # DISCOVER GROUP IDs
+              # ==============================================================
+
+              discovered_groups = discover_group_ids(
+                  shell
+              )
+
+              # ==============================================================
+              # If discovery returned no IDs, do not hard-code 1-8.
+              #
+              # Return empty configuration.
               # ==============================================================
 
               all_groups = []
 
-              for group_id in GROUP_IDS:
+              # ==============================================================
+              # GET EACH DISCOVERED GROUP
+              # ==============================================================
 
-                  command = (
-                      f"show backup-link-group {group_id}"
-                  )
+              for group_id in discovered_groups:
 
-                  result = send(
+                  result = send_command(
                       shell,
-                      command,
-                      wait=0.7
+                      f"show backup-link-group {group_id}",
+                      wait=1.2
                   )
 
                   parsed = parse_group(
@@ -307,35 +578,52 @@
 
                   if parsed:
 
-                      all_groups.append(parsed)
+                      all_groups.append(
+                          parsed
+                      )
 
               # ==============================================================
-              # Close SSH
+              # CLOSE SSH
               # ==============================================================
 
               shell.close()
               ssh.close()
 
+              shell = None
+
               # ==============================================================
-              # Sort by Group ID
+              # SORT GROUPS
               # ==============================================================
 
               all_groups.sort(
-                  key=lambda x: int(x["group_id"])
+                  key=lambda x: int(
+                      x["group_id"]
+                  )
               )
 
               # ==============================================================
-              # Create YAML
+              # CREATE YAML
               # ==============================================================
 
-              create_yaml(all_groups)
+              create_yaml(
+                  all_groups
+              )
 
               sys.exit(0)
 
           except Exception as e:
 
+              print(
+                  "BackupLink GET failed: "
+                  + str(e),
+                  file=sys.stderr
+              )
+
               try:
-                  shell.close()
+
+                  if shell:
+                      shell.close()
+
               except Exception:
                   pass
 
@@ -344,12 +632,6 @@
               except Exception:
                   pass
 
-              print(
-                  "BackupLink GET failed: "
-                  + str(e),
-                  file=sys.stderr
-              )
-
               sys.exit(1)
 
     # ========================================================================
@@ -357,26 +639,27 @@
     # ========================================================================
 
     - name: Run BackupLink GET script
-      ansible.builtin.command: >
-        /opt/librenms/librenms-ansible-inventory-plugin/bin/python3
-        /opt/librenms/librenms-ansible-inventory-plugin/tmp/get_backuplink.py
+      ansible.builtin.command:
+        cmd: >
+          /opt/librenms/librenms-ansible-inventory-plugin/bin/python3
+          {{ temp_script }}
       register: backup_get
       changed_when: false
       failed_when: backup_get.rc != 0
 
     # ========================================================================
-    # Save GET YAML Output
+    # Save GET YAML
     # ========================================================================
 
     - name: Save BackupLink GET YAML
       ansible.builtin.copy:
-        dest: "/opt/librenms/librenms-ansible-inventory-plugin/output/{{ ansible_host }}_backuplink.yml"
-        content: |
-          {{ backup_get.stdout }}
+        dest: "{{ output_file }}"
+        mode: "0644"
+        content: "{{ backup_get.stdout }}\n"
       delegate_to: localhost
 
     # ========================================================================
-    # Display GET YAML Output
+    # Display GET YAML
     # ========================================================================
 
     - name: Display BackupLink GET YAML
