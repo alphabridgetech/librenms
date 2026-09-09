@@ -399,6 +399,7 @@ switchport pvid @{{value}}
                 const options = data ? (data.options || '') : '';
                 const command = data ? data.command : '';
                 const required = data ? (data.required !== false) : true;
+                const usesInterface = (command || '').indexOf('@{{interface}}') !== -1;
 
                 const html = `
                     <div class="builder-field well well-sm" data-field-id="${id}">
@@ -438,9 +439,15 @@ switchport pvid @{{value}}
                         </div>
                         <div class="row" style="margin-top: 6px;">
                             <div class="col-sm-12">
-                                <label>{{ __('Command Template') }}</label>
+                                <label>{{ __('Command Template') }}
+                                    <span class="pull-right" style="font-weight: normal;">
+                                        <label style="font-weight: normal; margin-bottom: 0;">
+                                            <input type="checkbox" class="field-interface-toggle" ${usesInterface ? 'checked' : ''}> {{ __('Interface') }}
+                                        </label>
+                                    </span>
+                                </label>
                                 <input type="text" class="form-control input-sm field-command" value="${_.escape(command)}" placeholder="e.g. switchport pvid @{{value}}">
-                                <span class="help-block" style="font-size: 11px; margin-bottom: 0;">{{ __('Use') }} <code>@{{value}}</code> {{ __('where the field value should be inserted. You can also use') }} <code>interface @{{interface}}</code> {{ __('to start an interface block.') }}</span>
+                                <span class="help-block" style="font-size: 11px; margin-bottom: 0;">{{ __('Use') }} <code>@{{value}}</code> {{ __('where the field value should be inserted, or check') }} <code>{{ __('Interface') }}</code> {{ __('to insert') }} <code>@{{interface}}</code> {{ __('and start an interface block.') }}</span>
                             </div>
                         </div>
                     </div>
@@ -497,6 +504,24 @@ switchport pvid @{{value}}
                     }
                 });
                 $lastField.find('.field-type').trigger('change');
+
+                $lastField.find('.field-interface-toggle').on('change', function() {
+                    const $commandInput = $(this).closest('.builder-field').find('.field-command');
+                    const placeholder = '@{{interface}}';
+                    let val = $commandInput.val() || '';
+
+                    if ($(this).is(':checked')) {
+                        if (val.indexOf(placeholder) === -1) {
+                            val = val.trim() === '' ? placeholder : val + ' ' + placeholder;
+                            $commandInput.val(val);
+                        }
+                    } else {
+                        val = val.replace(new RegExp('\\s*' + placeholder.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')), '');
+                        $commandInput.val(val);
+                    }
+
+                    updateBuilderPreview();
+                });
 
                 $lastField.find('.field-label, .field-type, .field-options, .field-command, .field-required').on('input change', function() {
                     updateBuilderPreview();
@@ -1180,12 +1205,39 @@ switchport pvid @{{value}}
                 });
             }
 
+            function templateNeedsInterface(template) {
+                if (!template) return false;
+                const hasPlaceholder = (str) => (str || '').indexOf('@{{interface}}') !== -1;
+
+                if (Array.isArray(template.fields)) {
+                    if (template.fields.some(f => hasPlaceholder(f.command) || hasPlaceholder(f.options))) {
+                        return true;
+                    }
+                }
+                if (Array.isArray(template.commands)) {
+                    if (template.commands.some(c => hasPlaceholder(c))) {
+                        return true;
+                    }
+                }
+                return false;
+            }
+
+            function currentTemplateNeedsInterface() {
+                const val = $('#load_template').val();
+                if (!val) return false;
+                try {
+                    return templateNeedsInterface(JSON.parse(val));
+                } catch (e) {
+                    return false;
+                }
+            }
+
             function fetchInterfacesForDevices() {
                 const selectedDeviceId = $('#device_select').val();
                 const $interfaceContainer = $('#interfaces_dynamic_container');
                 const requestId = ++interfaceRequestId;
 
-                if (!selectedDeviceId) {
+                if (!selectedDeviceId || !currentTemplateNeedsInterface()) {
                     $interfaceContainer.empty();
                     return;
                 }
@@ -1255,6 +1307,12 @@ switchport pvid @{{value}}
                 $container.show();
                 fields.forEach(function(field) {
                     const isRequired = field.required !== false;
+                    // A putonlycmd field whose entire command is just the interface-block
+                    // opener carries no information the user needs to see or act on - the
+                    // "Select Interfaces" picker already covers that. Keep it in the DOM
+                    // (generateCommands() still needs to read it) but don't show it.
+                    const isPureInterfaceOpener = field.type === 'putonlycmd'
+                        && (field.command || '').trim().toLowerCase() === 'interface @{{interface}}'.toLowerCase();
                     let inputHtml = '';
                     if (field.type === 'dropdown') {
                         const options = (field.options || '').split(',').map(function(o) { return o.trim(); }).filter(function(o) { return o; });
@@ -1290,7 +1348,7 @@ switchport pvid @{{value}}
                     }
 
                     const row = `
-                        <div class="form-group dynamic-field-row" data-label="${_.escape(field.label)}" data-type="${_.escape(field.type)}" data-command="${_.escape(field.command)}" data-options="${_.escape(field.options || '')}" data-required="${isRequired}">
+                        <div class="form-group dynamic-field-row" data-label="${_.escape(field.label)}" data-type="${_.escape(field.type)}" data-command="${_.escape(field.command)}" data-options="${_.escape(field.options || '')}" data-required="${isRequired}"${isPureInterfaceOpener ? ' style="display:none;"' : ''}>
                             <label class="col-sm-3 control-label">${_.escape(field.label)} ${isRequired ? '<span class="text-danger">*</span>' : '<span class="text-muted" style="font-weight: normal;">(optional)</span>'}</label>
                             <div class="col-sm-9">
                                 ${inputHtml}
@@ -1485,6 +1543,8 @@ switchport pvid @{{value}}
                         }
                     }
 
+                    fetchInterfacesForDevices();
+
                     const deviceIdForLookup = $('#device_select').val();
                     if (deviceIdForLookup) {
                         fetchLastTemplateValues(deviceIdForLookup, template.name, template.template_folder || '');
@@ -1503,6 +1563,7 @@ switchport pvid @{{value}}
                     $('#mode_access').addClass('active');
                     $('#mode_trunk').removeClass('active');
                     $('#mode_custom').removeClass('active');
+                    $('#interfaces_dynamic_container').empty();
                     updateSelectedCount();
                 }
             });
