@@ -127,6 +127,7 @@ class ConfigurationController implements DeviceTab
                 $this->getTabs($device),
                 'Basic Configuration'  => $this->getbasicconfigTabs($device),
                 'L2 Configuration'  => $this->getl2configTabs($device),
+                'Port Configuration'  => $this->getportconfigTabs($device),
                 'System Management'  => $this->getsysmanageconfigTabs($device),
             ],
             'tftpServer' => $tftpServer,
@@ -331,6 +332,15 @@ class ConfigurationController implements DeviceTab
             $tabs[] = ['name' => __('BackupLink configuration'), 'url' => 'backuplinkconfig'];
             $tabs[] = ['name' => __('Port Channel'), 'url' => 'portchannelconfig'];
         }
+
+        return $tabs;
+    }
+
+    public function getportconfigTabs(Device $device): array
+    {
+        $tabs = [
+            ['name' => __('Port Configuration'), 'url' => 'portconfig'],
+        ];
 
         return $tabs;
     }

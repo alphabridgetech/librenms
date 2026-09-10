@@ -1,0 +1,1165 @@
+# ============================================================================
+
+# File        : setportconfigurationinterfacedata.yml
+
+# Feature     : Port Configuration - SET
+
+#
+
+# Purpose:
+
+#   Configure Port Configuration for GigaEthernet and TGigaEthernet interfaces.
+
+#
+
+# GigaEthernet:
+
+#   Status       : enable / disable
+
+#   Speed        : 10M / 100M / auto
+
+#   Duplex       : full / half / auto
+
+#   Flow Control : on / off / auto
+
+#
+
+# TGigaEthernet:
+
+#   Status       : enable / disable
+
+#   Flow Control : on / off
+
+#   Fiber Auto   : on / off
+
+#   Speed        : 100M / 1000M / 10G
+
+#
+
+# Note:
+
+#   Medium is displayed in the GUI but there is no corresponding editable
+
+#   CLI command available in the tested interface configuration mode.
+
+#
+
+# Output:
+
+#   /opt/librenms/librenms-ansible-inventory-plugin/output/
+
+#
+
+# Example - GigaEthernet:
+
+#
+
+# ansible-playbook -i inventory/192.168.2.245.yml \
+
+# playbooks/port_configuration/setportconfigurationinterfacedata.yml \
+
+# -e "interface=GigaEthernet0/1 status=disable speed=10M duplex=auto flow_control=auto"
+
+#
+
+# Example - TGigaEthernet:
+
+#
+
+# ansible-playbook -i inventory/192.168.2.245.yml \
+
+# playbooks/port_configuration/setportconfigurationinterfacedata.yml \
+
+# -e "interface=TGigaEthernet0/1 status=enable flow_control=on fiber_auto=off speed=1000M"
+
+#
+
+# ============================================================================
+ 
+- name: Set Port Configuration Interface Data
+
+  hosts: all
+
+  gather_facts: no
+ 
+  vars:
+
+    device_ip: "{{ ansible_host | default(inventory_hostname) }}"
+
+    temp_script: "/tmp/set_port_configuration.py"
+ 
+    output_dir: "/opt/librenms/librenms-ansible-inventory-plugin/output"
+
+    output_file: "{{ output_dir }}/{{ device_ip }}_port_configuration_interface.yml"
+ 
+  tasks:
+ 
+    # ========================================================================
+
+    # VALIDATE REQUIRED INTERFACE
+
+    # ========================================================================
+ 
+    - name: Validate interface
+
+      ansible.builtin.assert:
+
+        that:
+
+          - interface is defined
+
+          - interface | length > 0
+
+        fail_msg: "interface is required"
+ 
+    # ========================================================================
+
+    # VALIDATE STATUS
+
+    # ========================================================================
+ 
+    - name: Validate status
+
+      ansible.builtin.assert:
+
+        that:
+
+          - status is not defined or status in ['enable', 'disable']
+
+        fail_msg: "status must be enable or disable"
+ 
+    # ========================================================================
+
+    # VALIDATE SPEED
+
+    # ========================================================================
+ 
+    - name: Validate speed
+
+      ansible.builtin.assert:
+
+        that:
+
+          - speed is not defined or speed in ['10M', '100M', '1000M', '10G', 'auto']
+
+        fail_msg: "Invalid speed"
+ 
+    # ========================================================================
+
+    # VALIDATE DUPLEX
+
+    # ========================================================================
+ 
+    - name: Validate duplex
+
+      ansible.builtin.assert:
+
+        that:
+
+          - duplex is not defined or duplex in ['full', 'half', 'auto']
+
+        fail_msg: "duplex must be full, half or auto"
+ 
+    # ========================================================================
+
+    # VALIDATE FLOW CONTROL
+
+    # ========================================================================
+ 
+    - name: Validate flow control
+
+      ansible.builtin.assert:
+
+        that:
+
+          - flow_control is not defined or flow_control in ['on', 'off', 'auto']
+
+        fail_msg: "flow_control must be on, off or auto"
+ 
+    # ========================================================================
+
+    # VALIDATE FIBER AUTO
+
+    # ========================================================================
+ 
+    - name: Validate fiber auto
+
+      ansible.builtin.assert:
+
+        that:
+
+          - fiber_auto is not defined or fiber_auto in ['on', 'off']
+
+        fail_msg: "fiber_auto must be on or off"
+ 
+    # ========================================================================
+
+    # VALIDATE INTERFACE / PARAMETER COMBINATION
+
+    # ========================================================================
+ 
+    - name: Validate GigaEthernet parameters
+
+      ansible.builtin.assert:
+
+        that:
+
+          - >
+
+            not (
+
+              (interface | lower).startswith('gigaethernet')
+
+              and
+
+              (
+
+                fiber_auto is defined
+
+                or
+
+                medium is defined
+
+              )
+
+            )
+
+        fail_msg: >
+
+          GigaEthernet supports status, speed, duplex and flow_control only.
+
+          fiber_auto and medium are not supported.
+
+      when:
+
+        - interface is defined
+ 
+    - name: Validate TGigaEthernet parameters
+
+      ansible.builtin.assert:
+
+        that:
+
+          - >
+
+            not (
+
+              (interface | lower).startswith('tgigaethernet')
+
+              and
+
+              duplex is defined
+
+            )
+
+        fail_msg: >
+
+          TGigaEthernet does not support duplex configuration.
+
+          Duplex is fixed to Full.
+
+      when:
+
+        - interface is defined
+ 
+    # ========================================================================
+
+    # CREATE OUTPUT DIRECTORY
+
+    # ========================================================================
+ 
+    - name: Create output directory
+
+      ansible.builtin.file:
+
+        path: "{{ output_dir }}"
+
+        state: directory
+
+        mode: "0755"
+
+      delegate_to: localhost
+ 
+    # ========================================================================
+
+    # CREATE PYTHON SCRIPT
+
+    # ========================================================================
+ 
+    - name: Create Port Configuration SET script
+
+      ansible.builtin.copy:
+
+        dest: "{{ temp_script }}"
+
+        mode: "0755"
+
+        content: |
+
+          #!/usr/bin/env python3
+ 
+          import paramiko
+
+          import time
+
+          import json
+
+          import re
+
+          import sys
+ 
+          HOST = "{{ device_ip }}"
+
+          USER = "{{ ansible_user | default('admin') }}"
+
+          PASS = "{{ ansible_password | default('admin') }}"
+ 
+          INTERFACE = "{{ interface }}"
+ 
+          STATUS = "{{ status | default('') }}"
+
+          SPEED = "{{ speed | default('') }}"
+
+          DUPLEX = "{{ duplex | default('') }}"
+
+          FLOW = "{{ flow_control | default('') }}"
+
+          FIBER = "{{ fiber_auto | default('') }}"
+ 
+          # ================================================================
+
+          # CLEAN OUTPUT
+
+          # ================================================================
+ 
+          def clean_output(data):
+ 
+              data = re.sub(
+
+                  r'\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])',
+
+                  '',
+
+                  data
+
+              )
+ 
+              data = data.replace('\r', '')
+ 
+              return data
+ 
+          # ================================================================
+
+          # READ SHELL OUTPUT
+
+          # ================================================================
+ 
+          def read_output(shell, timeout=8):
+ 
+              buffer = ""
+
+              end_time = time.time() + timeout
+
+              last_data = time.time()
+ 
+              while time.time() < end_time:
+ 
+                  if shell.recv_ready():
+ 
+                      data = shell.recv(65535).decode(
+
+                          errors="ignore"
+
+                      )
+ 
+                      buffer += data
+
+                      last_data = time.time()
+ 
+                      if "--More--" in data:
+
+                          shell.send(" ")
+ 
+                  else:
+ 
+                      if buffer and time.time() - last_data > 1:
+
+                          break
+ 
+                      time.sleep(0.1)
+ 
+              return clean_output(buffer)
+ 
+          # ================================================================
+
+          # SEND COMMAND
+
+          # ================================================================
+ 
+          def cmd(shell, command):
+ 
+              while shell.recv_ready():
+
+                  shell.recv(65535)
+ 
+              shell.send(command + "\n")
+ 
+              return read_output(shell)
+ 
+          # ================================================================
+
+          # CHECK CLI ERROR
+
+          # ================================================================
+ 
+          def check_error(output):
+ 
+              patterns = [
+
+                  r"Unknown command",
+
+                  r"unknown command",
+
+                  r"Invalid command",
+
+                  r"invalid input",
+
+                  r"Invalid input",
+
+                  r"Incomplete command",
+
+                  r"incomplete command",
+
+                  r"Current interface can't excute the command",
+
+                  r"can't excute",
+
+                  r"Error:",
+
+                  r"% ?Error",
+
+                  r"% ?Invalid"
+
+              ]
+ 
+              for pattern in patterns:
+ 
+                  if re.search(
+
+                      pattern,
+
+                      output,
+
+                      re.IGNORECASE
+
+                  ):
+
+                      return True
+ 
+              return False
+ 
+          # ================================================================
+
+          # NORMALIZE INTERFACE
+
+          # ================================================================
+ 
+          def normalize_interface(interface):
+ 
+              value = interface.strip()
+ 
+              # GigaEthernet0/1
+
+              match = re.match(
+
+                  r"^GigaEthernet\s*(\d+/\d+)$",
+
+                  value,
+
+                  re.IGNORECASE
+
+              )
+ 
+              if match:
+
+                  return "GigaEthernet", match.group(1)
+ 
+              # TGigaEthernet0/1
+
+              match = re.match(
+
+                  r"^TGigaEthernet\s*(\d+/\d+)$",
+
+                  value,
+
+                  re.IGNORECASE
+
+              )
+ 
+              if match:
+
+                  return "TGigaEthernet", match.group(1)
+ 
+              raise Exception(
+
+                  "Unsupported interface format: " + interface
+
+              )
+ 
+          # ================================================================
+
+          # SSH
+
+          # ================================================================
+ 
+          ssh = paramiko.SSHClient()
+ 
+          ssh.set_missing_host_key_policy(
+
+              paramiko.AutoAddPolicy()
+
+          )
+ 
+          try:
+ 
+              # ------------------------------------------------------------
+
+              # CONNECT
+
+              # ------------------------------------------------------------
+ 
+              ssh.connect(
+
+                  HOST,
+
+                  username=USER,
+
+                  password=PASS,
+
+                  look_for_keys=False,
+
+                  allow_agent=False,
+
+                  timeout=10
+
+              )
+ 
+              shell = ssh.invoke_shell()
+ 
+              time.sleep(1)
+ 
+              while shell.recv_ready():
+
+                  shell.recv(65535)
+ 
+              # ------------------------------------------------------------
+
+              # ENABLE
+
+              # ------------------------------------------------------------
+ 
+              output = cmd(
+
+                  shell,
+
+                  "enable"
+
+              )
+ 
+              # ------------------------------------------------------------
+
+              # CONFIG MODE
+
+              # ------------------------------------------------------------
+ 
+              output = cmd(
+
+                  shell,
+
+                  "config"
+
+              )
+ 
+              if check_error(output):
+ 
+                  raise Exception(
+
+                      "Failed to enter configuration mode: "
+
+                      + output
+
+                  )
+ 
+              # ------------------------------------------------------------
+
+              # DETERMINE INTERFACE TYPE
+
+              # ------------------------------------------------------------
+ 
+              interface_type, interface_number = normalize_interface(
+
+                  INTERFACE
+
+              )
+ 
+              # ------------------------------------------------------------
+
+              # ENTER INTERFACE
+
+              # ------------------------------------------------------------
+ 
+              output = cmd(
+
+                  shell,
+
+                  "interface "
+
+                  + interface_type
+
+                  + " "
+
+                  + interface_number
+
+              )
+ 
+              if check_error(output):
+ 
+                  raise Exception(
+
+                      "Failed to enter interface "
+
+                      + INTERFACE
+
+                      + ": "
+
+                      + output
+
+                  )
+ 
+              # ============================================================
+
+              # GIGAETHERNET
+
+              # ============================================================
+ 
+              if interface_type == "GigaEthernet":
+ 
+                  # --------------------------------------------------------
+
+                  # STATUS
+
+                  # --------------------------------------------------------
+ 
+                  if STATUS:
+ 
+                      if STATUS == "enable":
+ 
+                          output = cmd(
+
+                              shell,
+
+                              "no shutdown"
+
+                          )
+ 
+                      else:
+ 
+                          output = cmd(
+
+                              shell,
+
+                              "shutdown"
+
+                          )
+ 
+                      if check_error(output):
+ 
+                          raise Exception(
+
+                              "Failed to configure status: "
+
+                              + output
+
+                          )
+ 
+                  # --------------------------------------------------------
+
+                  # SPEED
+
+                  # --------------------------------------------------------
+ 
+                  if SPEED:
+ 
+                      speed_map = {
+
+                          "10M": "10",
+
+                          "100M": "100"
+
+                      }
+ 
+                      if SPEED == "auto":
+ 
+                          command = "speed auto"
+ 
+                      elif SPEED in speed_map:
+ 
+                          command = (
+
+                              "speed "
+
+                              + speed_map[SPEED]
+
+                          )
+ 
+                      else:
+ 
+                          raise Exception(
+
+                              "Speed "
+
+                              + SPEED
+
+                              + " is not supported on GigaEthernet"
+
+                          )
+ 
+                      output = cmd(
+
+                          shell,
+
+                          command
+
+                      )
+ 
+                      if check_error(output):
+ 
+                          raise Exception(
+
+                              "Failed to configure speed: "
+
+                              + output
+
+                          )
+ 
+                  # --------------------------------------------------------
+
+                  # DUPLEX
+
+                  # --------------------------------------------------------
+ 
+                  if DUPLEX:
+ 
+                      output = cmd(
+
+                          shell,
+
+                          "duplex " + DUPLEX
+
+                      )
+ 
+                      if check_error(output):
+ 
+                          raise Exception(
+
+                              "Failed to configure duplex: "
+
+                              + output
+
+                          )
+ 
+                  # --------------------------------------------------------
+
+                  # FLOW CONTROL
+
+                  # --------------------------------------------------------
+ 
+                  if FLOW:
+ 
+                      output = cmd(
+
+                          shell,
+
+                          "flow-control " + FLOW
+
+                      )
+ 
+                      if check_error(output):
+ 
+                          raise Exception(
+
+                              "Failed to configure flow control: "
+
+                              + output
+
+                          )
+ 
+              # ============================================================
+
+              # TGIGAETHERNET
+
+              # ============================================================
+ 
+              elif interface_type == "TGigaEthernet":
+ 
+                  # --------------------------------------------------------
+
+                  # FIBER AUTO
+
+                  # --------------------------------------------------------
+ 
+                  if FIBER:
+ 
+                      if FIBER == "on":
+ 
+                          output = cmd(
+
+                              shell,
+
+                              "fiber-auto-config"
+
+                          )
+ 
+                      else:
+ 
+                          output = cmd(
+
+                              shell,
+
+                              "no fiber-auto-config"
+
+                          )
+ 
+                      if check_error(output):
+ 
+                          raise Exception(
+
+                              "Failed to configure fiber auto: "
+
+                              + output
+
+                          )
+ 
+                  # --------------------------------------------------------
+
+                  # STATUS
+
+                  # --------------------------------------------------------
+ 
+                  if STATUS:
+ 
+                      if STATUS == "enable":
+ 
+                          output = cmd(
+
+                              shell,
+
+                              "no shutdown"
+
+                          )
+ 
+                      else:
+ 
+                          output = cmd(
+
+                              shell,
+
+                              "shutdown"
+
+                          )
+ 
+                      if check_error(output):
+ 
+                          raise Exception(
+
+                              "Failed to configure status: "
+
+                              + output
+
+                          )
+ 
+                  # --------------------------------------------------------
+
+                  # SPEED
+
+                  #
+
+                  # Speed cannot be configured while fiber-auto mode
+
+                  # is active.
+
+                  # --------------------------------------------------------
+ 
+                  if SPEED:
+ 
+                      if FIBER != "off":
+ 
+                          raise Exception(
+
+                              "TGigaEthernet speed cannot be configured "
+
+                              "unless fiber_auto=off is specified"
+
+                          )
+ 
+                      speed_map = {
+
+                          "100M": "100",
+
+                          "1000M": "1000",
+
+                          "10G": "10000"
+
+                      }
+ 
+                      if SPEED not in speed_map:
+ 
+                          raise Exception(
+
+                              "Invalid TGigaEthernet speed: "
+
+                              + SPEED
+
+                          )
+ 
+                      output = cmd(
+
+                          shell,
+
+                          "speed " + speed_map[SPEED]
+
+                      )
+ 
+                      if check_error(output):
+ 
+                          raise Exception(
+
+                              "Failed to configure speed: "
+
+                              + output
+
+                          )
+ 
+                  # --------------------------------------------------------
+
+                  # FLOW CONTROL
+
+                  # --------------------------------------------------------
+ 
+                  if FLOW:
+ 
+                      if FLOW == "auto":
+ 
+                          raise Exception(
+
+                              "TGigaEthernet flow-control supports "
+
+                              "only on or off"
+
+                          )
+ 
+                      output = cmd(
+
+                          shell,
+
+                          "flow-control " + FLOW
+
+                      )
+ 
+                      if check_error(output):
+ 
+                          raise Exception(
+
+                              "Failed to configure flow control: "
+
+                              + output
+
+                          )
+ 
+              # ------------------------------------------------------------
+
+              # EXIT INTERFACE CONFIGURATION
+
+              # ------------------------------------------------------------
+ 
+              output = cmd(
+
+                  shell,
+
+                  "exit"
+
+              )
+ 
+              # ------------------------------------------------------------
+
+              # SAVE CONFIGURATION
+
+              # ------------------------------------------------------------
+ 
+              output = cmd(
+
+                  shell,
+
+                  "write memory"
+
+              )
+ 
+              # ------------------------------------------------------------
+
+              # SUCCESS
+
+              # ------------------------------------------------------------
+ 
+              result = {
+
+                  "device_ip": HOST,
+
+                  "interface": INTERFACE,
+
+                  "status": "success",
+
+                  "message":
+
+                      "Port Configuration SET configuration successful"
+
+              }
+ 
+              print(
+
+                  json.dumps(
+
+                      result,
+
+                      indent=4
+
+                  )
+
+              )
+ 
+              ssh.close()
+ 
+              sys.exit(0)
+ 
+          except Exception as e:
+ 
+              result = {
+
+                  "device_ip": HOST,
+
+                  "interface": INTERFACE,
+
+                  "status": "failure",
+
+                  "message":
+
+                      "Port Configuration SET configuration failed",
+
+                  "error": str(e)
+
+              }
+ 
+              print(
+
+                  json.dumps(
+
+                      result,
+
+                      indent=4
+
+                  )
+
+              )
+ 
+              sys.exit(1)
+ 
+          finally:
+ 
+              try:
+
+                  ssh.close()
+
+              except:
+
+                  pass
+ 
+    # ========================================================================
+
+    # EXECUTE SCRIPT
+
+    # ========================================================================
+ 
+    - name: Execute Port Configuration SET
+
+      ansible.builtin.command:
+
+        cmd: "python3 {{ temp_script }}"
+
+      register: port_set
+
+      changed_when: true
+
+      delegate_to: localhost
+ 
+    # ========================================================================
+
+    # FAIL IF CONFIGURATION FAILED
+
+    # ========================================================================
+ 
+    - name: Fail if configuration failed
+
+      ansible.builtin.fail:
+
+        msg: "{{ port_set.stdout | default(port_set.stderr) }}"
+
+      when: port_set.rc != 0
+ 
+    # ========================================================================
+
+    # SAVE SUCCESS OUTPUT
+
+    # ========================================================================
+ 
+    - name: Save Port Configuration SET output
+
+      ansible.builtin.copy:
+
+        dest: "{{ output_file }}"
+
+        mode: "0644"
+
+        content: |
+
+          device_ip: "{{ device_ip }}"
+
+          interface: "{{ interface }}"
+
+          status: "success"
+
+          message: "Port Configuration SET configuration successful"
+
+      delegate_to: localhost
+ 
+    # ========================================================================
+
+    # DISPLAY RESULT
+
+    # ========================================================================
+ 
+    - name: Display result
+
+      ansible.builtin.debug:
+
+        msg:
+
+          device_ip: "{{ device_ip }}"
+
+          interface: "{{ interface }}"
+
+          status: "success"
+
+          message: "Port Configuration SET configuration successful"
+
+          output_file: "{{ output_file }}"
+
+ 

@@ -1,0 +1,629 @@
+# ============================================================================
+# File        : getportconfigurationinterfacedata.yml
+# Feature     : Port Configuration - GET
+#
+# Purpose:
+#   Dynamically get Port Configuration data for ALL physical interfaces.
+#
+# CLI:
+#   show interface
+#
+# Command:
+#   ansible-playbook -i 192.168.2.1.yml playbooks/getportconfigurationinterfacedata.yml
+#
+# Output:
+#   /opt/librenms/librenms-ansible-inventory-plugin/output/<IP>_port_configuration.yml
+#
+# Dynamic:
+#   - Interface names are discovered from CLI output
+#   - Number of ports is not hard-coded
+#   - Switch prompt is not hard-coded
+#   - Interface type is not hard-coded
+# ============================================================================
+
+---
+
+- name: Get Port Configuration Interface Data
+  hosts: all
+  gather_facts: no
+
+  vars:
+    output_dir: "/opt/librenms/librenms-ansible-inventory-plugin/output"
+    device_ip: "{{ ansible_host | default(inventory_hostname) }}"
+    temp_script: "/tmp/get_port_configuration.py"
+
+  tasks:
+
+    # ------------------------------------------------------------------------
+    # Create output directory
+    # ------------------------------------------------------------------------
+
+    - name: Create output directory
+      ansible.builtin.file:
+        path: "{{ output_dir }}"
+        state: directory
+        mode: "0755"
+      delegate_to: localhost
+
+    # ------------------------------------------------------------------------
+    # Create Python GET script
+    # ------------------------------------------------------------------------
+
+    - name: Create Port Configuration GET script
+      ansible.builtin.copy:
+        dest: "{{ temp_script }}"
+        mode: "0755"
+        content: |
+          #!/usr/bin/env python3
+
+          import paramiko
+          import time
+          import re
+          import json
+          import sys
+
+          HOST = "{{ device_ip }}"
+          USER = "{{ ansible_user | default('admin') }}"
+          PASS = "{{ ansible_password | default('admin') }}"
+
+          # ------------------------------------------------------------------
+          # ANSI escape sequence cleanup
+          # ------------------------------------------------------------------
+
+          ANSI_RE = re.compile(
+              r'\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])'
+          )
+
+          def clean(text):
+
+              text = ANSI_RE.sub("", text)
+              text = text.replace("\r", "")
+              text = text.replace("--More--", "")
+              text = text.replace("-- More --", "")
+
+              return text
+
+          # ------------------------------------------------------------------
+          # Read shell output dynamically.
+          #
+          # Does NOT depend on a particular switch hostname/prompt.
+          # Waits until the switch stops sending data.
+          # ------------------------------------------------------------------
+
+          def read_output(shell, timeout=30):
+
+              buffer = ""
+
+              end_time = time.time() + timeout
+              last_data_time = time.time()
+
+              while time.time() < end_time:
+
+                  if shell.recv_ready():
+
+                      data = shell.recv(65535).decode(
+                          errors="ignore"
+                      )
+
+                      buffer += data
+                      last_data_time = time.time()
+
+                      # Handle pagination if device ignores terminal length.
+                      if "--More--" in data or "-- More --" in data:
+                          shell.send(" ")
+
+                  else:
+
+                      # Consider command complete when no data arrives
+                      # for one second.
+                      if buffer and (
+                          time.time() - last_data_time
+                      ) >= 1.0:
+                          break
+
+                      time.sleep(0.1)
+
+              return clean(buffer)
+
+          # ------------------------------------------------------------------
+          # Execute command
+          # ------------------------------------------------------------------
+
+          def run_command(shell, command, timeout=30):
+
+              # Clear any old data before command.
+              while shell.recv_ready():
+                  shell.recv(65535)
+
+              shell.send(command + "\n")
+
+              return read_output(
+                  shell,
+                  timeout
+              )
+
+          # ------------------------------------------------------------------
+          # Find all physical interface blocks dynamically.
+          #
+          # Example headers can be:
+          #
+          #   GigaEthernet0/1 is ...
+          #   FastEthernet0/1 is ...
+          #   TenGigabitEthernet0/1 is ...
+          #   Ethernet1/1 is ...
+          #
+          # No interface type or port number is hard-coded.
+          # ------------------------------------------------------------------
+
+          INTERFACE_RE = re.compile(
+              r'(?mi)^\s*'
+              r'([A-Za-z][A-Za-z0-9_.-]*[0-9]+/[0-9]+)'
+              r'\s+is\s+'
+          )
+
+          # ------------------------------------------------------------------
+          # STATUS
+          # ------------------------------------------------------------------
+
+          def get_status(block):
+
+              if re.search(
+                  r'administratively\s+down',
+                  block,
+                  re.IGNORECASE
+              ):
+                  return "disable"
+
+              header = re.search(
+                  r'^\s*[^\r\n]+\s+is\s+(up|down)',
+                  block,
+                  re.MULTILINE | re.IGNORECASE
+              )
+
+              if header:
+
+                  if header.group(1).lower() == "up":
+                      return "enable"
+
+                  return "disable"
+
+              return None
+
+          # ------------------------------------------------------------------
+          # SPEED
+          # ------------------------------------------------------------------
+
+          def get_speed(block):
+
+              # Auto-Speed(...)
+              if re.search(
+                  r'Auto[- ]Speed\s*\(',
+                  block,
+                  re.IGNORECASE
+              ):
+                  return "auto"
+
+              # Plain Auto-Speed
+              if re.search(
+                  r'\bAuto[- ]Speed\b',
+                  block,
+                  re.IGNORECASE
+              ):
+                  return "auto"
+
+              match = re.search(
+                  r'\b(10|100|1000|10000)\s*Mb/s\b',
+                  block,
+                  re.IGNORECASE
+              )
+
+              if match:
+                  return match.group(1) + "M"
+
+              return None
+
+          # ------------------------------------------------------------------
+          # DUPLEX
+          # ------------------------------------------------------------------
+
+          def get_duplex(block):
+
+              if re.search(
+                  r'Auto[- ]Duplex\s*\(',
+                  block,
+                  re.IGNORECASE
+              ):
+                  return "auto"
+
+              if re.search(
+                  r'\bAuto[- ]Duplex\b',
+                  block,
+                  re.IGNORECASE
+              ):
+                  return "auto"
+
+              if re.search(
+                  r'\bHalf[- ]duplex\b',
+                  block,
+                  re.IGNORECASE
+              ):
+                  return "half"
+
+              if re.search(
+                  r'\bFull[- ]duplex\b',
+                  block,
+                  re.IGNORECASE
+              ):
+                  return "full"
+
+              return None
+
+          # ------------------------------------------------------------------
+          # FLOW CONTROL
+          # ------------------------------------------------------------------
+
+          def get_flow_control(block):
+
+              match = re.search(
+                  r'Flow[- ]Control\s+(On|Off|Auto)',
+                  block,
+                  re.IGNORECASE
+              )
+
+              if match:
+                  return match.group(1).lower()
+
+              return None
+
+          # ------------------------------------------------------------------
+          # MEDIUM
+          #
+          # Uses actual Hardware information.
+          # ------------------------------------------------------------------
+
+          def get_medium(block):
+
+              match = re.search(
+                  r'Hardware\s+is\s+([^,\r\n]+)',
+                  block,
+                  re.IGNORECASE
+              )
+
+              if not match:
+                  return None
+
+              hardware = match.group(1).lower()
+
+              if any(value in hardware for value in [
+                  "fiber",
+                  "fx",
+                  "sfp",
+                  "1000base-lx",
+                  "1000base-sx",
+                  "10gbase"
+              ]):
+                  return "fiber"
+
+              if any(value in hardware for value in [
+                  "copper",
+                  "tx",
+                  "100base-t",
+                  "1000base-t"
+              ]):
+                  return "copper"
+
+              return "auto"
+
+          # ------------------------------------------------------------------
+          # FIBER AUTO
+          #
+          # No default value is inserted.
+          # ------------------------------------------------------------------
+
+          def get_fiber_auto(block):
+
+              patterns = [
+
+                  r'Fiber[- ]Auto\s*[:=]?\s*(On|Off|Auto)',
+
+                  r'FiberAuto\s*[:=]?\s*(On|Off|Auto)',
+
+                  r'Fiber\s+Auto\s*[:=]?\s*(On|Off|Auto)'
+
+              ]
+
+              for pattern in patterns:
+
+                  match = re.search(
+                      pattern,
+                      block,
+                      re.IGNORECASE
+                  )
+
+                  if match:
+                      return match.group(1).lower()
+
+              return None
+
+          # ------------------------------------------------------------------
+          # Parse one physical interface
+          # ------------------------------------------------------------------
+
+          def parse_interface(block):
+
+              values = {
+
+                  "status": get_status(block),
+
+                  "speed": get_speed(block),
+
+                  "duplex": get_duplex(block),
+
+                  "flow_control": get_flow_control(block),
+
+                  "medium": get_medium(block),
+
+                  "fiber_auto": get_fiber_auto(block)
+
+              }
+
+              # Only return fields actually available.
+              return {
+                  key: value
+                  for key, value in values.items()
+                  if value is not None
+              }
+
+          # ------------------------------------------------------------------
+          # SSH
+          # ------------------------------------------------------------------
+
+          ssh = paramiko.SSHClient()
+
+          ssh.set_missing_host_key_policy(
+              paramiko.AutoAddPolicy()
+          )
+
+          try:
+
+              ssh.connect(
+                  HOST,
+                  username=USER,
+                  password=PASS,
+                  look_for_keys=False,
+                  allow_agent=False,
+                  timeout=10
+              )
+
+              shell = ssh.invoke_shell()
+
+              time.sleep(1)
+
+              # Clear login/banner output.
+              while shell.recv_ready():
+                  shell.recv(65535)
+
+              # --------------------------------------------------------------
+              # Enable mode
+              # --------------------------------------------------------------
+
+              shell.send("enable\n")
+
+              enable_output = read_output(
+                  shell,
+                  timeout=5
+              )
+
+              # --------------------------------------------------------------
+              # If enable password is requested
+              # --------------------------------------------------------------
+
+              if re.search(
+                  r'password\s*:',
+                  enable_output,
+                  re.IGNORECASE
+              ):
+
+                  shell.send(PASS + "\n")
+
+                  enable_output = read_output(
+                      shell,
+                      timeout=5
+                  )
+
+              # --------------------------------------------------------------
+              # Try to disable pagination.
+              #
+              # These commands are attempted but their output is ignored.
+              # The actual show output reader still handles pagination.
+              # --------------------------------------------------------------
+
+              run_command(
+                  shell,
+                  "terminal length 0",
+                  timeout=5
+              )
+
+              run_command(
+                  shell,
+                  "no page",
+                  timeout=5
+              )
+
+              # --------------------------------------------------------------
+              # SHOW INTERFACE
+              # --------------------------------------------------------------
+
+              raw = run_command(
+                  shell,
+                  "show interface",
+                  timeout=30
+              )
+
+              raw = clean(raw)
+
+              # Remove command echo only.
+              raw = re.sub(
+                  r'(?mi)^\s*show interface\s*$',
+                  '',
+                  raw
+              )
+
+              # --------------------------------------------------------------
+              # Dynamically locate every interface header.
+              # --------------------------------------------------------------
+
+              matches = list(
+                  INTERFACE_RE.finditer(raw)
+              )
+
+              result = {
+                  "IP": HOST
+              }
+
+              # --------------------------------------------------------------
+              # Parse every interface block.
+              # --------------------------------------------------------------
+
+              for index, match in enumerate(matches):
+
+                  interface_name = match.group(1)
+
+                  start = match.start()
+
+                  if index + 1 < len(matches):
+
+                      end = matches[index + 1].start()
+
+                  else:
+
+                      end = len(raw)
+
+                  block = raw[start:end]
+
+                  # ----------------------------------------------------------
+                  # Only physical interfaces.
+                  #
+                  # Logical interfaces such as:
+                  #   VLAN
+                  #   Null
+                  #   Port-aggregator
+                  #
+                  # normally do not contain "Hardware is".
+                  # ----------------------------------------------------------
+
+                  if not re.search(
+                      r'^\s*Hardware\s+is\s+',
+                      block,
+                      re.MULTILINE | re.IGNORECASE
+                  ):
+                      continue
+
+                  data = parse_interface(block)
+
+                  if data:
+
+                      result[interface_name] = data
+
+              # --------------------------------------------------------------
+              # Validate
+              # --------------------------------------------------------------
+
+              if len(result) <= 1:
+
+                  print(
+                      json.dumps(
+                          {
+                              "error": "No physical interfaces detected",
+                              "raw_output": raw
+                          },
+                          indent=2
+                      )
+                  )
+
+                  sys.exit(1)
+
+              # --------------------------------------------------------------
+              # Output JSON
+              # --------------------------------------------------------------
+
+              print(
+                  json.dumps(
+                      result,
+                      indent=4,
+                      sort_keys=False
+                  )
+              )
+
+              ssh.close()
+
+              sys.exit(0)
+
+          except Exception as e:
+
+              print(
+                  json.dumps(
+                      {
+                          "error": str(e)
+                      },
+                      indent=4
+                  )
+              )
+
+              sys.exit(1)
+
+          finally:
+
+              try:
+                  ssh.close()
+              except Exception:
+                  pass
+
+    # ------------------------------------------------------------------------
+    # Execute GET
+    # ------------------------------------------------------------------------
+
+    - name: Execute Port Configuration GET
+      ansible.builtin.command:
+        cmd: "python3 {{ temp_script }}"
+      register: port_get
+      changed_when: false
+      delegate_to: localhost
+
+    # ------------------------------------------------------------------------
+    # Stop if Python/SSH failed
+    # ------------------------------------------------------------------------
+
+    - name: Fail if collection failed
+      ansible.builtin.fail:
+        msg: "{{ port_get.stdout | default(port_get.stderr) }}"
+      when: port_get.rc != 0
+
+    # ------------------------------------------------------------------------
+    # Convert JSON
+    # ------------------------------------------------------------------------
+
+    - name: Convert JSON
+      ansible.builtin.set_fact:
+        port_json: "{{ port_get.stdout | from_json }}"
+
+    # ------------------------------------------------------------------------
+    # Save output
+    # ------------------------------------------------------------------------
+
+    - name: Save Port Configuration output
+      ansible.builtin.copy:
+        dest: "{{ output_dir }}/{{ device_ip }}_port_configuration.yml"
+        mode: "0644"
+        content: "{{ port_json | to_nice_yaml(indent=4, sort_keys=false) }}"
+      delegate_to: localhost
+
+    # ------------------------------------------------------------------------
+    # Display output location
+    # ------------------------------------------------------------------------
+
+    - name: Display output location
+      ansible.builtin.debug:
+        msg: >-
+          Saved Port Configuration to
+          {{ output_dir }}/{{ device_ip }}_port_configuration.yml

@@ -33,6 +33,9 @@
             <div class="panel panel-info">
                 <div class="panel-heading">
                     <strong>Basic configuration of LLDP Protocol</strong>
+                    <span id="lldp_cache_note" class="text-muted" style="display:none; margin-left:10px;">
+                        <i class="fa fa-spinner fa-spin"></i> showing last known data, refreshing in background...
+                    </span>
                 </div>
 
                 <div class="panel-body">
@@ -107,6 +110,11 @@
             <div class="row" style="margin-top:15px;">
                 <div class="col-sm-6">
                     <p id="pagingInfo" class="small-muted">Loading...</p>
+                </div>
+                <div class="col-sm-6 text-right">
+                    <span id="lldp_interface_cache_note" class="text-muted" style="display:none;">
+                        <i class="fa fa-spinner fa-spin"></i> showing last known data, refreshing in background...
+                    </span>
                 </div>
             </div>
 
@@ -196,6 +204,7 @@
             .then(r => r.json())
             .then(res => {
                 console.log(res);
+                document.getElementById('lldp_cache_note').style.display = res.cached ? "inline" : "none";
                 if (res.status !== "success") return;
 
                 const protocolState = res.lldp.protocol;
@@ -225,6 +234,8 @@ var lldpinterfaceTable = $('#lldpinterfaceTable').DataTable({
         dataSrc: function (json) {
             // 🔥 capture global lldp status
             globalLLDP = json.lldp === true;
+
+            document.getElementById('lldp_interface_cache_note').style.display = json.cached ? "inline" : "none";
 
             if (json.lldp_interfaces) {
                 return json.lldp_interfaces;
@@ -319,6 +330,8 @@ var lldpinterfaceTable = $('#lldpinterfaceTable').DataTable({
                 if (res.status === "success") {
                     alert("LLDP configuration updated successfully");
                     setCookie(COOKIE_PREFIX + "lldp", JSON.stringify(payload));
+                    loadLldpConfig();
+                    lldpinterfaceTable.ajax.reload(null, false);
                 } else if (res.errors) {
                     if (res.errors.holdtime) showError("holdtime_error", res.errors.holdtime[0]);
                     if (res.errors.reinit) showError("reinit_error", res.errors.reinit[0]);

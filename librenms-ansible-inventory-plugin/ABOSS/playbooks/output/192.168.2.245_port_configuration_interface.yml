@@ -1,0 +1,8 @@
+
+device_ip: "192.168.2.245"
+
+interface: "GigaEthernet0/4"
+
+status: "success"
+
+message: "Port Configuration SET configuration successful"

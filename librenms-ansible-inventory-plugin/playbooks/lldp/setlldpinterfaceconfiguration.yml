@@ -27,8 +27,8 @@
   gather_facts: no
 
   vars:
-    output_dir: "/home/gayatri/ansible/ABOSS/output"
-    script_dir: "/home/gayatri/ansible/ABOSS/tmp"
+    output_dir: "/opt/librenms/librenms-ansible-inventory-plugin/ABOSS/output"
+    script_dir: "/opt/librenms/librenms-ansible-inventory-plugin/ABOSS/tmp"
 
     script_file: "{{ script_dir }}/set_lldp_interface.py"
     output_file: "{{ output_dir }}/{{ ansible_host }}_lldp_interface_configuration.yml"

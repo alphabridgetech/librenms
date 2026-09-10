@@ -541,10 +541,29 @@ public function getmtu($hostname)
 {
     $playbook = "{$this->pluginPath}/playbooks/lldp/getlldp.yml";
     $hosts    = "{$this->pluginPath}/hosts/{$hostname}.yml";
-    // Run ansible
-    $output = $this->runAnsible($playbook, $hosts);
-    // Expected output file
     $yamlFile = "{$this->pluginPath}/output/{$hostname}_getlldp.yml";
+
+    // If we already have a result from a previous run, serve it immediately
+    // and kick off a fresh SSH fetch in the background for next time -
+    // avoids making every page load wait on a live SSH round-trip.
+    if (file_exists($yamlFile)) {
+        $cached = yaml_parse_file($yamlFile);
+
+        if (!empty($cached['lldp'])) {
+            $this->runAnsibleAsync($playbook, $hosts);
+
+            return $this->success([
+                "ip"     => $cached['ip'] ?? $hostname,
+                "lldp"   => $cached['lldp'],
+                "raw"    => $cached,
+                "cached" => true,
+            ]);
+        }
+    }
+
+    // No usable cached result yet (first load) - fetch synchronously.
+    $output = $this->runAnsible($playbook, $hosts);
+
     if (!file_exists($yamlFile)) {
         return $this->error("LLDP output file not found", $output);
     }
@@ -553,9 +572,10 @@ public function getmtu($hostname)
         return $this->error("LLDP data not found in YAML", $data);
     }
     return $this->success([
-        "ip"   => $data['ip'] ?? $hostname,
-        "lldp" => $data['lldp'],
-        "raw"  => $data
+        "ip"     => $data['ip'] ?? $hostname,
+        "lldp"   => $data['lldp'],
+        "raw"    => $data,
+        "cached" => false,
     ]);
 }
 
@@ -566,10 +586,30 @@ public function getmtu($hostname)
 {
     $playbook = "{$this->pluginPath}/playbooks/lldp/getlldpinterface.yml";
     $hosts    = "{$this->pluginPath}/hosts/{$hostname}.yml";
-    // Run ansible
-    $output = $this->runAnsible($playbook, $hosts);
-    // Expected output file
     $yamlFile = "{$this->pluginPath}/output/{$hostname}_getlldpinterface.yml";
+
+    // If we already have a result from a previous run, serve it immediately
+    // and kick off a fresh SSH fetch in the background for next time -
+    // avoids making every page load wait on a live SSH round-trip.
+    if (file_exists($yamlFile)) {
+        $cached = yaml_parse_file($yamlFile);
+
+        if (!empty($cached['lldp_interfaces'])) {
+            $this->runAnsibleAsync($playbook, $hosts);
+
+            return $this->success([
+                "ip"              => $cached['ip'] ?? $hostname,
+                "lldp"            => $cached['lldp'] ?? [],
+                "lldp_interfaces" => $cached['lldp_interfaces'],
+                "raw"             => $cached,
+                "cached"          => true,
+            ]);
+        }
+    }
+
+    // No usable cached result yet (first load) - fetch synchronously.
+    $output = $this->runAnsible($playbook, $hosts);
+
     if (!file_exists($yamlFile)) {
         return $this->error("LLDP Interface output file not found", $output);
     }
@@ -579,9 +619,10 @@ public function getmtu($hostname)
     }
     return $this->success([
         "ip"              => $data['ip'] ?? $hostname,
-        "lldp"=> $data['lldp'] ?? [],
+        "lldp"            => $data['lldp'] ?? [],
         "lldp_interfaces" => $data['lldp_interfaces'],
-        "raw"             => $data
+        "raw"             => $data,
+        "cached"          => false,
     ]);
 }
 
@@ -604,9 +645,160 @@ public function getmtu($hostname)
             "timer" => $data['timer'] ?? '',
             "reinit" => $data['reinit'] ?? '',
         ]);
+
+        // Refresh both getlldp caches synchronously - the global protocol
+        // state also drives the interface table's enable/disable toggles,
+        // so both need to be fresh before the frontend reloads them.
+        $this->runAnsible("{$this->pluginPath}/playbooks/lldp/getlldp.yml", $hosts);
+        $this->runAnsible("{$this->pluginPath}/playbooks/lldp/getlldpinterface.yml", $hosts);
+
         return $this->success([
             "message" => "LLDP configuration changed successfully",
             "raw"     => $output
+        ]);
+    }
+
+    #------------------------------------------------------------
+    #                    PORT CONFIGURATION (GET)
+    #------------------------------------------------------------
+    public function getportconfiguration($hostname)
+    {
+        $playbook = "{$this->pluginPath}/playbooks/port_configuration/getportconfigurationinterfacedata.yml";
+        $hosts    = "{$this->pluginPath}/hosts/{$hostname}.yml";
+        $yamlFile = "{$this->pluginPath}/output/{$hostname}_port_configuration.yml";
+
+        if (!function_exists('yaml_parse_file')) {
+            return $this->error("PHP YAML extension missing", null);
+        }
+
+        // If we already have a result from a previous run, serve it immediately
+        // and kick off a fresh SSH fetch in the background for next time -
+        // avoids making every page load wait on a live SSH round-trip.
+        if (file_exists($yamlFile)) {
+            $cached = yaml_parse_file($yamlFile);
+            $interfaces = $this->formatPortConfigInterfaces($cached);
+
+            if (!empty($interfaces)) {
+                $this->runAnsibleAsync($playbook, $hosts);
+
+                return $this->success([
+                    "ip"         => $cached['IP'] ?? $hostname,
+                    "interfaces" => $interfaces,
+                    "cached"     => true,
+                ]);
+            }
+        }
+
+        // No usable cached result yet (first load) - fetch synchronously.
+        $output = $this->runAnsible($playbook, $hosts);
+
+        if (!file_exists($yamlFile)) {
+            return $this->error("Port Configuration output file not found", $output);
+        }
+
+        $data = yaml_parse_file($yamlFile);
+        $interfaces = $this->formatPortConfigInterfaces($data);
+
+        if (empty($interfaces)) {
+            return $this->error("Port Configuration data invalid", $data);
+        }
+
+        return $this->success([
+            "ip"         => $data['IP'] ?? $hostname,
+            "interfaces" => $interfaces,
+            "cached"     => false,
+        ]);
+    }
+
+    /**
+     * Normalize the raw {IP, "GigaEthernet0/1": {...}, ...} YAML shape into a
+     * flat list of interface rows for the DataTable, and tag each row with
+     * its interface type so the frontend knows which fields are editable
+     * (see setportconfigurationinterfacedata.yml's GigaEthernet/TGigaEthernet
+     * field rules).
+     */
+    private function formatPortConfigInterfaces(?array $data): array
+    {
+        if (!is_array($data)) {
+            return [];
+        }
+
+        $interfaces = [];
+        foreach ($data as $key => $value) {
+            if ($key === 'IP' || !is_array($value)) {
+                continue;
+            }
+
+            if (stripos($key, 'tgigaethernet') === 0) {
+                $type = 'TGigaEthernet';
+            } elseif (stripos($key, 'gigaethernet') === 0) {
+                $type = 'GigaEthernet';
+            } else {
+                $type = 'Other';
+            }
+
+            $interfaces[] = [
+                'interface'    => $key,
+                'type'         => $type,
+                'status'       => $value['status'] ?? null,
+                'speed'        => $value['speed'] ?? null,
+                'duplex'       => $value['duplex'] ?? null,
+                'flow_control' => $value['flow_control'] ?? null,
+                'medium'       => $value['medium'] ?? null,
+                'fiber_auto'   => $value['fiber_auto'] ?? null,
+            ];
+        }
+
+        return $interfaces;
+    }
+
+    #------------------------------------------------------------
+    #                    PORT CONFIGURATION (SET)
+    #------------------------------------------------------------
+    public function setportconfiguration(Request $request, $hostname)
+    {
+        $data = $request->validate([
+            'interface'    => 'required|string',
+            'status'       => 'nullable|in:enable,disable',
+            'speed'        => 'nullable|in:10M,100M,1000M,10G,auto',
+            'duplex'       => 'nullable|in:full,half,auto',
+            'flow_control' => 'nullable|in:on,off,auto',
+            'fiber_auto'   => 'nullable|in:on,off',
+        ]);
+
+        $playbook = "{$this->pluginPath}/playbooks/port_configuration/setportconfigurationinterfacedata.yml";
+        $hosts    = "{$this->pluginPath}/hosts/{$hostname}.yml";
+
+        $extraVars = array_filter([
+            'interface'    => $data['interface'],
+            'status'       => $data['status'] ?? null,
+            'speed'        => $data['speed'] ?? null,
+            'duplex'       => $data['duplex'] ?? null,
+            'flow_control' => $data['flow_control'] ?? null,
+            'fiber_auto'   => $data['fiber_auto'] ?? null,
+        ], fn ($value) => $value !== null && $value !== '');
+
+        $output = $this->runAnsiblejs($playbook, $hosts, $extraVars);
+
+        // Refresh the GET cache synchronously so the table the frontend
+        // reloads right after this call already reflects the change,
+        // instead of showing stale data until the next background refresh.
+        $this->runAnsible(
+            "{$this->pluginPath}/playbooks/port_configuration/getportconfigurationinterfacedata.yml",
+            $hosts
+        );
+
+        // This playbook validates field/interface-type combinations (e.g.
+        // duplex on TGigaEthernet) and prints a clear "status": "failure"
+        // JSON or an ansible task failure - surface that instead of always
+        // reporting success.
+        if (stripos($output, 'FAILED!') !== false || stripos($output, '"status": "failure"') !== false) {
+            return $this->error("Port Configuration SET failed", $output);
+        }
+
+        return $this->success([
+            "message" => "Port configuration updated successfully",
+            "raw"     => $output,
         ]);
     }
 
