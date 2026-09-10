@@ -110,19 +110,21 @@
                 </div>
             </div>
 
-            <table id="lldpinterfaceTable" class="table table-striped table-bordered table-condensed">
-                <thead>
-                    <tr>
-                        <th width="40">
-                            <input type="checkbox" id="selectAll">
-                        </th>
-                        <th>Port</th>
-                        <th>Receive LLDP Packet</th>
-                        <th>Send LLDP Packet</th>
-                        <th>Management-IP</th>
-                    </tr>
-                </thead>
-            </table>
+            <div class="table-responsive">
+                <table id="lldpinterfaceTable" class="table table-striped table-bordered table-condensed" style="width:auto;">
+                    <thead>
+                        <tr>
+                            <th width="40">
+                                <input type="checkbox" id="selectAll">
+                            </th>
+                            <th>Port</th>
+                            <th>Receive LLDP Packet</th>
+                            <th>Send LLDP Packet</th>
+                            <th>Management-IP</th>
+                        </tr>
+                    </thead>
+                </table>
+            </div>
 
 
             <div class="row" style="margin-top:10px;">

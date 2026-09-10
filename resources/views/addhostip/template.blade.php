@@ -506,15 +506,27 @@ switchport pvid @{{value}}
                 $lastField.find('.field-type').trigger('change');
 
                 $lastField.find('.field-interface-toggle').on('change', function() {
-                    const $commandInput = $(this).closest('.builder-field').find('.field-command');
+                    const $builderField = $(this).closest('.builder-field');
+                    const $commandInput = $builderField.find('.field-command');
+                    const $typeSelect = $builderField.find('.field-type');
+                    const $labelInput = $builderField.find('.field-label');
                     const placeholder = '@{{interface}}';
+                    const fullOpener = 'interface @{{interface}}';
                     let val = $commandInput.val() || '';
 
                     if ($(this).is(':checked')) {
                         if (val.indexOf(placeholder) === -1) {
-                            val = val.trim() === '' ? placeholder : val + ' ' + placeholder;
+                            val = val.trim() === '' ? fullOpener : val + ' ' + placeholder;
                             $commandInput.val(val);
                         }
+                        // Force this into the exact "pure interface opener" shape
+                        // (putonlycmd + no label) that the push form's
+                        // isPureInterfaceOpener check recognises and hides -
+                        // otherwise it shows up as a stray blank-labeled input.
+                        if ($typeSelect.val() !== 'putonlycmd') {
+                            $typeSelect.val('putonlycmd').trigger('change');
+                        }
+                        $labelInput.val('');
                     } else {
                         val = val.replace(new RegExp('\\s*' + placeholder.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')), '');
                         $commandInput.val(val);

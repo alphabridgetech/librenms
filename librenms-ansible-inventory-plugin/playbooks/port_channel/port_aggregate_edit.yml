@@ -175,8 +175,7 @@
     - name: >-
         Create Python SSH Script for port aggregation edit
       ansible.builtin.copy:
-        dest: "/opt/librenms/librenms-ansible-inventory-plugin/tmp/\
-               port_aggregation_edit_exec.py"
+        dest: "/opt/librenms/librenms-ansible-inventory-plugin/tmp/port_aggregation_edit_exec.py"
         mode: '0755'
         content: |
           #!/usr/bin/env python3
@@ -577,8 +576,7 @@
       ansible.builtin.command:
         cmd: >
           /opt/librenms/librenms-ansible-inventory-plugin/bin/python3
-          /opt/librenms/librenms-ansible-inventory-plugin/tmp/\
-          port_aggregation_edit_exec.py
+          /opt/librenms/librenms-ansible-inventory-plugin/tmp/port_aggregation_edit_exec.py
       register: aggregate_raw
       changed_when: false
       failed_when: false
@@ -605,8 +603,7 @@
 
     - name: Save port aggregation edit result
       ansible.builtin.copy:
-        dest: "/opt/librenms/librenms-ansible-inventory-plugin/output/\
-              {{ ansible_host }}_port_aggregation_edit.yml"
+        dest: "/opt/librenms/librenms-ansible-inventory-plugin/output/{{ ansible_host }}_port_aggregation_edit.yml"
         content: |
           {{ aggregate_result | to_nice_yaml }}
 

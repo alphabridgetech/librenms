@@ -72,10 +72,10 @@
         },
         {
             "label": null,
-            "type": "text",
+            "type": "putonlycmd",
             "options": null,
-            "command": "{{interface}}",
-            "required": false
+            "command": "interface {{interface}}",
+            "required": true
         }
     ],
     "created_at": "2026-09-09 15:15:35"

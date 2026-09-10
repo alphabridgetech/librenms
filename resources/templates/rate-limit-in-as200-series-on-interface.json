@@ -35,9 +35,9 @@
         },
         {
             "label": null,
-            "type": "text",
+            "type": "putonlycmd",
             "options": null,
-            "command": "{{interface}}",
+            "command": "interface {{interface}}",
             "required": true
         }
     ],

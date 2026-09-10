@@ -75,16 +75,18 @@
             </button>
         </div>
         <div class="panel-body">
-            <table id="arpTable" class="table table-striped table-bordered table-condensed">
-                <thead>
-                    <tr>
-                        <th>IP Address</th>
-                        <th>MAC Address</th>
-                        <th>Interface VLAN</th>
-                        <th>Actions</th>
-                    </tr>
-                </thead>
-            </table>
+            <div class="table-responsive">
+                <table id="arpTable" class="table table-striped table-bordered table-condensed" style="width:auto;">
+                    <thead>
+                        <tr>
+                            <th>IP Address</th>
+                            <th>MAC Address</th>
+                            <th>Interface VLAN</th>
+                            <th>Actions</th>
+                        </tr>
+                    </thead>
+                </table>
+            </div>
         </div>
     </div>
 
