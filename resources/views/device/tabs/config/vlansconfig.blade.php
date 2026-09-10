@@ -516,6 +516,7 @@
             }),
             success: function(response) {
                 alert(response.message || "VLAN Deleted successfully");
+                vlanTable.ajax.reload(null, false);
             },
             error: function(xhr) {
                 alert(xhr.responseJSON?.message || "VLAN delete failed");
@@ -597,7 +598,7 @@
 
                 if (response.status === "success") {
                     $("#addVlanModal").modal("hide");
-                    $("#vlan-table").bootgrid("reload");
+                    vlanTable.ajax.reload(null, false);
                     alert("VLAN added successfully!");
                 } else {
                     alert("Error: " + JSON.stringify(response));
@@ -646,7 +647,7 @@
                 resetVlanBatch();
 
                 // Reload VLAN grid
-                $("#vlan-table").bootgrid("reload");
+                vlanTable.ajax.reload(null, false);
             },
 
             error: function(xhr) {

@@ -753,6 +753,12 @@ public function getvlan($hostname)
             "vlan_name" => $data['vlan_name'],
         ]);
 
+        // Refresh the getvlan cache synchronously so the table the frontend
+        // reloads right after this call already reflects the new VLAN,
+        // instead of showing stale data until the next background refresh
+        // (see getvlan()'s stale-while-revalidate caching).
+        $this->runAnsible("{$this->pluginPath}/playbooks/vlan/getvlan.yml", $hosts);
+
         return $this->success([
             "message" => "VLAN added successfully",
             "raw"     => $output
@@ -913,6 +919,10 @@ public function getvlan($hostname)
 
         $output = $this->runAnsible($playbook, $hosts, $extraVars);
 
+        // See addvlan() - refresh the getvlan cache synchronously so the
+        // table reflects add/delete results as soon as the frontend reloads.
+        $this->runAnsible("{$this->pluginPath}/playbooks/vlan/getvlan.yml", $hosts);
+
         return $this->success([
             "message" => "VLAN batch operation completed successfully",
             "raw"     => $output
@@ -933,6 +943,10 @@ public function getvlan($hostname)
     ];
 
     $output = $this->runAnsible($playbook, $hosts, $extraVars);
+
+    // See addvlan() - refresh the getvlan cache synchronously so a following
+    // table reload reflects the deletion immediately.
+    $this->runAnsible("{$this->pluginPath}/playbooks/vlan/getvlan.yml", $hosts);
 
     return $this->success([
         "message" => "VLAN deleted successfully",
