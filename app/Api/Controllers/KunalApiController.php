@@ -740,16 +740,93 @@ public function getmtu($hostname)
             $interfaces[] = [
                 'interface'    => $key,
                 'type'         => $type,
-                'status'       => $value['status'] ?? null,
-                'speed'        => $value['speed'] ?? null,
-                'duplex'       => $value['duplex'] ?? null,
-                'flow_control' => $value['flow_control'] ?? null,
-                'medium'       => $value['medium'] ?? null,
-                'fiber_auto'   => $value['fiber_auto'] ?? null,
+                'status'       => $this->normalizePortConfigWord($value['status'] ?? null),
+                'speed'        => $this->normalizePortConfigSpeed($value['speed'] ?? null),
+                'duplex'       => $this->normalizePortConfigWord($value['duplex'] ?? null),
+                'flow_control' => $this->normalizePortConfigWord($value['flow_control'] ?? null),
+                'medium'       => $this->normalizePortConfigWord($value['medium'] ?? null),
+                'fiber_auto'   => $this->normalizePortConfigWord($value['fiber_auto'] ?? null),
             ];
         }
 
         return $interfaces;
+    }
+
+    /**
+     * The GET script's output casing (Enable/Disable, Auto/Full/Half,
+     * On/Off, Copper/Fiber) doesn't match the lowercase values the SET
+     * playbook validates against and the Edit modal's <option> values use
+     * (enable/disable, auto/full/half, on/off, copper/fiber) - lowercase
+     * here so the two stay compatible regardless of how the GET script
+     * capitalizes its output.
+     */
+    private function normalizePortConfigWord($value)
+    {
+        return is_string($value) ? strtolower($value) : $value;
+    }
+
+    /**
+     * Same casing fix as normalizePortConfigWord(), but speed values like
+     * "10M"/"100M"/"1000M"/"10G" must keep their uppercase M/G suffix -
+     * only the literal word "Auto" needs lowercasing here.
+     */
+    private function normalizePortConfigSpeed($value)
+    {
+        if (!is_string($value)) {
+            return $value;
+        }
+
+        return strtolower($value) === 'auto' ? 'auto' : $value;
+    }
+
+    /**
+     * setportconfigurationinterfacedata.yml can fail in two different
+     * shapes: an ansible-level `assert` task (e.g. fiber_auto on
+     * GigaEthernet) whose real message lives in a pretty-printed
+     * `FAILED! => { "msg": "..." }` block, or a script-level exception
+     * (e.g. invalid speed/flow_control for the interface type) whose real
+     * message is nested one level deeper inside that block's `"stdout"`
+     * field as the script's own printed JSON `"error"` key. Both are
+     * embedded in ansible's free-form console log, not valid JSON on
+     * their own - find the `FAILED! => {...}` object by trimming from the
+     * end until a balanced `}` parses, then dig out whichever message is
+     * present, so the caller gets the actual reason instead of a generic
+     * "SET failed".
+     */
+    private function extractPortConfigFailureReason(string $output): ?string
+    {
+        if (!preg_match('/FAILED!\s*=>\s*(\{.*)/s', $output, $m)) {
+            return null;
+        }
+
+        $candidate = $m[1];
+
+        for ($len = strlen($candidate); $len > 0; $len--) {
+            if ($candidate[$len - 1] !== '}') {
+                continue;
+            }
+
+            $decoded = json_decode(substr($candidate, 0, $len), true);
+
+            if (!is_array($decoded)) {
+                continue;
+            }
+
+            if (isset($decoded['stdout'])) {
+                $inner = json_decode($decoded['stdout'], true);
+                if (is_array($inner) && !empty($inner['error'])) {
+                    return $inner['error'];
+                }
+            }
+
+            if (!empty($decoded['msg'])) {
+                return trim($decoded['msg']);
+            }
+
+            break;
+        }
+
+        return null;
     }
 
     #------------------------------------------------------------
@@ -790,14 +867,104 @@ public function getmtu($hostname)
 
         // This playbook validates field/interface-type combinations (e.g.
         // duplex on TGigaEthernet) and prints a clear "status": "failure"
-        // JSON or an ansible task failure - surface that instead of always
-        // reporting success.
+        // JSON or an ansible task failure - surface the actual reason
+        // instead of a generic "SET failed" message.
         if (stripos($output, 'FAILED!') !== false || stripos($output, '"status": "failure"') !== false) {
-            return $this->error("Port Configuration SET failed", $output);
+            $reason = $this->extractPortConfigFailureReason($output);
+            return $this->error($reason ?: "Port Configuration SET failed", $output);
         }
 
         return $this->success([
             "message" => "Port configuration updated successfully",
+            "raw"     => $output,
+        ]);
+    }
+
+    #------------------------------------------------------------
+    #                    GET PDP (last applied)
+    #------------------------------------------------------------
+    // setpdp.yml has no corresponding "show pdp" SSH read - the device
+    // doesn't expose a way to read PDP state back through this playbook.
+    // So instead of a live fetch, this returns whatever we ourselves last
+    // successfully pushed via setpdp() below (cached in our own small YAML
+    // file, not written by ansible). "cached" here always means "this is
+    // the last value applied through this page", never "stale, refreshing".
+    public function getpdp($hostname)
+    {
+        $yamlFile = "{$this->pluginPath}/output/{$hostname}_pdp_last_applied.yml";
+
+        if (!function_exists('yaml_parse_file')) {
+            return $this->error("PHP YAML extension missing", null);
+        }
+
+        if (!file_exists($yamlFile)) {
+            return $this->success([
+                "found" => false,
+                "pdp"   => null,
+            ]);
+        }
+
+        $data = yaml_parse_file($yamlFile);
+
+        return $this->success([
+            "found" => true,
+            "pdp"   => $data ?: null,
+        ]);
+    }
+
+    #------------------------------------------------------------
+    #                    SET PDP
+    #------------------------------------------------------------
+    public function setpdp(Request $request, $hostname)
+    {
+        $rules = [
+            'pdp_state' => 'required|string|in:open,close,Open,Close',
+        ];
+
+        if (strtolower((string) $request->input('pdp_state')) === 'open') {
+            $rules['holdtime'] = 'required|integer|min:10|max:255';
+            $rules['tx_interval'] = 'required|integer|min:5|max:254';
+            $rules['version'] = 'required|string|in:Version1,Version2,version1,version2,1,2';
+        }
+
+        $data = $request->validate($rules);
+
+        $playbook = "{$this->pluginPath}/playbooks/pdp/setpdp.yml";
+        $hosts    = "{$this->pluginPath}/hosts/{$hostname}.yml";
+
+        $extraVars = array_filter([
+            'pdp_state'   => $data['pdp_state'],
+            'holdtime'    => $data['holdtime'] ?? null,
+            'tx_interval' => $data['tx_interval'] ?? null,
+            'version'     => $data['version'] ?? null,
+        ], fn ($value) => $value !== null && $value !== '');
+
+        $output = $this->runAnsiblejs($playbook, $hosts, $extraVars);
+
+        // The script prints exactly "SUCCESS" on success and
+        // "PDP CONFIGURATION FAILED" (plus a reason) on any failure -
+        // both validation failures and CLI errors go through this path.
+        if (stripos($output, 'PDP CONFIGURATION FAILED') !== false || stripos($output, 'SUCCESS') === false) {
+            return $this->error("PDP configuration failed", $output);
+        }
+
+        // No live "show pdp" exists to re-read from the device, so record
+        // what we just successfully applied for getpdp() to serve back.
+        try {
+            $yamlFile = "{$this->pluginPath}/output/{$hostname}_pdp_last_applied.yml";
+            $lastApplied = [
+                'pdp_state'   => strtolower($data['pdp_state']),
+                'holdtime'    => $data['holdtime'] ?? null,
+                'tx_interval' => $data['tx_interval'] ?? null,
+                'version'     => $data['version'] ?? null,
+            ];
+            file_put_contents($yamlFile, yaml_emit($lastApplied));
+        } catch (\Exception $e) {
+            \Log::warning("Failed to cache last-applied PDP config: " . $e->getMessage());
+        }
+
+        return $this->success([
+            "message" => "PDP configuration updated successfully",
             "raw"     => $output,
         ]);
     }

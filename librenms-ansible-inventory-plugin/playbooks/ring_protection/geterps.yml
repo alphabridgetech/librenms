@@ -1,0 +1,677 @@
+---
+# ============================================================================
+# File        : geterps.yml
+# Feature     : ERPS - GET Configuration / Status
+#
+# Purpose:
+#   Execute "show erps" on the switch, parse all ERPS rings and save the
+#   result in YAML format.
+#
+# Output:
+#   /opt/librenms/librenms-ansible-inventory-plugin/output/<ansible_host>_erps.yml
+# ============================================================================
+
+- name: Get ERPS Configuration
+  hosts: alphabridge_devices
+  gather_facts: no
+
+  vars:
+    output_dir: "/opt/librenms/librenms-ansible-inventory-plugin/output"
+    script_dir: "/opt/librenms/librenms-ansible-inventory-plugin/tmp"
+    script_file: "{{ script_dir }}/get_erps.py"
+    output_file: "{{ output_dir }}/{{ ansible_host }}_erps.yml"
+
+  tasks:
+
+    # ========================================================================
+    # Create output directory
+    # ========================================================================
+    - name: Create output directory
+      ansible.builtin.file:
+        path: "{{ output_dir }}"
+        state: directory
+        mode: "0755"
+      delegate_to: localhost
+
+    # ========================================================================
+    # Create temporary script directory
+    # ========================================================================
+    - name: Create script directory
+      ansible.builtin.file:
+        path: "{{ script_dir }}"
+        state: directory
+        mode: "0755"
+      delegate_to: localhost
+
+    # ========================================================================
+    # Create Python ERPS parser
+    # ========================================================================
+    - name: Create ERPS GET parser
+      ansible.builtin.copy:
+        dest: "{{ script_file }}"
+        mode: "0755"
+        content: |
+          import paramiko
+          import yaml
+          import re
+          import sys
+          import time
+
+          HOST = "{{ ansible_host }}"
+          USER = "{{ ansible_user }}"
+          PASSWORD = "{{ ansible_password }}"
+
+          # ==================================================================
+          # Normalize MAC address
+          # ==================================================================
+          def normalize_mac(value):
+
+              if not value:
+                  return None
+
+              value = value.strip()
+              value = value.replace(".", "")
+              value = value.replace(":", "")
+              value = value.replace("-", "")
+
+              return value.upper()
+
+          # ==================================================================
+          # Convert CLI boolean to Python boolean
+          # ==================================================================
+          def parse_bool(value):
+
+              if value is None:
+                  return None
+
+              value = value.strip().lower()
+
+              if value in ["true", "yes", "on", "1"]:
+                  return True
+
+              if value in ["false", "no", "off", "0"]:
+                  return False
+
+              return None
+
+          # ==================================================================
+          # Parse show erps output
+          # ==================================================================
+          def parse_erps(output):
+
+              lines = output.splitlines()
+
+              result = {
+                  "feature": "ERPS",
+                  "status": "success",
+                  "ring_count": 0,
+                  "rings": []
+              }
+
+              current_ring = None
+              in_interface_table = False
+
+              for line in lines:
+
+                  # ==========================================================
+                  # Ring detection
+                  # ==========================================================
+                  ring_match = re.match(
+                      r"^\s*Ring(\d+)\s*$",
+                      line,
+                      re.IGNORECASE
+                  )
+
+                  if ring_match:
+
+                      if current_ring is not None:
+                          result["rings"].append(current_ring)
+
+                      ring_id = int(ring_match.group(1))
+
+                      current_ring = {
+                          "ring_id": ring_id,
+                          "node_id": None,
+                          "node_role": None,
+                          "local_node_address": None,
+                          "control_vlan": None,
+                          "version": None,
+                          "cfm_md_level": None,
+                          "ring_id_validity": None,
+                          "raps_virtual_channel": None,
+                          "revertive_mode": None,
+                          "ring_status": None,
+                          "signal_fail": None,
+                          "waiting_to_restore": None,
+                          "wtr_time": None,
+                          "wtb_time": None,
+                          "guard_time": None,
+                          "send_time": None,
+                          "ports": []
+                      }
+
+                      in_interface_table = False
+                      continue
+
+                  if current_ring is None:
+                      continue
+
+                  # ==========================================================
+                  # Node Role
+                  #
+                  # Example:
+                  # Node ID    Role       RPL
+                  # Node ID    Role       Normal
+                  # ==========================================================
+                  node_match = re.search(
+                      r"^\s*Node\s+ID\s+Role\s+([A-Za-z0-9_-]+)",
+                      line,
+                      re.IGNORECASE
+                  )
+
+                  if node_match:
+
+                      current_ring["node_id"] = None
+                      current_ring["node_role"] = node_match.group(1)
+
+                      continue
+
+                  # ==========================================================
+                  # Local Node Address
+                  # ==========================================================
+                  address_match = re.search(
+                      r"^\s*Address\s+([0-9A-Fa-f:. -]+)",
+                      line,
+                      re.IGNORECASE
+                  )
+
+                  if address_match:
+
+                      current_ring["local_node_address"] = normalize_mac(
+                          address_match.group(1)
+                      )
+
+                      continue
+
+                  # ==========================================================
+                  # Control VLAN
+                  # ==========================================================
+                  vlan_match = re.search(
+                      r"^\s*Control\s+Vlan\s+(\d+)",
+                      line,
+                      re.IGNORECASE
+                  )
+
+                  if vlan_match:
+
+                      current_ring["control_vlan"] = int(
+                          vlan_match.group(1)
+                      )
+
+                      continue
+
+                  # ==========================================================
+                  # Version
+                  # ==========================================================
+                  version_match = re.search(
+                      r"^\s*Version\s+(\d+)",
+                      line,
+                      re.IGNORECASE
+                  )
+
+                  if version_match:
+
+                      current_ring["version"] = int(
+                          version_match.group(1)
+                      )
+
+                      continue
+
+                  # ==========================================================
+                  # CFM MD Level
+                  # ==========================================================
+                  cfm_match = re.search(
+                      r"^\s*CFM\s+MD\s+level\s+(\d+)",
+                      line,
+                      re.IGNORECASE
+                  )
+
+                  if cfm_match:
+
+                      current_ring["cfm_md_level"] = int(
+                          cfm_match.group(1)
+                      )
+
+                      continue
+
+                  # ==========================================================
+                  # Ring ID Validity
+                  #
+                  # CLI uses:
+                  # Ring ID validy check: True
+                  #
+                  # Support both "validy" and "validity".
+                  # ==========================================================
+                  validity_match = re.search(
+                      r"^\s*Ring\s+ID\s+valid(?:y|ity)\s+check:\s*(\S+)",
+                      line,
+                      re.IGNORECASE
+                  )
+
+                  if validity_match:
+
+                      current_ring["ring_id_validity"] = parse_bool(
+                          validity_match.group(1)
+                      )
+
+                      continue
+
+                  # ==========================================================
+                  # RAPS Virtual Channel
+                  # ==========================================================
+                  raps_match = re.search(
+                      r"^\s*RAPS\s+Virtual\s+Channel:\s*(\S+)",
+                      line,
+                      re.IGNORECASE
+                  )
+
+                  if raps_match:
+
+                      current_ring["raps_virtual_channel"] = parse_bool(
+                          raps_match.group(1)
+                      )
+
+                      continue
+
+                  # ==========================================================
+                  # Revertive Mode
+                  # ==========================================================
+                  revertive_match = re.search(
+                      r"^\s*Revertive\s+Mode:\s*(\S+)",
+                      line,
+                      re.IGNORECASE
+                  )
+
+                  if revertive_match:
+
+                      current_ring["revertive_mode"] = (
+                          revertive_match.group(1)
+                      )
+
+                      continue
+
+                  # ==========================================================
+                  # Ring State
+                  #
+                  # IMPORTANT:
+                  # Use ^ so "Status code:" does NOT get matched.
+                  #
+                  # CLI:
+                  # State  Protection
+                  # ==========================================================
+                  state_match = re.search(
+                      r"^\s*State\s+([A-Za-z]+)",
+                      line,
+                      re.IGNORECASE
+                  )
+
+                  if state_match:
+
+                      current_ring["ring_status"] = (
+                          state_match.group(1)
+                      )
+
+                      # ------------------------------------------------------
+                      # WTR state may appear on the same line:
+                      #
+                      # State Protection WTR False
+                      # ------------------------------------------------------
+                      wtr_state_match = re.search(
+                          r"State\s+[A-Za-z]+\s+WTR\s+(True|False)",
+                          line,
+                          re.IGNORECASE
+                      )
+
+                      if wtr_state_match:
+
+                          current_ring["waiting_to_restore"] = parse_bool(
+                              wtr_state_match.group(1)
+                          )
+
+                      continue
+
+                  # ==========================================================
+                  # Signal Fail
+                  # ==========================================================
+                  signal_match = re.search(
+                      r"^\s*Signal\s+Fail\s+(\S+)",
+                      line,
+                      re.IGNORECASE
+                  )
+
+                  if signal_match:
+
+                      current_ring["signal_fail"] = parse_bool(
+                          signal_match.group(1)
+                      )
+
+                      continue
+
+                  # ==========================================================
+                  # WTR Time
+                  #
+                  # Example:
+                  # WTR time 0/12 sec
+                  # ==========================================================
+                  wtr_match = re.search(
+                      r"WTR\s+time\s+\d+\s*/\s*(\d+)\s+sec",
+                      line,
+                      re.IGNORECASE
+                  )
+
+                  if wtr_match:
+
+                      current_ring["wtr_time"] = int(
+                          wtr_match.group(1)
+                      )
+
+                  # ==========================================================
+                  # WTB Time
+                  #
+                  # Example:
+                  # WTB time 0/6 sec
+                  # ==========================================================
+                  wtb_match = re.search(
+                      r"WTB\s+time\s+\d+\s*/\s*(\d+)\s+sec",
+                      line,
+                      re.IGNORECASE
+                  )
+
+                  if wtb_match:
+
+                      current_ring["wtb_time"] = int(
+                          wtb_match.group(1)
+                      )
+
+                  # ==========================================================
+                  # Guard Time
+                  #
+                  # Example:
+                  # Guard time 0/500 ms
+                  # ==========================================================
+                  guard_match = re.search(
+                      r"Guard\s+time\s+\d+\s*/\s*(\d+)\s+ms",
+                      line,
+                      re.IGNORECASE
+                  )
+
+                  if guard_match:
+
+                      current_ring["guard_time"] = int(
+                          guard_match.group(1)
+                      )
+
+                  # ==========================================================
+                  # Send Time
+                  #
+                  # Example:
+                  # Send time 2/5 sec
+                  # ==========================================================
+                  send_match = re.search(
+                      r"Send\s+time\s+\d+\s*/\s*(\d+)\s+sec",
+                      line,
+                      re.IGNORECASE
+                  )
+
+                  if send_match:
+
+                      current_ring["send_time"] = int(
+                          send_match.group(1)
+                      )
+
+                  # ==========================================================
+                  # Interface table detection
+                  #
+                  # Example:
+                  # Interface        Role           State        Status
+                  # ==========================================================
+                  if re.search(
+                      r"^\s*Interface\s+Role\s+State\s+Status",
+                      line,
+                      re.IGNORECASE
+                  ):
+
+                      in_interface_table = True
+                      continue
+
+                  # ==========================================================
+                  # Interface table rows
+                  #
+                  # Example:
+                  # g0/7   Ring-Port   BLK   D   NULL
+                  # g0/10  RPL         BLK   D   NULL
+                  # ==========================================================
+                  if in_interface_table:
+
+                      interface_match = re.match(
+                          r"^\s*(\S+)\s+"
+                          r"(Ring-Port|RPL)\s+"
+                          r"(\S+)\s+"
+                          r"(\S+)"
+                          r"(?:\s+(\S+))?\s*$",
+                          line,
+                          re.IGNORECASE
+                      )
+
+                      if interface_match:
+
+                          interface_name = interface_match.group(1)
+                          role = interface_match.group(2)
+                          state = interface_match.group(3)
+                          link_status = interface_match.group(4)
+                          mep_role = interface_match.group(5)
+
+                          current_ring["ports"].append({
+                              "interface": interface_name,
+                              "role": role,
+                              "state": state,
+                              "link_status": link_status,
+                              "mep_role": (
+                                  mep_role
+                                  if mep_role
+                                  else "NULL"
+                              )
+                          })
+
+                          continue
+
+                      # Blank line does not necessarily mean end of output
+                      if line.strip() == "":
+                          continue
+
+              # =================================================================
+              # Append last ring
+              # =================================================================
+              if current_ring is not None:
+                  result["rings"].append(current_ring)
+
+              result["ring_count"] = len(result["rings"])
+
+              # =================================================================
+              # Add port1 / port2 convenience fields
+              # =================================================================
+              for ring in result["rings"]:
+
+                  ports = ring.get("ports", [])
+
+                  if len(ports) >= 1:
+
+                      ring["port1"] = ports[0]["interface"]
+                      ring["port1_role"] = ports[0]["role"]
+                      ring["port1_state"] = ports[0]["state"]
+                      ring["port1_link_status"] = ports[0]["link_status"]
+                      ring["port1_mep_role"] = ports[0]["mep_role"]
+
+                  if len(ports) >= 2:
+
+                      ring["port2"] = ports[1]["interface"]
+                      ring["port2_role"] = ports[1]["role"]
+                      ring["port2_state"] = ports[1]["state"]
+                      ring["port2_link_status"] = ports[1]["link_status"]
+                      ring["port2_mep_role"] = ports[1]["mep_role"]
+
+              return result
+
+          # ==================================================================
+          # Main
+          # ==================================================================
+          def main():
+
+              client = paramiko.SSHClient()
+
+              client.set_missing_host_key_policy(
+                  paramiko.AutoAddPolicy()
+              )
+
+              try:
+
+                  # ----------------------------------------------------------
+                  # SSH connection
+                  # ----------------------------------------------------------
+                  client.connect(
+                      hostname=HOST,
+                      username=USER,
+                      password=PASSWORD,
+                      look_for_keys=False,
+                      allow_agent=False,
+                      timeout=15,
+                      auth_timeout=15,
+                      banner_timeout=15
+                  )
+
+                  shell = client.invoke_shell()
+
+                  shell.settimeout(10)
+
+                  time.sleep(1)
+
+                  # ----------------------------------------------------------
+                  # Clear initial prompt
+                  # ----------------------------------------------------------
+                  if shell.recv_ready():
+                      shell.recv(65535)
+
+                  # ----------------------------------------------------------
+                  # Enable mode
+                  # ----------------------------------------------------------
+                  shell.send("enable\n")
+                  time.sleep(1)
+
+                  if shell.recv_ready():
+                      shell.recv(65535)
+
+                  # ----------------------------------------------------------
+                  # Disable terminal paging
+                  # ----------------------------------------------------------
+                  shell.send("terminal length 0\n")
+                  time.sleep(1)
+
+                  if shell.recv_ready():
+                      shell.recv(65535)
+
+                  # ----------------------------------------------------------
+                  # Execute GET command
+                  # ----------------------------------------------------------
+                  shell.send("show erps\n")
+
+                  time.sleep(3)
+
+                  output = ""
+
+                  while shell.recv_ready():
+
+                      data = shell.recv(65535).decode(
+                          "utf-8",
+                          errors="ignore"
+                      )
+
+                      output += data
+
+                      time.sleep(0.2)
+
+                  client.close()
+
+                  # ----------------------------------------------------------
+                  # Parse output
+                  # ----------------------------------------------------------
+                  parsed = parse_erps(output)
+
+                  # ----------------------------------------------------------
+                  # Print YAML
+                  # ----------------------------------------------------------
+                  print(
+                      yaml.safe_dump(
+                          parsed,
+                          sort_keys=False,
+                          default_flow_style=False
+                      )
+                  )
+
+              except Exception as e:
+
+                  try:
+                      client.close()
+                  except:
+                      pass
+
+                  error_result = {
+                      "feature": "ERPS",
+                      "status": "failed",
+                      "error": str(e),
+                      "ring_count": 0,
+                      "rings": []
+                  }
+
+                  print(
+                      yaml.safe_dump(
+                          error_result,
+                          sort_keys=False,
+                          default_flow_style=False
+                      )
+                  )
+
+                  sys.exit(1)
+
+
+          if __name__ == "__main__":
+              main()
+
+    # ========================================================================
+    # Execute Python parser
+    # ========================================================================
+    - name: Execute ERPS GET
+      ansible.builtin.command:
+        cmd: "python3 {{ script_file }}"
+      register: erps_get
+      delegate_to: localhost
+      changed_when: false
+
+    # ========================================================================
+    # Save YAML result
+    # ========================================================================
+    - name: Save ERPS GET output
+      ansible.builtin.copy:
+        dest: "{{ output_file }}"
+        content: "{{ erps_get.stdout }}"
+        mode: "0644"
+      delegate_to: localhost
+
+    # ========================================================================
+    # Display result
+    # ========================================================================
+    - name: Display ERPS GET result
+      ansible.builtin.debug:
+        msg:
+          - "ERPS GET completed successfully."
+          - "Output file: {{ output_file }}"
+          - "{{ erps_get.stdout }}"

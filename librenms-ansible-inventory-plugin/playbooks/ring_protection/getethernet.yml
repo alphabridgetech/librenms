@@ -1,0 +1,338 @@
+# ============================================================================
+# File        : getethernet.yml
+# Feature     : Ethernet-ring
+# Purpose     : Get Ethernet-ring information in YAML format
+# ============================================================================
+
+- name: Get Ethernet-ring Information
+  hosts: alphabridge_devices
+  gather_facts: no
+
+  vars:
+    output_dir: "/opt/librenms/librenms-ansible-inventory-plugin/output"
+    output_file: "{{ output_dir }}/{{ ansible_host }}_getethernet.yml"
+    script_file: "/opt/librenms/librenms-ansible-inventory-plugin/tmp/get_ethernet_ring.py"
+
+  tasks:
+
+    - name: Create Ethernet-ring GET script
+      delegate_to: localhost
+      copy:
+        dest: "{{ script_file }}"
+        mode: "0755"
+        content: |
+          import paramiko
+          import time
+          import re
+          import os
+          import sys
+          import yaml
+
+          HOST = "{{ ansible_host }}"
+          USER = "{{ ansible_user }}"
+          PASSWORD = "{{ ansible_password }}"
+          OUTPUT = "{{ output_file }}"
+
+          client = paramiko.SSHClient()
+          client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+
+          try:
+              client.connect(
+                  hostname=HOST,
+                  username=USER,
+                  password=PASSWORD,
+                  look_for_keys=False,
+                  allow_agent=False,
+                  timeout=10
+              )
+
+              shell = client.invoke_shell()
+              time.sleep(1)
+
+              def send_cmd(cmd, wait=1):
+                  shell.send(cmd + "\n")
+                  time.sleep(wait)
+
+                  output = ""
+
+                  end_time = time.time() + 3
+
+                  while time.time() < end_time:
+                      if shell.recv_ready():
+                          output += shell.recv(65535).decode(
+                              "utf-8",
+                              errors="ignore"
+                          )
+                      else:
+                          time.sleep(0.2)
+
+                  return output
+
+              # --------------------------------------------------------------
+              # Enter required CLI mode
+              # --------------------------------------------------------------
+              send_cmd("enable")
+              send_cmd("terminal length 0")
+
+              # --------------------------------------------------------------
+              # Get Ethernet-ring information
+              # --------------------------------------------------------------
+              result = send_cmd("show ether-ring", 2)
+
+              # --------------------------------------------------------------
+              # Clean output
+              # --------------------------------------------------------------
+              result = result.replace("\r", "")
+
+              result = re.sub(
+                  r'\x1b\[[0-9;?]*[A-Za-z]',
+                  '',
+                  result
+              )
+
+              lines = []
+
+              for line in result.splitlines():
+
+                  line = line.strip()
+
+                  if not line:
+                      continue
+
+                  if line.startswith("Switch_config#"):
+                      continue
+
+                  if line.startswith("AWC06XT-M#"):
+                      continue
+
+                  if line == "show ether-ring":
+                      continue
+
+                  lines.append(line)
+
+              # --------------------------------------------------------------
+              # Parse rings
+              # --------------------------------------------------------------
+              rings = []
+
+              current = None
+
+              for line in lines:
+
+                  # ----------------------------------------------------------
+                  # Ring ID
+                  # ----------------------------------------------------------
+                  match = re.match(
+                      r"^ether-ring\s+(\d+)$",
+                      line,
+                      re.IGNORECASE
+                  )
+
+                  if match:
+
+                      if current is not None:
+                          rings.append(current)
+
+                      current = {
+                          "ring_id": match.group(1),
+                          "node_type": "-",
+                          "ring_description": "-",
+                          "control_vlan": "Unassigned",
+                          "status": "-",
+                          "hello": "-",
+                          "fail": "-",
+                          "preforward": "-",
+                          "primary": "-",
+                          "secondary": "-"
+                      }
+
+                      continue
+
+                  if current is None:
+                      continue
+
+                  # ----------------------------------------------------------
+                  # Configured Role
+                  # ----------------------------------------------------------
+                  match = re.match(
+                      r"^Configured\s+Role\s+(.+)$",
+                      line,
+                      re.IGNORECASE
+                  )
+
+                  if match:
+                      current["node_type"] = match.group(1).strip()
+                      continue
+
+                  # ----------------------------------------------------------
+                  # Control VLAN
+                  # ----------------------------------------------------------
+                  match = re.match(
+                      r"^Control-Vlan\s+(.+)$",
+                      line,
+                      re.IGNORECASE
+                  )
+
+                  if match:
+                      current["control_vlan"] = match.group(1).strip()
+                      continue
+
+                  # ----------------------------------------------------------
+                  # Ring Description
+                  # ----------------------------------------------------------
+                  match = re.match(
+                      r"^Ring-Description\s+(.+)$",
+                      line,
+                      re.IGNORECASE
+                  )
+
+                  if match:
+                      current["ring_description"] = match.group(1).strip()
+                      continue
+
+                  # ----------------------------------------------------------
+                  # Hello / Fail / Pre-forward
+                  # ----------------------------------------------------------
+                  match = re.match(
+                      r"^Hello Time\s+(\d+)\s+sec\s+"
+                      r"Fail Time\s+(\d+)\s+sec\s+"
+                      r"Pre-forward Time\s+(\d+)\s+sec$",
+                      line,
+                      re.IGNORECASE
+                  )
+
+                  if match:
+                      current["hello"] = match.group(1)
+                      current["fail"] = match.group(2)
+                      current["preforward"] = match.group(3)
+                      continue
+
+                  # ----------------------------------------------------------
+                  # Running State
+                  # ----------------------------------------------------------
+                  match = re.match(
+                      r"^Running\s+State\s+(.+)$",
+                      line,
+                      re.IGNORECASE
+                  )
+
+                  if match:
+                      current["status"] = match.group(1).strip()
+                      continue
+
+                  # ----------------------------------------------------------
+                  # Ignore interface header/separator
+                  # ----------------------------------------------------------
+                  if line.startswith("Interface"):
+                      continue
+
+                  if line.startswith("-"):
+                      continue
+
+                  # ----------------------------------------------------------
+                  # Interface information
+                  #
+                  # Example:
+                  # GigaEthernet0/7 Primary Blocking 0 Linkdown
+                  # GigaEthernet0/10 Secondary Forwarding 0 Up
+                  # ----------------------------------------------------------
+                  parts = line.split()
+
+                  if len(parts) >= 5:
+
+                      interface = parts[0]
+                      role = parts[1]
+                      int_state = parts[2]
+                      prefwd = parts[3]
+                      link_status = parts[4]
+
+                      interface_data = (
+                          interface +
+                          " / " +
+                          int_state +
+                          " / " +
+                          link_status
+                      )
+
+                      if role.lower() == "primary":
+                          current["primary"] = interface_data
+
+                      elif role.lower() == "secondary":
+                          current["secondary"] = interface_data
+
+              # --------------------------------------------------------------
+              # Add last ring
+              # --------------------------------------------------------------
+              if current is not None:
+                  rings.append(current)
+
+              # --------------------------------------------------------------
+              # Create normal YAML data
+              # --------------------------------------------------------------
+              final_data = {
+                  "rings": rings
+              }
+
+              # --------------------------------------------------------------
+              # Save YAML
+              # --------------------------------------------------------------
+              os.makedirs(
+                  os.path.dirname(OUTPUT),
+                  exist_ok=True
+              )
+
+              with open(OUTPUT, "w") as f:
+                  yaml.safe_dump(
+                      final_data,
+                      f,
+                      default_flow_style=False,
+                      sort_keys=False
+                  )
+
+              # --------------------------------------------------------------
+              # Display YAML output
+              # --------------------------------------------------------------
+              print(
+                  yaml.safe_dump(
+                      final_data,
+                      default_flow_style=False,
+                      sort_keys=False
+                  )
+              )
+
+              client.close()
+              sys.exit(0)
+
+          except Exception as e:
+
+              print("ETHERNET-RING GET FAILED")
+              print(str(e))
+
+              try:
+                  client.close()
+              except:
+                  pass
+
+              sys.exit(1)
+
+    - name: Execute Ethernet-ring GET
+      delegate_to: localhost
+      command: "python3 {{ script_file }}"
+      register: ethernet_result
+      changed_when: false
+
+    - name: Verify Ethernet-ring GET
+      assert:
+        that:
+          - ethernet_result.rc == 0
+        fail_msg: "Ethernet-ring GET failed"
+        success_msg: "Ethernet-ring GET successful"
+
+    - name: Display Ethernet-ring information
+      debug:
+        msg: "{{ ethernet_result.stdout }}"
+
+    - name: Display output file
+      debug:
+        msg: "Ethernet-ring information saved to {{ output_file }}"
+

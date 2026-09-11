@@ -1,0 +1,298 @@
+---
+# ============================================================================
+# File        : seterps.yml
+# Feature     : ERPS - Ethernet Ring Protection Switching
+# Purpose     : Add / Edit / Delete ERPS configuration
+#
+# Output:
+#   Success -> No YAML file is created.
+#   Failure -> Output YAML contains only the failure reason.
+# ============================================================================
+
+- name: ERPS SET Configuration
+  hosts: alphabridge_devices
+  gather_facts: no
+
+  vars:
+    output_dir: "/opt/librenms/librenms-ansible-inventory-plugin/output"
+    script_dir: "/opt/librenms/librenms-ansible-inventory-plugin/tmp"
+    script_file: "{{ script_dir }}/set_erps.py"
+
+    erps_operation: "{{ operation | default('add', true) }}"
+    erps_ring_id: "{{ ring_id | default(1, true) }}"
+    erps_control_vlan: "{{ control_vlan | default(1, true) }}"
+    erps_wtr_time: "{{ wtr_time | default(20, true) }}"
+    erps_guard_time: "{{ guard_time | default(500, true) }}"
+    erps_send_time: "{{ send_time | default(5, true) }}"
+
+    erps_port1: "{{ port1 | default('', true) }}"
+    erps_port1_role: "{{ port1_role | default('ring-port', true) }}"
+    erps_port2: "{{ port2 | default('', true) }}"
+    erps_port2_role: "{{ port2_role | default('ring-port', true) }}"
+
+  tasks:
+
+  # ==========================================================================
+  # VALIDATION
+  # ==========================================================================
+
+  - name: Validate ERPS operation
+    ansible.builtin.assert:
+      that:
+        - erps_operation in ['add','edit','delete']
+      fail_msg: "operation must be add, edit or delete"
+
+  - name: Validate Ring ID
+    ansible.builtin.assert:
+      that:
+        - erps_ring_id|int >=1
+        - erps_ring_id|int <=239
+
+  - name: Validate Control VLAN
+    ansible.builtin.assert:
+      that:
+        - erps_control_vlan|int >=1
+        - erps_control_vlan|int <=4094
+
+  - name: Validate WTR
+    ansible.builtin.assert:
+      that:
+        - erps_wtr_time|int >=0
+        - erps_wtr_time|int <=720
+
+  - name: Validate Guard Time
+    ansible.builtin.assert:
+      that:
+        - erps_guard_time|int >=0
+        - erps_guard_time|int <=2000
+        - (erps_guard_time|int)%10==0
+
+  - name: Validate Send Time
+    ansible.builtin.assert:
+      that:
+        - erps_send_time|int >=1
+        - erps_send_time|int <=10
+
+  - name: Validate ports
+    ansible.builtin.assert:
+      that:
+        - erps_port1|length>0
+        - erps_port2|length>0
+        - erps_port1_role in ['ring-port','rpl']
+        - erps_port2_role in ['ring-port','rpl']
+    when: erps_operation in ['add','edit']
+
+  # ==========================================================================
+  # DIRECTORIES
+  # ==========================================================================
+
+  - name: Create output directory
+    ansible.builtin.file:
+      path: "{{ output_dir }}"
+      state: directory
+      mode: "0755"
+    delegate_to: localhost
+
+  - name: Create script directory
+    ansible.builtin.file:
+      path: "{{ script_dir }}"
+      state: directory
+      mode: "0755"
+    delegate_to: localhost
+
+  # ==========================================================================
+  # PYTHON SCRIPT
+  # ==========================================================================
+
+  - name: Create ERPS SET script
+    ansible.builtin.copy:
+      dest: "{{ script_file }}"
+      mode: "0755"
+      content: |
+        #!/usr/bin/env python3
+
+        import paramiko
+        import time
+        import re
+        import sys
+
+        HOST="{{ ansible_host }}"
+        USER="{{ ansible_user }}"
+        PASSWORD="{{ ansible_password }}"
+
+        OPERATION="{{ erps_operation }}"
+        RING_ID="{{ erps_ring_id }}"
+        CONTROL_VLAN="{{ erps_control_vlan }}"
+        WTR_TIME="{{ erps_wtr_time }}"
+        GUARD_TIME="{{ erps_guard_time }}"
+        SEND_TIME="{{ erps_send_time }}"
+        PORT1="{{ erps_port1 }}"
+        PORT1_ROLE="{{ erps_port1_role }}"
+        PORT2="{{ erps_port2 }}"
+        PORT2_ROLE="{{ erps_port2_role }}"
+
+        def clean(data):
+            data=data.replace("\r","")
+            return re.sub(r'\x1b\[[0-9;?]*[A-Za-z]','',data)
+
+        def send(ch,cmd,wait=1):
+            ch.send(cmd+"\n")
+            time.sleep(wait)
+            out=""
+            while ch.recv_ready():
+                out+=ch.recv(65535).decode("utf-8","ignore")
+            return clean(out)
+
+        def fail(reason):
+            print("ERPS CONFIGURATION FAILED")
+            print(reason)
+            sys.exit(1)
+
+        ssh=paramiko.SSHClient()
+        ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+
+        try:
+            ssh.connect(HOST,
+                        username=USER,
+                        password=PASSWORD,
+                        look_for_keys=False,
+                        allow_agent=False,
+                        timeout=15)
+
+            ch=ssh.invoke_shell()
+            time.sleep(2)
+
+            send(ch,"enable")
+            send(ch,"terminal length 0")
+            send(ch,"config",2)
+
+            if OPERATION in ["add","edit"]:
+
+                out=send(ch,f"erps {RING_ID}")
+                if "Error" in out: fail(out)
+
+                out=send(ch,f"control-vlan {CONTROL_VLAN}",0.6)
+                if "Error" in out: fail(out)
+
+                out=send(ch,f"wtr-time {WTR_TIME}",0.6)
+                if "Error" in out: fail(out)
+
+                out=send(ch,f"guard-time {GUARD_TIME}",0.6)
+                if "Error" in out: fail(out)
+
+                out=send(ch,f"send-time {SEND_TIME}",0.6)
+                if "Error" in out: fail(out)
+
+                send(ch,"exit",0.5)
+
+                out=send(ch,f"interface {PORT1}",0.7)
+                if "Error" in out: fail(out)
+
+                out=send(ch,f"erps {RING_ID} {PORT1_ROLE}",0.7)
+                if "Error" in out: fail(out)
+
+                send(ch,"exit",0.5)
+
+                out=send(ch,f"interface {PORT2}",0.7)
+                if "Error" in out: fail(out)
+
+                out=send(ch,f"erps {RING_ID} {PORT2_ROLE}",0.7)
+                if "Error" in out: fail(out)
+
+                send(ch,"exit",0.5)
+
+            else:
+                out=send(ch,f"no erps {RING_ID}",1)
+                if "Error" in out:
+                    fail(out)
+
+            send(ch,"exit",1)
+
+            verify=send(ch,f"show erps {RING_ID}",2)
+
+            if OPERATION=="delete":
+
+                if re.search(
+                    rf"ERPS\s+ring{RING_ID}\s+not\s+configured",
+                    verify,
+                    re.IGNORECASE
+                ):
+                    print("ERPS CONFIGURATION SUCCESS")
+                    sys.exit(0)
+
+                if re.search(
+                    rf"(?m)^Ring{RING_ID}\s*$",
+                    verify,
+                    re.IGNORECASE
+                ):
+                    fail(f"Ring {RING_ID} still exists after DELETE")
+
+                print("ERPS CONFIGURATION SUCCESS")
+                sys.exit(0)
+
+            if not re.search(
+                rf"(?m)^Ring{RING_ID}\s*$",
+                verify,
+                re.IGNORECASE
+            ):
+                fail(f"Ring {RING_ID} not found after SET")
+
+            if not re.search(
+                rf"Control\s+Vlan\s+{CONTROL_VLAN}",
+                verify,
+                re.IGNORECASE
+            ):
+                fail(f"Control VLAN {CONTROL_VLAN} not found after SET")
+
+            print("ERPS CONFIGURATION SUCCESS")
+
+        except Exception as e:
+            fail(str(e))
+
+        finally:
+            try:
+                ssh.close()
+            except:
+                pass
+    delegate_to: localhost
+
+  # ==========================================================================
+  # EXECUTE
+  # ==========================================================================
+
+  - name: Execute ERPS SET
+    ansible.builtin.command:
+      cmd: "python3 {{ script_file }}"
+    register: erps_result
+    failed_when: false
+    changed_when: false
+    delegate_to: localhost
+
+  - name: Determine status
+    ansible.builtin.set_fact:
+      erps_status: "{{ 'success' if 'ERPS CONFIGURATION SUCCESS' in erps_result.stdout else 'failed' }}"
+
+  # ==========================================================================
+  # FAILURE YAML ONLY
+  # ==========================================================================
+
+  - name: Save failure YAML
+    ansible.builtin.copy:
+      dest: "{{ output_dir }}/{{ inventory_hostname }}_erps_{{ erps_operation }}.yml"
+      mode: "0644"
+      content: |
+        status: failed
+        reason: "{{ erps_result.stdout | regex_replace('^.*ERPS CONFIGURATION FAILED\\s*','') | regex_replace('\\r?\\n',' ') | trim }}"
+    when: erps_status=="failed"
+    delegate_to: localhost
+
+  - name: Remove old failure YAML after success
+    ansible.builtin.file:
+      path: "{{ output_dir }}/{{ inventory_hostname }}_erps_{{ erps_operation }}.yml"
+      state: absent
+    when: erps_status=="success"
+    delegate_to: localhost
+
+  - name: Display result
+    ansible.builtin.debug:
+      msg: "{{ erps_result.stdout }}"

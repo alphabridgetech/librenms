@@ -232,10 +232,16 @@
             $('#edit_flow_control_auto_opt').show();
         } else {
             // TGigaEthernet: no duplex (fixed Full), has fiber_auto,
-            // flow_control only supports on/off (no auto).
+            // flow_control only supports on/off (no auto). If the
+            // interface's current flow_control somehow is "auto" (not
+            // valid for this type), don't silently resend it - clear it
+            // to "no change" since the hidden option can't be selected.
             $('#edit_duplex_group').hide();
             $('#edit_fiber_auto_group').show();
             $('#edit_flow_control_auto_opt').hide();
+            if ($('#edit_flow_control').val() === 'auto') {
+                $('#edit_flow_control').val('');
+            }
         }
 
         $('#editPortConfigModal').modal('show');

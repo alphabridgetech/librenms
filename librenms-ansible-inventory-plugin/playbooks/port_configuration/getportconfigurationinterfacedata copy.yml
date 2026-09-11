@@ -1,0 +1,783 @@
+# ============================================================================
+# File        : getportconfigurationinterfacedata.yml
+# Feature     : Port Configuration - Interface GET
+#
+# Purpose     :
+#   Get port/interface configuration from the switch.
+#
+# Status Logic:
+#   shutdown      -> Disable
+#   no shutdown   -> Enable
+#   no shutdown
+#   absent        -> Enable
+#
+# Other Parameters:
+#   Speed
+#   Duplex
+#   Flow Control
+#   Medium
+#
+#   These parameters are obtained from "show interface".
+#
+# Output:
+#   /home/gayatri/ansible/output/<device-ip>_port_configuration.yml
+# ============================================================================
+
+---
+- name: Get Port Configuration Interface Data
+  hosts: alphabridge_devices
+  gather_facts: no
+
+  vars:
+    output_dir: "/home/gayatri/ansible/output"
+    script_dir: "/home/gayatri/ansible/tmp"
+    script_file: "{{ script_dir }}/get_port_configuration.py"
+
+  tasks:
+
+    # ========================================================================
+    # Create directories
+    # ========================================================================
+
+    - name: Create output directory
+      ansible.builtin.file:
+        path: "{{ output_dir }}"
+        state: directory
+        mode: "0755"
+      delegate_to: localhost
+
+    - name: Create script directory
+      ansible.builtin.file:
+        path: "{{ script_dir }}"
+        state: directory
+        mode: "0755"
+      delegate_to: localhost
+
+
+    # ========================================================================
+    # Create Python GET script
+    # ========================================================================
+
+    - name: Create Python GET script
+      ansible.builtin.copy:
+        dest: "{{ script_file }}"
+        mode: "0755"
+        content: |
+          #!/usr/bin/env python3
+
+          import pexpect
+          import re
+          import sys
+          import yaml
+          import time
+
+
+          # ==================================================================
+          # Device information
+          # ==================================================================
+
+          HOST = "{{ ansible_host }}"
+          USER = "{{ ansible_user }}"
+          PASSWORD = "{{ ansible_password }}"
+
+
+          # ==================================================================
+          # SSH command
+          # ==================================================================
+
+          SSH_COMMAND = (
+              "ssh "
+              "-tt "
+              "-o StrictHostKeyChecking=no "
+              "-o UserKnownHostsFile=/dev/null "
+              "-o PreferredAuthentications=password "
+              "-o PubkeyAuthentication=no "
+              "-o HostKeyAlgorithms=+ssh-rsa "
+              "-o PubkeyAcceptedAlgorithms=+ssh-rsa "
+              "-o KexAlgorithms=+diffie-hellman-group14-sha1 "
+              + USER + "@" + HOST
+          )
+
+
+          # ==================================================================
+          # Prompt
+          # ==================================================================
+
+          EXEC_PROMPT = r"[>#]\s*$"
+
+
+          # ==================================================================
+          # Clean terminal output
+          # ==================================================================
+
+          def clean_output(data):
+
+              data = data.replace("\r", "")
+
+              data = re.sub(
+                  r'\x1b\[[0-9;?]*[A-Za-z]',
+                  '',
+                  data
+              )
+
+              return data
+
+
+          # ==================================================================
+          # Send command and wait for EXEC prompt
+          # ==================================================================
+
+          def send_command(
+              child,
+              command,
+              timeout=15
+          ):
+
+              child.sendline(command)
+
+              index = child.expect(
+                  [
+                      EXEC_PROMPT,
+                      pexpect.TIMEOUT,
+                      pexpect.EOF
+                  ],
+                  timeout=timeout
+              )
+
+              output = clean_output(
+                  child.before
+              )
+
+              if index == 1:
+
+                  raise Exception(
+                      "Timeout while executing command: "
+                      + command
+                  )
+
+              if index == 2:
+
+                  raise Exception(
+                      "SSH connection closed while executing: "
+                      + command
+                  )
+
+              return output
+
+
+          # ==================================================================
+          # Get interface status from running configuration
+          #
+          # shutdown     -> Disable
+          # no shutdown  -> Enable
+          # nothing      -> Enable
+          # ==================================================================
+
+          def get_interface_status(config_text):
+
+              lines = config_text.splitlines()
+
+              for line in lines:
+
+                  stripped = line.strip()
+
+                  if stripped == "shutdown":
+
+                      return "Disable"
+
+                  if stripped == "no shutdown":
+
+                      return "Enable"
+
+              return "Enable"
+
+
+          # ==================================================================
+          # Parse physical interfaces from SHOW INTERFACE
+          # ==================================================================
+
+          def parse_interfaces(show_output):
+
+              interfaces = {}
+
+              header_pattern = re.compile(
+                  r'^(GigaEthernet\d+/\d+|TGigaEthernet\d+/\d+)'
+                  r'\s+is\s+(.+)$',
+                  re.MULTILINE
+              )
+
+              matches = list(
+                  header_pattern.finditer(show_output)
+              )
+
+
+              for index, match in enumerate(matches):
+
+                  interface_name = match.group(1)
+
+                  start = match.start()
+
+                  if index + 1 < len(matches):
+
+                      end = matches[index + 1].start()
+
+                  else:
+
+                      end = len(show_output)
+
+
+                  block = show_output[start:end]
+
+
+                  # ==========================================================
+                  # SPEED
+                  # ==========================================================
+
+                  speed = "Auto"
+
+                  speed_match = re.search(
+                      r'Auto-Speed\((\d+)Mb/s\)',
+                      block,
+                      re.IGNORECASE
+                  )
+
+                  if speed_match:
+
+                      value = speed_match.group(1)
+
+                      if value == "10000":
+
+                          speed = "10G"
+
+                      elif value == "1000":
+
+                          speed = "1000M"
+
+                      elif value == "100":
+
+                          speed = "100M"
+
+                      elif value == "10":
+
+                          speed = "10M"
+
+
+                  else:
+
+                      fixed_speed_match = re.search(
+                          r'(?:^|,|\s)'
+                          r'(10|100|1000|10000)Mb/s',
+                          block,
+                          re.IGNORECASE
+                      )
+
+                      if fixed_speed_match:
+
+                          value = fixed_speed_match.group(1)
+
+                          if value == "10000":
+
+                              speed = "10G"
+
+                          elif value == "1000":
+
+                              speed = "1000M"
+
+                          elif value == "100":
+
+                              speed = "100M"
+
+                          elif value == "10":
+
+                              speed = "10M"
+
+
+                  # ==========================================================
+                  # DUPLEX
+                  # ==========================================================
+
+                  duplex = "Auto"
+
+                  if re.search(
+                      r'Auto-Duplex',
+                      block,
+                      re.IGNORECASE
+                  ):
+
+                      duplex = "Auto"
+
+                  elif re.search(
+                      r'Full-duplex',
+                      block,
+                      re.IGNORECASE
+                  ):
+
+                      duplex = "Full"
+
+                  elif re.search(
+                      r'Half-duplex',
+                      block,
+                      re.IGNORECASE
+                  ):
+
+                      duplex = "Half"
+
+
+                  # ==========================================================
+                  # FLOW CONTROL
+                  # ==========================================================
+
+                  flow_control = "Auto"
+
+                  flow_match = re.search(
+                      r'Flow-Control\s+([A-Za-z]+)',
+                      block,
+                      re.IGNORECASE
+                  )
+
+                  if flow_match:
+
+                      value = flow_match.group(1).lower()
+
+                      if value == "on":
+
+                          flow_control = "On"
+
+                      elif value == "off":
+
+                          flow_control = "Off"
+
+                      elif value == "auto":
+
+                          flow_control = "Auto"
+
+
+                  # ==========================================================
+                  # MEDIUM
+                  #
+                  # Derived from hardware information.
+                  #
+                  # Giga-TX / copper hardware -> Copper
+                  # LX / FX / SFP              -> Fiber
+                  # ==========================================================
+
+                  medium = "Auto"
+
+                  hardware_match = re.search(
+                      r'Hardware is\s+([^\r\n]+)',
+                      block,
+                      re.IGNORECASE
+                  )
+
+                  if hardware_match:
+
+                      hardware = hardware_match.group(1)
+
+                      if re.search(
+                          r'Giga-TX|100BASE-TX|1000BASE-T|'
+                          r'10BASE-T|10/100/1000',
+                          hardware,
+                          re.IGNORECASE
+                      ):
+
+                          medium = "Copper"
+
+                      elif re.search(
+                          r'LX|FX|SFP|Fiber|1000BASE-X|10Giga-FX',
+                          hardware,
+                          re.IGNORECASE
+                      ):
+
+                          medium = "Fiber"
+
+
+                  # ==========================================================
+                  # FIBER AUTO
+                  #
+                  # show interface does not reliably expose this setting.
+                  # Therefore it is not inferred.
+                  # ==========================================================
+
+                  fiber_auto = "Auto"
+
+
+                  # ==========================================================
+                  # Save interface data
+                  # ==========================================================
+
+                  interfaces[interface_name] = {
+
+                      "speed": speed,
+
+                      "duplex": duplex,
+
+                      "flow_control": flow_control,
+
+                      "medium": medium,
+
+                      "fiber_auto": fiber_auto
+                  }
+
+
+              return interfaces
+
+
+          # ==================================================================
+          # Extract individual interface blocks from running configuration
+          # ==================================================================
+
+          def parse_running_config(config_text):
+
+              interface_configs = {}
+
+
+              pattern = re.compile(
+                  r'^\s*interface\s+'
+                  r'(GigaEthernet\d+/\d+|TGigaEthernet\d+/\d+)'
+                  r'\s*$'
+                  r'(.*?)'
+                  r'(?=^\s*interface\s+'
+                  r'(?:GigaEthernet\d+/\d+|TGigaEthernet\d+/\d+)'
+                  r'\s*$|\Z)',
+                  re.MULTILINE | re.DOTALL
+              )
+
+
+              for match in pattern.finditer(config_text):
+
+                  interface_name = match.group(1)
+
+                  interface_body = match.group(2)
+
+                  interface_configs[interface_name] = interface_body
+
+
+              return interface_configs
+
+
+          # ==================================================================
+          # MAIN
+          # ==================================================================
+
+          child = None
+
+          try:
+
+              # ==============================================================
+              # Start SSH
+              # ==============================================================
+
+              child = pexpect.spawn(
+                  SSH_COMMAND,
+                  encoding="utf-8",
+                  timeout=15
+              )
+
+
+              # ==============================================================
+              # Login
+              # ==============================================================
+
+              logged_in = False
+
+
+              for attempt in range(6):
+
+                  index = child.expect(
+                      [
+                          r"(?i)password:",
+                          r"(?i)are you sure you want to continue connecting",
+                          EXEC_PROMPT,
+                          pexpect.TIMEOUT,
+                          pexpect.EOF
+                      ],
+                      timeout=15
+                  )
+
+
+                  if index == 0:
+
+                      child.sendline(PASSWORD)
+
+
+                  elif index == 1:
+
+                      child.sendline("yes")
+
+
+                  elif index == 2:
+
+                      logged_in = True
+
+                      break
+
+
+                  elif index == 3:
+
+                      raise Exception(
+                          "Timeout while connecting to device."
+                      )
+
+
+                  elif index == 4:
+
+                      raise Exception(
+                          "SSH connection closed."
+                      )
+
+
+              if not logged_in:
+
+                  raise Exception(
+                      "Unable to login to device."
+                  )
+
+
+              # ==============================================================
+              # ENTER ENABLE MODE
+              # ==============================================================
+
+              child.sendline("enable")
+
+
+              index = child.expect(
+                  [
+                      r"#\s*$",
+                      r"(?i)password:",
+                      pexpect.TIMEOUT,
+                      pexpect.EOF
+                  ],
+                  timeout=10
+              )
+
+
+              if index == 1:
+
+                  child.sendline(PASSWORD)
+
+                  index = child.expect(
+                      [
+                          r"#\s*$",
+                          pexpect.TIMEOUT,
+                          pexpect.EOF
+                      ],
+                      timeout=10
+                  )
+
+                  if index != 0:
+
+                      raise Exception(
+                          "Unable to enter enable mode."
+                      )
+
+
+              elif index == 2:
+
+                  raise Exception(
+                      "Timeout while entering enable mode."
+                  )
+
+
+              elif index == 3:
+
+                  raise Exception(
+                      "Connection closed while entering enable mode."
+                  )
+
+
+              # ==============================================================
+              # DISABLE PAGING
+              # ==============================================================
+
+              send_command(
+                  child,
+                  "terminal length 0",
+                  timeout=5
+              )
+
+
+              # ==============================================================
+              # GET SHOW INTERFACE
+              #
+              # Speed / Duplex / Flow-Control / Hardware
+              # are obtained from this command.
+              # ==============================================================
+
+              show_interface = send_command(
+                  child,
+                  "show interface",
+                  timeout=20
+              )
+
+
+              # ==============================================================
+              # Parse SHOW INTERFACE
+              # ==============================================================
+
+              interface_data = parse_interfaces(
+                  show_interface
+              )
+
+
+              if not interface_data:
+
+                  raise Exception(
+                      "No physical interfaces found in show interface output."
+                  )
+
+
+              # ==============================================================
+              # GET RUNNING CONFIGURATION
+              #
+              # IMPORTANT:
+              #
+              # We DO NOT enter config mode.
+              #
+              # The command is executed directly from:
+              #
+              # AWC06XT-M#
+              #
+              # This configuration is used ONLY for status.
+              # ==============================================================
+
+              running_config = send_command(
+                  child,
+                  "show running-config",
+                  timeout=20
+              )
+
+
+              # ==============================================================
+              # Parse running configuration
+              # ==============================================================
+
+              config_interfaces = parse_running_config(
+                  running_config
+              )
+
+
+              # ==============================================================
+              # Apply status to every physical interface
+              # ==============================================================
+
+              for interface_name in interface_data:
+
+                  interface_config = config_interfaces.get(
+                      interface_name,
+                      ""
+                  )
+
+
+                  interface_data[interface_name]["status"] = (
+                      get_interface_status(
+                          interface_config
+                      )
+                  )
+
+
+              # ==============================================================
+              # Arrange output in UI order
+              # ==============================================================
+
+              final_data = {}
+
+
+              for interface_name in interface_data:
+
+                  data = interface_data[interface_name]
+
+
+                  final_data[interface_name] = {
+
+                      "status": data["status"],
+
+                      "speed": data["speed"],
+
+                      "duplex": data["duplex"],
+
+                      "flow_control": data["flow_control"],
+
+                      "medium": data["medium"],
+
+                      "fiber_auto": data["fiber_auto"]
+                  }
+
+
+              # ==============================================================
+              # Output file
+              # ==============================================================
+
+              output_file = (
+                  "/home/gayatri/ansible/output/"
+                  + HOST
+                  + "_port_configuration.yml"
+              )
+
+
+              with open(
+                  output_file,
+                  "w"
+              ) as file:
+
+                  yaml.safe_dump(
+                      final_data,
+                      file,
+                      default_flow_style=False,
+                      sort_keys=False
+                  )
+
+
+              print("SUCCESS")
+
+
+              child.close()
+
+              sys.exit(0)
+
+
+          except Exception as error:
+
+              print(
+                  "PORT CONFIGURATION GET FAILED"
+              )
+
+              print(
+                  "Error: " + str(error)
+              )
+
+
+              if child is not None:
+
+                  try:
+
+                      child.close()
+
+                  except Exception:
+
+                      pass
+
+
+              sys.exit(1)
+
+
+    # ========================================================================
+    # Run GET script
+    # ========================================================================
+
+    - name: Run Port Configuration GET
+      ansible.builtin.command: >
+        /home/gayatri/ansible/bin/python3
+        {{ script_file }}
+      register: port_get_result
+      changed_when: false
+      failed_when: port_get_result.rc != 0
+
+
+    # ========================================================================
+    # Display result
+    # ========================================================================
+
+    - name: Display Port Configuration GET result
+      ansible.builtin.debug:
+        msg: "{{ port_get_result.stdout }}"
+

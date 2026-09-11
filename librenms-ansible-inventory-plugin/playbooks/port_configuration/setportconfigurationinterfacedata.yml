@@ -46,7 +46,7 @@
 
 # Output:
 
-#   /opt/librenms/librenms-ansible-inventory-plugin/output/
+#   /opt/librenms/librenms-ansible-inventory-plugin/playbooks/output/
 
 #
 
@@ -86,9 +86,9 @@
 
     device_ip: "{{ ansible_host | default(inventory_hostname) }}"
 
-    temp_script: "/tmp/set_port_configuration.py"
+    temp_script: "/opt/librenms/librenms-ansible-inventory-plugin/tmp/set_port_configuration.py"
  
-    output_dir: "/opt/librenms/librenms-ansible-inventory-plugin/output"
+    output_dir: "/opt/librenms/librenms-ansible-inventory-plugin/playbooks/output"
 
     output_file: "{{ output_dir }}/{{ device_ip }}_port_configuration_interface.yml"
  
