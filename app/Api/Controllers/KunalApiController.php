@@ -1713,7 +1713,7 @@ public function getvlan($hostname)
     public function addportaggregate(Request $request, $hostname)
     {
         $data = $request->validate([
-            'aggregate_group' => 'required|in:P1,P2,P3,P4,P5,P6,P7,P8',
+            'aggregate_group' => 'required',
             'mode'            => 'required|in:static,lacp active,lacp passive',
             'ports'           => 'required|string',
         ]);
@@ -1735,6 +1735,7 @@ public function getvlan($hostname)
         }
 
         $result = yaml_parse_file($yamlFile);
+
         if (($result['status'] ?? null) !== 'success') {
             return $this->error($result['error'] ?? 'Failed to configure port aggregate group', $result);
         }

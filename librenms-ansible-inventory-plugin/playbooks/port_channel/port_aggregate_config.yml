@@ -139,8 +139,7 @@
 
     - name: Create Python SSH Script for port aggregate config
       ansible.builtin.copy:
-        dest: "/opt/librenms/librenms-ansible-inventory-plugin/
-               tmp/port_aggregate_config_exec.py"
+        dest: "/opt/librenms/librenms-ansible-inventory-plugin/tmp/port_aggregate_config_exec.py"
         mode: '0755'
         content: |
           #!/usr/bin/env python3
@@ -403,8 +402,7 @@
 
     - name: Save port aggregate result
       ansible.builtin.copy:
-        dest: "/opt/librenms/librenms-ansible-inventory-plugin/
-               output/{{ ansible_host }}_port_aggregate_config.yml"
+        dest: "/opt/librenms/librenms-ansible-inventory-plugin/output/{{ ansible_host }}_port_aggregate_config.yml"
         content: |
           {{ aggregate_result | to_nice_yaml }}
 

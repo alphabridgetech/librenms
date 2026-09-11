@@ -22,9 +22,64 @@
     .dataTables_wrapper thead th {
         white-space: nowrap;
     }
+
+    .pc-transfer-wrap {
+        display: flex;
+        align-items: stretch;
+        gap: 10px;
+    }
+
+    .pc-transfer-box {
+        flex: 1 1 0;
+        border: 1px solid #ddd;
+        border-radius: 3px;
+        overflow: hidden;
+    }
+
+    .pc-transfer-box-header {
+        background: #f5f5f5;
+        border-bottom: 1px solid #ddd;
+        padding: 6px 10px;
+        font-weight: 600;
+        font-size: 12.5px;
+    }
+
+    .pc-transfer-box select {
+        border: none;
+        border-radius: 0;
+        box-shadow: none;
+        width: 100%;
+        margin: 0;
+    }
+
+    .pc-transfer-btns {
+        flex: 0 0 60px;
+        display: flex;
+        flex-direction: column;
+        justify-content: center;
+        gap: 10px;
+    }
 </style>
 
 <div class="container" style="margin-top:30px;">
+    @php
+        // Show every real interface on this device. Backend
+        // (port_aggregate_config.yml) currently only accepts the short
+        // "g0/N" form for GigaEthernet ports (max g0/1-g0/10), so map those
+        // to that short form; everything else is listed as-is (selecting
+        // one will surface the backend's own validation error if it isn't
+        // supported).
+        $allPorts = collect($data['interfaces'] ?? [])
+            ->map(function ($ifName) {
+                if (preg_match('/^GigaEthernet(\d+\/(?:[1-9]|10))$/', $ifName, $m)) {
+                    return ['value' => 'g' . $m[1], 'label' => $ifName . ' (g' . $m[1] . ')'];
+                }
+
+                return ['value' => $ifName, 'label' => $ifName];
+            })
+            ->sortBy('label')
+            ->values();
+    @endphp
     <!-- Tabs -->
     <ul class="nav nav-tabs">
         <li class="active"><a href="#port_channel_main" data-toggle="tab">Port Channel</a></li>
@@ -45,16 +100,7 @@
                             <div class="form-group">
                                 <label class="col-sm-2 control-label">Aggregate Group*</label>
                                 <div class="col-sm-6">
-                                    <select id="pc_add_group" class="form-control">
-                                        <option value="P1">P1</option>
-                                        <option value="P2">P2</option>
-                                        <option value="P3">P3</option>
-                                        <option value="P4">P4</option>
-                                        <option value="P5">P5</option>
-                                        <option value="P6">P6</option>
-                                        <option value="P7">P7</option>
-                                        <option value="P8">P8</option>
-                                    </select>
+                                    <input type="text" id="pc_add_group" class="form-control" placeholder="e.g. P1" maxlength="2">
                                 </div>
                             </div>
                             <div class="form-group">
@@ -69,20 +115,28 @@
                             </div>
                             <div class="form-group">
                                 <label class="col-sm-2 control-label">Member Ports*</label>
-                                <div class="col-sm-6">
-                                    <select id="pc_add_ports" class="form-control" multiple size="6">
-                                        <option value="g0/1">g0/1</option>
-                                        <option value="g0/2">g0/2</option>
-                                        <option value="g0/3">g0/3</option>
-                                        <option value="g0/4">g0/4</option>
-                                        <option value="g0/5">g0/5</option>
-                                        <option value="g0/6">g0/6</option>
-                                        <option value="g0/7">g0/7</option>
-                                        <option value="g0/8">g0/8</option>
-                                        <option value="g0/9">g0/9</option>
-                                        <option value="g0/10">g0/10</option>
-                                    </select>
-                                    <span class="help-block">Ctrl/Cmd-click to select multiple ports.</span>
+                                <div class="col-sm-10">
+                                    <div class="pc-transfer-wrap">
+                                        <div class="pc-transfer-box">
+                                            <div class="pc-transfer-box-header">Configured Port List</div>
+                                            <select id="pc_add_configured_ports" multiple size="8"></select>
+                                        </div>
+                                        <div class="pc-transfer-btns">
+                                            <button type="button" id="pc_add_move_left" class="btn btn-default btn-sm">&gt;&gt;</button>
+                                            <button type="button" id="pc_add_move_right" class="btn btn-default btn-sm">&lt;&lt;</button>
+                                        </div>
+                                        <div class="pc-transfer-box">
+                                            <div class="pc-transfer-box-header">Available Port List</div>
+                                            <select id="pc_add_available_ports" multiple size="8">
+                                                @forelse($allPorts as $port)
+                                                    <option value="{{ $port['value'] }}">{{ $port['label'] }}</option>
+                                                @empty
+                                                    <option value="" disabled>No ports found on this device</option>
+                                                @endforelse
+                                            </select>
+                                        </div>
+                                    </div>
+                                    <span class="help-block">Select port(s) then click &gt;&gt; to add to the group, or &lt;&lt; to remove. Only GigaEthernet ports (g0/1-g0/10) are currently supported for aggregation.</span>
                                 </div>
                             </div>
                             <div id="pc_add_error" class="text-danger" style="display:none; margin-left:15px;"></div>
@@ -194,7 +248,7 @@
 
 <!-- Edit Port Channel Modal -->
 <div id="editPortChannelModal" class="modal fade" tabindex="-1" role="dialog">
-    <div class="modal-dialog">
+    <div class="modal-dialog modal-lg">
         <div class="modal-content">
             <div class="modal-header">
                 <button type="button" class="close" data-dismiss="modal">&times;</button>
@@ -219,17 +273,23 @@
                         </div>
                     </div>
                     <div class="form-group">
-                        <label class="col-sm-4 control-label">Add Ports</label>
+                        <label class="col-sm-4 control-label">Member Ports</label>
                         <div class="col-sm-8">
-                            <input type="text" id="pc_edit_add_ports" class="form-control" placeholder="e.g. g0/2,g0/6">
-                            <span class="help-block">Comma-separated ports to move from Available to Configured.</span>
-                        </div>
-                    </div>
-                    <div class="form-group">
-                        <label class="col-sm-4 control-label">Remove Ports</label>
-                        <div class="col-sm-8">
-                            <input type="text" id="pc_edit_remove_ports" class="form-control" placeholder="e.g. g0/7">
-                            <span class="help-block">Comma-separated ports to move from Configured to Available.</span>
+                            <div class="pc-transfer-wrap">
+                                <div class="pc-transfer-box">
+                                    <div class="pc-transfer-box-header">Configured Port List</div>
+                                    <select id="pc_edit_configured_ports" multiple size="8"></select>
+                                </div>
+                                <div class="pc-transfer-btns">
+                                    <button type="button" id="pc_edit_move_right" class="btn btn-default btn-sm">&gt;&gt;</button>
+                                    <button type="button" id="pc_edit_move_left" class="btn btn-default btn-sm">&lt;&lt;</button>
+                                </div>
+                                <div class="pc-transfer-box">
+                                    <div class="pc-transfer-box-header">Available Port List</div>
+                                    <select id="pc_edit_available_ports" multiple size="8"></select>
+                                </div>
+                            </div>
+                            <span class="help-block">Select port(s) then click &gt;&gt; to add, or &lt;&lt; to remove.</span>
                         </div>
                     </div>
                     <div id="pc_edit_error" class="text-danger" style="display:none;"></div>
@@ -248,6 +308,54 @@
 <script>
     const pcIp = "{{ $device->hostname }}";
     const pcApiToken = "{{ $data['api_token'] }}";
+    const PC_ALL_PORTS = @json($allPorts);
+
+    // Rebuild a pair of Configured/Available <select> lists from scratch -
+    // configuredValues (already in the group) go in the left list,
+    // everything else in PC_ALL_PORTS goes in the right list.
+    function populatePortLists(configuredId, availableId, configuredValues) {
+        const configuredSelect = document.getElementById(configuredId);
+        const availableSelect = document.getElementById(availableId);
+        configuredSelect.innerHTML = '';
+        availableSelect.innerHTML = '';
+
+        const configuredSet = new Set(configuredValues);
+
+        PC_ALL_PORTS.forEach(function (port) {
+            const opt = document.createElement('option');
+            opt.value = port.value;
+            opt.textContent = port.label;
+            if (configuredSet.has(port.value)) {
+                configuredSelect.appendChild(opt);
+            } else {
+                availableSelect.appendChild(opt);
+            }
+        });
+    }
+
+    // Move whichever options are currently selected from one <select> to
+    // the other (the standard ">>"/"<<" transfer-list pattern).
+    function moveSelectedOptions(fromId, toId) {
+        const from = document.getElementById(fromId);
+        const to = document.getElementById(toId);
+        Array.from(from.selectedOptions).forEach(function (opt) {
+            opt.selected = false;
+            to.appendChild(opt);
+        });
+    }
+
+    document.getElementById('pc_add_move_right').addEventListener('click', function () {
+        moveSelectedOptions('pc_add_available_ports', 'pc_add_configured_ports');
+    });
+    document.getElementById('pc_add_move_left').addEventListener('click', function () {
+        moveSelectedOptions('pc_add_configured_ports', 'pc_add_available_ports');
+    });
+    document.getElementById('pc_edit_move_right').addEventListener('click', function () {
+        moveSelectedOptions('pc_edit_available_ports', 'pc_edit_configured_ports');
+    });
+    document.getElementById('pc_edit_move_left').addEventListener('click', function () {
+        moveSelectedOptions('pc_edit_configured_ports', 'pc_edit_available_ports');
+    });
 
     function showFieldError(id, msg) {
         const el = document.getElementById(id);
@@ -330,11 +438,18 @@
         deletePortChannelRow(row['aggregation_group']);
     });
 
+    // Tracks what was configured when the Edit modal was opened, so
+    // editPortChannel() can diff the current Configured list against it
+    // and send only the actual add_ports/remove_ports delta.
+    let pcEditOriginalPorts = [];
+
     function openEditPortChannelModal(row) {
         clearFieldError('pc_edit_error');
         document.getElementById('pc_edit_group').value = 'p' + row['aggregation_group'];
-        document.getElementById('pc_edit_add_ports').value = '';
-        document.getElementById('pc_edit_remove_ports').value = '';
+
+        const configured = Array.isArray(row['configured_port_members']) ? row['configured_port_members'] : [];
+        pcEditOriginalPorts = configured.slice();
+        populatePortLists('pc_edit_configured_ports', 'pc_edit_available_ports', configured);
 
         const modeVal = (row['mode'] || '').toLowerCase();
         if (modeVal.includes('lacp')) {
@@ -380,10 +495,10 @@
     function addPortChannel() {
         const group = document.getElementById('pc_add_group').value;
         const mode = document.getElementById('pc_add_mode').value;
-        const ports = Array.from(document.getElementById('pc_add_ports').selectedOptions).map(o => o.value);
+        const ports = Array.from(document.getElementById('pc_add_configured_ports').options).map(o => o.value);
 
         if (ports.length === 0) {
-            showFieldError('pc_add_error', 'Select at least one member port');
+            showFieldError('pc_add_error', 'Move at least one port to the Configured Port List');
             return;
         }
 
@@ -393,6 +508,7 @@
             'pc_add_error', 'pcAddBtn', 'Saving...',
             function () {
                 document.getElementById('portChannelAddForm').reset();
+                populatePortLists('pc_add_configured_ports', 'pc_add_available_ports', []);
                 loadPortChannelTable();
             }
         );
@@ -401,12 +517,14 @@
     function editPortChannel() {
         const group = document.getElementById('pc_edit_group').value;
         const mode = document.getElementById('pc_edit_mode').value;
-        const addPorts = document.getElementById('pc_edit_add_ports').value.trim();
-        const removePorts = document.getElementById('pc_edit_remove_ports').value.trim();
+
+        const currentPorts = Array.from(document.getElementById('pc_edit_configured_ports').options).map(o => o.value);
+        const addPorts = currentPorts.filter(p => !pcEditOriginalPorts.includes(p));
+        const removePorts = pcEditOriginalPorts.filter(p => !currentPorts.includes(p));
 
         const body = { aggregate_group: group, mode: mode };
-        if (addPorts) body.add_ports = addPorts;
-        if (removePorts) body.remove_ports = removePorts;
+        if (addPorts.length) body.add_ports = addPorts.join(',');
+        if (removePorts.length) body.remove_ports = removePorts.join(',');
 
         callPortChannelApi(
             `/api/v0/portchannel/edit/${pcIp}`,
