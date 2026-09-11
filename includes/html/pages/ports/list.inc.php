@@ -50,13 +50,37 @@ if (isset($vars['errors'])) {
                     <th data-column-id="ifOutOctets_rate" data-searchable="false" data-css-class="blue"
                         data-converter="human-bps">Out
                     </th>
+                    <th data-column-id="ifInUcastPkts" data-searchable="false"
+                        data-visible="<?php echo $details_visible ?>" data-css-class="green">
+                        Unicast Packets In Total
+                    </th>
+                    <th data-column-id="ifInUcastPkts_prev" data-searchable="false"
+                        data-visible="<?php echo $details_visible ?>" data-css-class="green">
+                        Unicast Packets In Previous
+                    </th>
+                    <th data-column-id="ifInUcastPkts_delta" data-searchable="false"
+                        data-visible="<?php echo $details_visible ?>" data-css-class="green">
+                        Unicast Packets In Change
+                    </th>
                     <th data-column-id="ifInUcastPkts_rate" data-searchable="false"
                         data-visible="<?php echo $details_visible ?>" data-css-class="green" data-converter="human-pps">
-                        Packets In
+                        Unicast Packets In Rate
+                    </th>
+                    <th data-column-id="ifOutUcastPkts" data-searchable="false"
+                        data-visible="<?php echo $details_visible ?>" data-css-class="blue">
+                        Unicast Packets Out Total
+                    </th>
+                    <th data-column-id="ifOutUcastPkts_prev" data-searchable="false"
+                        data-visible="<?php echo $details_visible ?>" data-css-class="blue">
+                        Unicast Packets Out Previous
+                    </th>
+                    <th data-column-id="ifOutUcastPkts_delta" data-searchable="false"
+                        data-visible="<?php echo $details_visible ?>" data-css-class="blue">
+                        Unicast Packets Out Change
                     </th>
                     <th data-column-id="ifOutUcastPkts_rate" data-searchable="false"
                         data-visible="<?php echo $details_visible ?>" data-css-class="blue" data-converter="human-pps">
-                        Packets Out
+                        Unicast Packets Out Rate
                     </th>
                     <th data-column-id="ifInErrors_delta" data-searchable="false" data-visible="<?php echo $errors_visible ?>"
                     data-css-class="red"<?php echo $error_sort ?>>Errors In Rate

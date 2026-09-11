@@ -34,22 +34,6 @@
 #   State                    - "state :" value on the "Group ID" line
 #                               (e.g. lineUp / lineDown)
 #
-# ASSUMPTIONS TO CONFIRM AGAINST YOUR SAMPLE OUTPUT:
-#   - "Configure port members" is read as: every port listed under that
-#     group's "Port:" entries (i.e. ports assigned to the group,
-#     regardless of link state).
-#   - "Valid port members" is read as: the subset of those ports whose
-#     "Status:" is "Up" (i.e. actually usable right now). Your sample
-#     output only shows ports in "Down" state, so this logic hasn't been
-#     exercised against a real "Up" port yet - please sanity check once
-#     you have a live aggregate with an Up member.
-#   - "Mode" is read per-port from "Mode : Static" / "Mode : Lacp". If a
-#     group somehow has ports with different modes, all distinct modes
-#     are joined with a comma (e.g. "Static, Lacp") rather than picking
-#     one arbitrarily.
-#   - "State" comes from the group's own "state :" field (line containing
-#     "Group ID"), not from any individual port's Status.
-#
 # Input vars:
 #   group_id (optional) - if set, only the matching Aggregation Group
 #                          number is returned. If omitted, all groups
@@ -86,7 +70,8 @@
 
     - name: Create Python SSH Script for port aggregate details
       ansible.builtin.copy:
-        dest: "/opt/librenms/librenms-ansible-inventory-plugin/tmp/port_aggregate_details_exec.py"
+        dest: "/opt/librenms/librenms-ansible-inventory-plugin/tmp/\
+               port_aggregate_details_exec.py"
         mode: '0755'
         content: |
           #!/usr/bin/env python3
@@ -254,8 +239,8 @@
 
               print(json.dumps({
                   "ip": HOST,
-                  "status": "success",
-                  "groups": groups
+                  "groups": groups,
+                  "status": "success"
               }))
 
           except Exception as e:
@@ -279,9 +264,7 @@
 
     - name: Execute port aggregate details script
       ansible.builtin.command:
-        cmd: >
-          /opt/librenms/librenms-ansible-inventory-plugin/bin/python3
-          /opt/librenms/librenms-ansible-inventory-plugin/tmp/port_aggregate_details_exec.py
+        cmd: /opt/librenms/librenms-ansible-inventory-plugin/bin/python3 /opt/librenms/librenms-ansible-inventory-plugin/tmp/port_aggregate_details_exec.py
       register: aggregate_raw
       changed_when: false
       failed_when: false
@@ -308,9 +291,10 @@
 
     - name: Save port aggregate details result
       ansible.builtin.copy:
-        dest: "/opt/librenms/librenms-ansible-inventory-plugin/output/{{ ansible_host }}_port_aggregate_details.yml"
+        dest: "/opt/librenms/librenms-ansible-inventory-plugin/output/\
+               {{ ansible_host }}_port_aggregate_details.yml"
         content: |
-          {{ aggregate_result | to_nice_yaml }}
+          {{ aggregate_result | to_nice_yaml (sort_keys=False) }}
 
     # ==========================================
     # FAIL IF SHOW COMMAND FAILED

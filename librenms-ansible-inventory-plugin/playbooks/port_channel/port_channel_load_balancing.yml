@@ -109,7 +109,7 @@
         Create Python SSH Script for port channel load
         balancing
       ansible.builtin.copy:
-        dest: "/opt/librenms/librenms-ansible-inventory-plugin/tmp/
+        dest: "/opt/librenms/librenms-ansible-inventory-plugin/tmp/\
                port_channel_load_balancing_exec.py"
         mode: '0755'
         content: |
@@ -322,10 +322,7 @@
 
     - name: Execute port channel load balancing script
       ansible.builtin.command:
-        cmd: >
-          /opt/librenms/librenms-ansible-inventory-plugin/bin/python3
-          /opt/librenms/librenms-ansible-inventory-plugin/tmp/\
-          port_channel_load_balancing_exec.py
+        cmd: /opt/librenms/librenms-ansible-inventory-plugin/bin/python3 /opt/librenms/librenms-ansible-inventory-plugin/tmp/port_channel_load_balancing_exec.py
       register: lb_raw
       changed_when: false
       failed_when: false

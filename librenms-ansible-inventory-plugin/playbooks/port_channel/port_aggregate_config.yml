@@ -43,19 +43,6 @@
 #   exit
 #   write
 #
-# CONFIRMED FROM DEVICE LOGS:
-#   - The device requires the FULL interface name, not the short form:
-#     "g0/6" is sent to the switch as "GigaEthernet0/6". The playbook
-#     still accepts short form (g0/1-g0/10) as input and maps it
-#     internally.
-#   - "aggregator-group <id>" with no mode word is REJECTED (ret -1).
-#     Every mode, including static, needs an explicit mode word:
-#     "aggregator-group <id> mode static".
-#   - Before assigning a new group, the switch expects the interface to
-#     first be cleared with "no aggregator-group" (re-entering the
-#     interface for that step, then re-entering it again to apply the
-#     new aggregator-group command), matching the confirmed log sequence.
-#
 # All inputs are validated in Ansible BEFORE any SSH connection is
 # attempted, and re-checked inside the Python helper as a second layer
 # of defense. The running config is saved with "write" after the change.
@@ -152,7 +139,8 @@
 
     - name: Create Python SSH Script for port aggregate config
       ansible.builtin.copy:
-        dest: "/opt/librenms/librenms-ansible-inventory-plugin/tmp/port_aggregate_config_exec.py"
+        dest: "/opt/librenms/librenms-ansible-inventory-plugin/
+               tmp/port_aggregate_config_exec.py"
         mode: '0755'
         content: |
           #!/usr/bin/env python3
@@ -358,11 +346,11 @@
 
               print(json.dumps({
                   "ip": HOST,
-                  "status": "success",
                   "aggregate_group": AGGREGATE_GROUP,
                   "aggregator_group_id": AGGREGATE_GROUP_ID,
                   "mode": MODE,
-                  "ports": configured_ports
+                  "ports": configured_ports,
+                  "status": "success"
               }))
 
           except Exception as e:
@@ -415,7 +403,8 @@
 
     - name: Save port aggregate result
       ansible.builtin.copy:
-        dest: "/opt/librenms/librenms-ansible-inventory-plugin/output/{{ ansible_host }}_port_aggregate_config.yml"
+        dest: "/opt/librenms/librenms-ansible-inventory-plugin/
+               output/{{ ansible_host }}_port_aggregate_config.yml"
         content: |
           {{ aggregate_result | to_nice_yaml }}
 
