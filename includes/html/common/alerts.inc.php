@@ -255,10 +255,25 @@ if (defined('SHOW_SETTINGS')) {
 <script>
 var alerts_grid = $("#alerts_' . $unique_id . '").bootgrid({
     ajax: true,
+    templates: {
+        header: \'<div id="{{ctx.id}}" class="{{css.header}}"><div class="row"> \
+            <div class="col-sm-12 actionBar" style="margin-bottom: 10px;"><span class="pull-left"> \
+            <div class="form-inline"> \
+            <div class="form-group"> \
+            <label> \
+            <strong>Device&nbsp;</strong> \
+            </label> \
+            <select id="alerts_device_id_' . $unique_id . '" class="form-control input-sm" style="min-width: 150px;"></select> \
+            </div> \
+            <button type="button" id="alerts_clear_filter_' . $unique_id . '" class="btn btn-default input-sm" style="margin-left: 5px;"><i class="fa fa-refresh"></i> Clear Filter</button> \
+            </div></span></div> \
+            <div class="col-sm-12 actionBar"><p class="{{css.search}}"></p><p class="{{css.actions}}"></p></div></div></div>\'
+    },
     post: function ()
     {
         return {
             id: "alerts",
+            device_id: $("#alerts_device_id_' . $unique_id . '").val() || \'-1\',
 ';
 
     if (is_numeric($rule_id)) {
@@ -293,7 +308,7 @@ var alerts_grid = $("#alerts_' . $unique_id . '").bootgrid({
     }
 
     $common_output[] = '
-            device_id: \'' . $device['device_id'] . '\'
+            _placeholder: null
         }
     },
     url: "ajax_table.php",
@@ -338,5 +353,16 @@ var alerts_grid = $("#alerts_' . $unique_id . '").bootgrid({
       $("#alert_details_modal").modal(\'show\');
     });
 });
+
+$(document).on("change", "#alerts_device_id_' . $unique_id . '", function(e) {
+    $("#alerts_' . $unique_id . '").bootgrid("reload");
+});
+
+$(document).on("click", "#alerts_clear_filter_' . $unique_id . '", function(e) {
+    e.preventDefault();
+    $("#alerts_device_id_' . $unique_id . '").val(null).trigger("change");
+});
+
+init_select2("#alerts_device_id_' . $unique_id . '", "device", {}, \'\', "All Devices");
 </script>';
 }
