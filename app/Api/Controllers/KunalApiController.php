@@ -829,6 +829,39 @@ public function getmtu($hostname)
         return null;
     }
 
+    /**
+     * `file_exists($yamlFile)` alone doesn't prove THIS invocation actually
+     * wrote the file - it's just as true when nothing happened this time
+     * and we're looking at a stale file left over from an earlier
+     * successful run (e.g. after a transient SSH failure this time
+     * around), which would make the caller trust old cached success data
+     * as if it just happened. Surface a genuine ansible failure (a fatal
+     * task error or an unreachable host) directly instead.
+     *
+     * Note: an earlier version of this also compared the file's mtime
+     * before/after the run and rejected anything that hadn't changed - that
+     * produced false positives, because ansible's `copy` module is
+     * content-aware idempotent: if the new result is byte-identical to
+     * what's already on disk (common for simple {"status":"success"}
+     * outputs), it reports "ok" without touching mtime, even though the
+     * underlying SSH operation genuinely ran and succeeded. Don't
+     * reintroduce an mtime check without accounting for that.
+     *
+     * @return string|null  an error message if this run should NOT be trusted, or null if it's safe to read $yamlFile
+     */
+    private function verifyFreshPlaybookOutput(string $yamlFile, string $ansibleOutput): ?string
+    {
+        if (stripos($ansibleOutput, 'FAILED!') !== false || stripos($ansibleOutput, 'UNREACHABLE!') !== false) {
+            return $this->extractPortConfigFailureReason($ansibleOutput) ?: 'Ansible playbook failed to run';
+        }
+
+        if (!file_exists($yamlFile)) {
+            return 'Output file not found after running the playbook';
+        }
+
+        return null;
+    }
+
     #------------------------------------------------------------
     #                    PORT CONFIGURATION (SET)
     #------------------------------------------------------------
@@ -1712,8 +1745,16 @@ public function getvlan($hostname)
     #------------------------------------------------------------
     public function addportaggregate(Request $request, $hostname)
     {
+        // aggregate_group is now a free-text input on the frontend (used
+        // to be a dropdown constrained to exact "P1".."P8"), so normalize
+        // case here before validating/passing to ansible - the playbook
+        // itself only accepts the exact uppercase form.
+        if ($request->filled('aggregate_group')) {
+            $request->merge(['aggregate_group' => strtoupper(trim($request->input('aggregate_group')))]);
+        }
+
         $data = $request->validate([
-            'aggregate_group' => 'required',
+            'aggregate_group' => 'required|in:P1,P2,P3,P4,P5,P6,P7,P8',
             'mode'            => 'required|in:static,lacp active,lacp passive',
             'ports'           => 'required|string',
         ]);
@@ -1730,8 +1771,8 @@ public function getvlan($hostname)
             'ports'           => $data['ports'],
         ]);
 
-        if (!file_exists($yamlFile)) {
-            return $this->error("Port aggregate config output file not found", $ansibleOutput);
+        if ($reason = $this->verifyFreshPlaybookOutput($yamlFile, $ansibleOutput)) {
+            return $this->error($reason, $ansibleOutput);
         }
 
         $result = yaml_parse_file($yamlFile);
@@ -1739,6 +1780,12 @@ public function getvlan($hostname)
         if (($result['status'] ?? null) !== 'success') {
             return $this->error($result['error'] ?? 'Failed to configure port aggregate group', $result);
         }
+
+        // Refresh the getportaggregate cache synchronously so the table the
+        // frontend reloads right after this call already reflects the
+        // change, instead of showing stale data until the next background
+        // refresh cycle.
+        $this->runAnsible("{$this->pluginPath}/playbooks/port_channel/port_aggregate_details.yml", $hosts);
 
         return $this->success([
             "message" => "Aggregate group {$data['aggregate_group']} configured ({$data['mode']}) with ports {$data['ports']}",
@@ -1775,14 +1822,18 @@ public function getvlan($hostname)
 
         $ansibleOutput = $this->runAnsiblejs($playbook, $hosts, $extraVars);
 
-        if (!file_exists($yamlFile)) {
-            return $this->error("Port aggregate edit output file not found", $ansibleOutput);
+        if ($reason = $this->verifyFreshPlaybookOutput($yamlFile, $ansibleOutput)) {
+            return $this->error($reason, $ansibleOutput);
         }
 
         $result = yaml_parse_file($yamlFile);
         if (($result['status'] ?? null) !== 'success') {
             return $this->error($result['error'] ?? 'Failed to edit port aggregate group', $result);
         }
+
+        // See addportaggregate() - refresh the getportaggregate cache
+        // synchronously so a following table reload reflects the edit.
+        $this->runAnsible("{$this->pluginPath}/playbooks/port_channel/port_aggregate_details.yml", $hosts);
 
         return $this->success([
             "message" => "Aggregate group {$data['aggregate_group']} updated",
@@ -1807,14 +1858,18 @@ public function getvlan($hostname)
             'port_id' => $data['port_id'],
         ]);
 
-        if (!file_exists($yamlFile)) {
-            return $this->error("Port aggregate delete output file not found", $ansibleOutput);
+        if ($reason = $this->verifyFreshPlaybookOutput($yamlFile, $ansibleOutput)) {
+            return $this->error($reason, $ansibleOutput);
         }
 
         $result = yaml_parse_file($yamlFile);
         if (($result['status'] ?? null) !== 'success') {
             return $this->error($result['error'] ?? 'Failed to delete port channel interface', $result);
         }
+
+        // See addportaggregate() - refresh the getportaggregate cache
+        // synchronously so a following table reload reflects the deletion.
+        $this->runAnsible("{$this->pluginPath}/playbooks/port_channel/port_aggregate_details.yml", $hosts);
 
         return $this->success([
             "message" => "Port channel interface {$data['port_id']} deleted",
@@ -1843,8 +1898,8 @@ public function getvlan($hostname)
             'mode' => $data['mode'],
         ]);
 
-        if (!file_exists($yamlFile)) {
-            return $this->error("Port channel load balancing output file not found", $ansibleOutput);
+        if ($reason = $this->verifyFreshPlaybookOutput($yamlFile, $ansibleOutput)) {
+            return $this->error($reason, $ansibleOutput);
         }
 
         $result = yaml_parse_file($yamlFile);

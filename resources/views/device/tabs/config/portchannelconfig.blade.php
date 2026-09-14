@@ -100,7 +100,7 @@
                             <div class="form-group">
                                 <label class="col-sm-2 control-label">Aggregate Group*</label>
                                 <div class="col-sm-6">
-                                    <input type="text" id="pc_add_group" class="form-control" placeholder="e.g. P1" maxlength="2">
+                                    <input type="text" id="pc_add_group" class="form-control" placeholder="e.g. P1" maxlength="2" style="text-transform:uppercase;" oninput="this.value = this.value.toUpperCase();">
                                 </div>
                             </div>
                             <div class="form-group">
@@ -122,8 +122,8 @@
                                             <select id="pc_add_configured_ports" multiple size="8"></select>
                                         </div>
                                         <div class="pc-transfer-btns">
-                                            <button type="button" id="pc_add_move_left" class="btn btn-default btn-sm">&gt;&gt;</button>
-                                            <button type="button" id="pc_add_move_right" class="btn btn-default btn-sm">&lt;&lt;</button>
+                                            <button type="button" id="pc_add_move_right" class="btn btn-default btn-sm">&gt;&gt;</button>
+                                            <button type="button" id="pc_add_move_left" class="btn btn-default btn-sm">&lt;&lt;</button>
                                         </div>
                                         <div class="pc-transfer-box">
                                             <div class="pc-transfer-box-header">Available Port List</div>

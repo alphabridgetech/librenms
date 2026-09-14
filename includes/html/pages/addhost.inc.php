@@ -77,6 +77,25 @@ if (! Auth::user()->hasGlobalAdmin()) {
     exit;
 }
 
+// Pre-fill the SNMP/SSH fields below from the Default SNMP settings page
+// (/settings/default_snmp/default_snmp) so they show up on first load,
+// not just as a silent server-side fallback applied only after submit.
+$prefillDefaultSnmp = LibrenmsConfig::get('default_snmp.enabled', false);
+if ($prefillDefaultSnmp) {
+    $dsVersion = LibrenmsConfig::get('default_snmp.version', 'v2c');
+    $dsPort = LibrenmsConfig::get('default_snmp.port', '');
+    $dsTransport = LibrenmsConfig::get('default_snmp.transport', '');
+    $dsCommunity = LibrenmsConfig::get('default_snmp.community', '');
+    $dsAuthlevel = LibrenmsConfig::get('default_snmp.v3_authlevel', 'noAuthNoPriv');
+    $dsAuthname = LibrenmsConfig::get('default_snmp.v3_authname', '');
+    $dsAuthpass = LibrenmsConfig::get('default_snmp.v3_authpass', '');
+    $dsAuthalgo = LibrenmsConfig::get('default_snmp.v3_authalgo', 'MD5');
+    $dsCryptopass = LibrenmsConfig::get('default_snmp.v3_cryptopass', '');
+    $dsCryptoalgo = LibrenmsConfig::get('default_snmp.v3_cryptoalgo', 'AES');
+    $dsSshUser = LibrenmsConfig::get('default_snmp.ssh_user', '');
+    $dsSshPass = LibrenmsConfig::get('default_snmp.ssh_pass', '');
+}
+
 echo '<div class="row">
             <div class="col-sm-3">
             </div>
@@ -239,7 +258,7 @@ $pagetitle[] = 'Add host';
           <div class="col-sm-3">
             <select name="snmpver" id="snmpver" class="form-control input-sm" onChange="changeForm();">
                 <?php
-                $snmpver_pref = LibrenmsConfig::get('snmp.version.0', 'v2c');
+                $snmpver_pref = $prefillDefaultSnmp ? $dsVersion : LibrenmsConfig::get('snmp.version.0', 'v2c');
                 $snmpver_list = ['v1', 'v2c', 'v3'];
                 foreach ($snmpver_list as $snmpver_item) {
                     echo "<option value=\"" . $snmpver_item ."\"" . ($snmpver_item == $snmpver_pref ? ' selected' : '') . ">" . $snmpver_item. "</option>";
@@ -248,14 +267,14 @@ $pagetitle[] = 'Add host';
 	    </select>
           </div>
           <div class="col-sm-3">
-            <input type="text" name="port" placeholder="port (blank uses snmp.port)" class="form-control input-sm">
+            <input type="text" name="port" placeholder="port (blank uses snmp.port)" value="<?php echo $prefillDefaultSnmp ? htmlspecialchars($dsPort) : ''; ?>" class="form-control input-sm">
           </div>
           <div class="col-sm-3">
             <select name="transport" id="transport" class="form-control input-sm">
 <?php
-var_dump(LibrenmsConfig::get('snmp.transports', ['udp']));
 foreach (LibrenmsConfig::get('snmp.transports', 'udp') as $transport) {
-    echo '<option value="' . $transport . '"'. (LibrenmsConfig::get('snmp.transports.0') == $transport ? ' selected' : '') . '>' . $transport . '</option>';
+    $transport_selected = $prefillDefaultSnmp ? ($transport == $dsTransport) : (LibrenmsConfig::get('snmp.transports.0') == $transport);
+    echo '<option value="' . $transport . '"'. ($transport_selected ? ' selected' : '') . '>' . $transport . '</option>';
 }
 ?>
             </select>
@@ -285,7 +304,7 @@ foreach (PortAssociationMode::getModes() as $mode) {
           <div class="form-group">
             <label for="community" class="col-sm-3 control-label">Community</label>
             <div class="col-sm-9">
-              <input type="text" name="community" id="community" placeholder="Community (blank tries all snmp.community communities)" class="form-control input-sm">
+              <input type="text" name="community" id="community" value="<?php echo $prefillDefaultSnmp ? htmlspecialchars($dsCommunity) : ''; ?>" placeholder="Community (blank tries all snmp.community communities)" class="form-control input-sm">
             </div>
           </div>
         </div>
@@ -302,7 +321,7 @@ foreach (PortAssociationMode::getModes() as $mode) {
               <select name="authlevel" id="authlevel" class="form-control input-sm">
                   <?php
                   $authlevel_list = [ "noAuthNoPriv", "authNoPriv", "authPriv" ];
-                  $authlevel_pref = LibrenmsConfig::get('snmp.v3.0.authlevel', 'noAuthNoPriv');
+                  $authlevel_pref = $prefillDefaultSnmp ? $dsAuthlevel : LibrenmsConfig::get('snmp.v3.0.authlevel', 'noAuthNoPriv');
                   foreach ($authlevel_list as $authlevel_item) {
                       echo "<option value=\"" . $authlevel_item. '"' . ($authlevel_item == $authlevel_pref ? ' selected' : '') . ">" . $authlevel_item. "</option>";
                   }
@@ -313,13 +332,13 @@ foreach (PortAssociationMode::getModes() as $mode) {
           <div class="form-group">
             <label for="authname" class="col-sm-3 control-label">Auth User Name</label>
             <div class="col-sm-9">
-              <input type="text" name="authname" id="authname" class="form-control input-sm" autocomplete="off">
+              <input type="text" name="authname" id="authname" value="<?php echo $prefillDefaultSnmp ? htmlspecialchars($dsAuthname) : ''; ?>" class="form-control input-sm" autocomplete="off">
             </div>
           </div>
           <div class="form-group">
             <label for="authpass" class="col-sm-3 control-label">Auth Password</label>
             <div class="col-sm-9">
-              <input type="text" name="authpass" id="authpass" placeholder="AuthPass" class="form-control input-sm" autocomplete="off">
+              <input type="password" name="authpass" id="authpass" value="<?php echo $prefillDefaultSnmp ? htmlspecialchars($dsAuthpass) : ''; ?>" placeholder="AuthPass" class="form-control input-sm" autocomplete="off">
             </div>
           </div>
           <div class="form-group">
@@ -327,7 +346,7 @@ foreach (PortAssociationMode::getModes() as $mode) {
             <div class="col-sm-9">
               <select name="authalgo" id="authalgo" class="form-control input-sm">
                   <?php
-                  $algo_pref = LibrenmsConfig::get('snmp.v3.0.authalgo');
+                  $algo_pref = $prefillDefaultSnmp ? $dsAuthalgo : LibrenmsConfig::get('snmp.v3.0.authalgo');
                   foreach (\LibreNMS\SNMPCapabilities::authAlgorithms() as $algo => $enabled) {
                       echo "<option value=\"$algo\"" . ($enabled ? '' : ' disabled') . ($algo == $algo_pref ? ' selected' : '') . ">$algo</option>";
                   }
@@ -341,7 +360,7 @@ foreach (PortAssociationMode::getModes() as $mode) {
           <div class="form-group">
             <label for="cryptopass" class="col-sm-3 control-label">Crypto Password</label>
             <div class="col-sm-9">
-              <input type="text" name="cryptopass" id="cryptopass" placeholder="Crypto Password" class="form-control input-sm" autocomplete="off">
+              <input type="text" name="cryptopass" id="cryptopass" value="<?php echo $prefillDefaultSnmp ? htmlspecialchars($dsCryptopass) : ''; ?>" placeholder="Crypto Password" class="form-control input-sm" autocomplete="off">
             </div>
           </div>
           <div class="form-group">
@@ -349,7 +368,7 @@ foreach (PortAssociationMode::getModes() as $mode) {
             <div class="col-sm-9">
               <select name="cryptoalgo" id="cryptoalgo" class="form-control input-sm">
                   <?php
-                  $algo_pref = LibrenmsConfig::get('snmp.v3.0.cryptoalgo');
+                  $algo_pref = $prefillDefaultSnmp ? $dsCryptoalgo : LibrenmsConfig::get('snmp.v3.0.cryptoalgo');
                   foreach (\LibreNMS\SNMPCapabilities::cryptoAlgoritms() as $algo => $enabled) {
                       echo "<option value=\"$algo\"" . ($enabled ? '' : ' disabled') . ($algo == $algo_pref ? ' selected' : '') . ">$algo</option>";
                   }
@@ -400,13 +419,13 @@ if (LibrenmsConfig::get('distributed_poller') === true) {
     <div class='form-group'>
     <label for='ssh_user' class='col-sm-3 control-label'>SSH Username</label>
     <div class='col-sm-9'>
-        <input type='text' name='ssh_user' id='ssh_user' class='form-control input-sm' placeholder="SSH Username">
+        <input type='text' name='ssh_user' id='ssh_user' value="<?php echo $prefillDefaultSnmp ? htmlspecialchars($dsSshUser) : ''; ?>" class='form-control input-sm' placeholder="SSH Username">
     </div>
 </div>
 <div class='form-group'>
     <label for='ssh_pass' class='col-sm-3 control-label'>SSH Password</label>
     <div class='col-sm-9'>
-        <input type='password' name='ssh_pass' id='ssh_pass' class='form-control input-sm' placeholder="SSH Password">
+        <input type='password' name='ssh_pass' id='ssh_pass' value="<?php echo $prefillDefaultSnmp ? htmlspecialchars($dsSshPass) : ''; ?>" class='form-control input-sm' placeholder="SSH Password" autocomplete="off">
     </div>
 </div>
 
