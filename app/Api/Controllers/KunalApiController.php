@@ -1003,6 +1003,129 @@ public function getmtu($hostname)
     }
 
     #------------------------------------------------------------
+    #              GET MQTT / REMOTE NMS CONFIGURATION
+    #------------------------------------------------------------
+    public function getmqtt(Request $request, $hostname)
+    {
+        $playbook = "{$this->pluginPath}/playbooks/mqtt/getmqtt.yml";
+        $hosts    = "{$this->pluginPath}/hosts/{$hostname}.yml";
+        // getmqtt.yml writes to "<ip>mqtt_get.yml" - no separator before "mqtt".
+        $yamlFile = "{$this->pluginPath}/output/{$hostname}mqtt_get.yml";
+        $force    = $request->boolean('force');
+
+        if (!function_exists('yaml_parse_file')) {
+            return $this->error("PHP YAML extension missing", null);
+        }
+
+        // If we already have a result from a previous run, serve it
+        // immediately and kick off a fresh SSH fetch in the background for
+        // next time - avoids making every page load wait on a live SSH
+        // round-trip. The background fetch takes ~10-15s (SSH connect +
+        // shell interaction), so a "Refresh" click needs to bypass this and
+        // wait for a real synchronous result instead (see $force below) -
+        // otherwise it just re-serves the same cached data instantly and
+        // looks like it did nothing.
+        if (! $force && file_exists($yamlFile)) {
+            $cached = yaml_parse_file($yamlFile);
+
+            if (is_array($cached) && ($cached['remote_nms_enable'] ?? null) !== 'ERROR') {
+                $this->runAnsibleAsync($playbook, $hosts);
+
+                return $this->success([
+                    "remote_nms_enable" => $cached['remote_nms_enable'] ?? null,
+                    "default_server"    => $cached['default_server'] ?? null,
+                    "server"            => $cached['server'] ?? null,
+                    "dns1"              => $cached['dns1'] ?? null,
+                    "dns2"              => $cached['dns2'] ?? null,
+                    "cached"            => true,
+                ]);
+            }
+        }
+
+        // No usable cached result yet (first load, or last run errored) -
+        // fetch synchronously.
+        $ansibleOutput = $this->runAnsible($playbook, $hosts);
+
+        if (!file_exists($yamlFile)) {
+            return $this->error("MQTT output file not found", $ansibleOutput);
+        }
+
+        $data = yaml_parse_file($yamlFile);
+
+        if (!is_array($data) || ($data['remote_nms_enable'] ?? null) === 'ERROR') {
+            return $this->error('Failed to read MQTT / Remote NMS configuration', $data);
+        }
+
+        return $this->success([
+            "remote_nms_enable" => $data['remote_nms_enable'] ?? null,
+            "default_server"    => $data['default_server'] ?? null,
+            "server"            => $data['server'] ?? null,
+            "dns1"              => $data['dns1'] ?? null,
+            "dns2"              => $data['dns2'] ?? null,
+            "cached"            => false,
+        ]);
+    }
+
+    #------------------------------------------------------------
+    #              SET MQTT / REMOTE NMS CONFIGURATION
+    #------------------------------------------------------------
+    public function setmqtt(Request $request, $hostname)
+    {
+        $data = $request->validate([
+            'remote_nms_enable' => 'required|in:enable,disable,Enable,Disable',
+            'default_server'    => 'nullable|string',
+            'server'            => 'required|string',
+            'dns1'              => 'nullable|string',
+            'dns2'              => 'nullable|string',
+        ]);
+
+        // DNS is optional, but the playbook requires both or neither.
+        $dns1 = $data['dns1'] ?? '';
+        $dns2 = $data['dns2'] ?? '';
+        if (($dns1 !== '') !== ($dns2 !== '')) {
+            return $this->error('DNS 1 and DNS 2 must both be provided together, or both left blank');
+        }
+
+        $playbook = "{$this->pluginPath}/playbooks/mqtt/setmqtt.yml";
+        $hosts    = "{$this->pluginPath}/hosts/{$hostname}.yml";
+        // setmqtt.yml writes to "<ip>mqtt.yml" - no separator before "mqtt".
+        $yamlFile = "{$this->pluginPath}/output/{$hostname}mqtt.yml";
+
+        // remote_nms_enable must be a real JSON boolean (Jinja's `bool`
+        // filter in setmqtt.yml expects it) - use the JSON extra-vars
+        // helper for that, not the plain "key=value" form.
+        $extraVars = array_filter([
+            'remote_nms_enable' => strtolower($data['remote_nms_enable']) === 'enable',
+            'default_server'    => $data['default_server'] ?? null,
+            'server'            => $data['server'],
+            'dns1'              => $dns1 !== '' ? $dns1 : null,
+            'dns2'              => $dns2 !== '' ? $dns2 : null,
+        ], fn ($value) => $value !== null && $value !== '');
+
+        $ansibleOutput = $this->runAnsiblejs($playbook, $hosts, $extraVars);
+
+        if ($reason = $this->verifyFreshPlaybookOutput($yamlFile, $ansibleOutput)) {
+            return $this->error($reason, $ansibleOutput);
+        }
+
+        // setmqtt.yml's output file contains ONLY the literal text
+        // "SUCCESS" or "FAILED" - not YAML/JSON.
+        $result = trim((string) file_get_contents($yamlFile));
+
+        if ($result !== 'SUCCESS') {
+            return $this->error('Failed to configure MQTT / Remote NMS', $ansibleOutput);
+        }
+
+        // Refresh the getmqtt cache synchronously so a following reload
+        // reflects the change instead of showing stale data.
+        $this->runAnsible("{$this->pluginPath}/playbooks/mqtt/getmqtt.yml", $hosts);
+
+        return $this->success([
+            "message" => "Remote NMS / MQTT configuration updated successfully",
+        ]);
+    }
+
+    #------------------------------------------------------------
     #                            get vlan
     #------------------------------------------------------------
 

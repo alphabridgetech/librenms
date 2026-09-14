@@ -1,0 +1,324 @@
+# ============================================================================
+# File        : getprivatevlan.yml
+# Feature     : Private VLAN Information
+#
+# Purpose:
+#   Collect Private VLAN information from the switch and generate
+#   simple YAML output instead of CLI table output.
+#
+# CLI Command:
+#   show vlan private-vlan
+# ============================================================================
+
+- name: Get Private VLAN Information
+  hosts: alphabridge_devices
+  gather_facts: no
+
+  tasks:
+
+    # ------------------------------------------------------------------------
+    # Create Python script
+    # ------------------------------------------------------------------------
+    - name: Create Private VLAN Get Script
+      copy:
+        dest: /opt/librenms/librenms-ansible-inventory-plugin/tmp/get_privatevlan.py
+        mode: "0755"
+        content: |
+          #!/usr/bin/env python3
+
+          import paramiko
+          import time
+          import re
+          import sys
+
+          HOST = "{{ ansible_host }}"
+          USER = "{{ ansible_user }}"
+          PASS = "{{ ansible_password }}"
+
+
+          def read_output(shell, timeout=8):
+
+              output = ""
+              end_time = time.time() + timeout
+
+              while time.time() < end_time:
+
+                  if shell.recv_ready():
+
+                      data = shell.recv(65535).decode(
+                          errors="ignore"
+                      )
+
+                      output += data
+
+                      if re.search(
+                          r'Switch(?:_config(?:_vlan\d+|_g0/\d+)?)?[#>]\s*$',
+                          output
+                      ):
+                          return output
+
+                      end_time = time.time() + 1
+
+                  else:
+                      time.sleep(0.1)
+
+              return output
+
+
+          def send_command(shell, command, wait=0.5):
+
+              shell.send(command + "\n")
+
+              time.sleep(wait)
+
+              return read_output(shell)
+
+
+          ssh = paramiko.SSHClient()
+
+          ssh.set_missing_host_key_policy(
+              paramiko.AutoAddPolicy()
+          )
+
+
+          try:
+
+              # --------------------------------------------------------------
+              # SSH connection
+              # --------------------------------------------------------------
+              ssh.connect(
+                  HOST,
+                  username=USER,
+                  password=PASS,
+                  look_for_keys=False,
+                  allow_agent=False,
+                  timeout=10
+              )
+
+              shell = ssh.invoke_shell()
+
+              time.sleep(1)
+
+              initial_output = read_output(shell)
+
+
+              # --------------------------------------------------------------
+              # Enter enable mode if required
+              # --------------------------------------------------------------
+              if "Switch>" in initial_output:
+
+                  shell.send("enable\n")
+
+                  time.sleep(0.5)
+
+                  enable_output = read_output(shell)
+
+                  if "assword" in enable_output:
+
+                      shell.send(PASS + "\n")
+
+                      time.sleep(0.5)
+
+                      read_output(shell)
+
+
+              # --------------------------------------------------------------
+              # Execute Private VLAN command
+              # --------------------------------------------------------------
+              raw_output = send_command(
+                  shell,
+                  "show vlan private-vlan"
+              )
+
+
+              ssh.close()
+
+
+              # --------------------------------------------------------------
+              # Clean output
+              # --------------------------------------------------------------
+              clean_output = raw_output.replace(
+                  "\r",
+                  ""
+              )
+
+              lines = clean_output.split("\n")
+
+
+              # ----------------------------------------------------------------
+              # Parse CLI output
+              # ----------------------------------------------------------------
+              vlan_data = []
+
+              for line in lines:
+
+                  line = line.strip()
+
+                  if not line:
+                      continue
+
+                  # Ignore command echo
+                  if line == "show vlan private-vlan":
+                      continue
+
+                  # Ignore prompt
+                  if line in [
+                      "Switch#",
+                      "Switch>"
+                  ]:
+                      continue
+
+                  # Ignore headers
+                  if (
+                      "Primary" in line
+                      and "Secondary" in line
+                  ):
+                      continue
+
+                  if (
+                      "VLAN ID" in line
+                      and "VLAN Type" in line
+                  ):
+                      continue
+
+                  # Ignore table separator
+                  if re.match(
+                      r'^[-=\s]+$',
+                      line
+                  ):
+                      continue
+
+
+                  # ------------------------------------------------------------
+                  # Match VLAN ID + type
+                  #
+                  # Example:
+                  # 1       primary
+                  # 3       primary
+                  # 100     primary
+                  # ------------------------------------------------------------
+                  match = re.match(
+                      r'^(\d+)\s+(.+?)$',
+                      line
+                  )
+
+                  if not match:
+                      continue
+
+
+                  vlan_id = match.group(1)
+                  vlan_type = match.group(2).strip()
+
+
+                  # ------------------------------------------------------------
+                  # Remove unwanted CLI values from type
+                  # ------------------------------------------------------------
+                  if vlan_type.lower() == "primary":
+                      vlan_type = "Primary VLAN"
+
+                  elif vlan_type.lower() == "community":
+                      vlan_type = "Community VLAN"
+
+                  elif vlan_type.lower() == "isolated":
+                      vlan_type = "Isolated VLAN"
+
+
+                  vlan_data.append({
+                      "vlan_id": vlan_id,
+                      "vlan_type": vlan_type,
+                      "associated_primary_vlan": "",
+                      "associated_port": ""
+                  })
+
+
+              # ----------------------------------------------------------------
+              # Validate
+              # ----------------------------------------------------------------
+              if not vlan_data:
+                  sys.exit(1)
+
+
+              # ----------------------------------------------------------------
+              # Print simple YAML
+              # ----------------------------------------------------------------
+              print("ip: " + HOST)
+              print("")
+              print("private_vlan:")
+
+
+              for vlan in vlan_data:
+
+                  print(
+                      "    - vlan_id: " +
+                      vlan["vlan_id"]
+                  )
+
+                  print(
+                      "      vlan_type: " +
+                      vlan["vlan_type"]
+                  )
+
+                  print(
+                      '      associated_primary_vlan: ""'
+                  )
+
+                  print(
+                      '      associated_port: ""'
+                  )
+
+
+              sys.exit(0)
+
+
+          except Exception:
+
+              try:
+                  ssh.close()
+              except Exception:
+                  pass
+
+              sys.exit(1)
+
+
+    # ------------------------------------------------------------------------
+    # Execute Python script
+    # ------------------------------------------------------------------------
+    - name: Get Private VLAN Information
+      command: >
+        /opt/librenms/librenms-ansible-inventory-plugin/bin/python3
+        /opt/librenms/librenms-ansible-inventory-plugin/tmp/get_privatevlan.py
+      register: private_vlan
+      changed_when: false
+      failed_when: false
+
+
+    # ------------------------------------------------------------------------
+    # Save output
+    # ------------------------------------------------------------------------
+    - name: Save Private VLAN Output
+      delegate_to: localhost
+      copy:
+        dest: "/opt/librenms/librenms-ansible-inventory-plugin/output/{{ ansible_host }}_privatevlan.yml"
+        content: "{{ private_vlan.stdout | trim }}\n"
+      when:
+        - private_vlan.rc == 0
+
+
+    # ------------------------------------------------------------------------
+    # Display output
+    # ------------------------------------------------------------------------
+    - name: Display Private VLAN Information
+      debug:
+        msg: "{{ private_vlan.stdout | trim }}"
+      when:
+        - private_vlan.rc == 0
+
+
+    # ------------------------------------------------------------------------
+    # Fail if command failed
+    # ------------------------------------------------------------------------
+    - name: Fail if Private VLAN command failed
+      fail:
+        msg: "Failed to get Private VLAN information."
+      when:
+        - private_vlan.rc != 0

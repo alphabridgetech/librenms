@@ -1,125 +1,44 @@
-# ============================================================================
-# File        : setpdp.yml
-# Feature     : PDP Protocol Configuration
-# Purpose     : Configure the PDP protocol on an ABOSS network device by
-#               enabling or disabling the protocol and applying the UI
-#               configuration parameters.
-#
-# Objective   : Connect to the device, validate the UI inputs, configure the
-#               PDP protocol, verify that the configuration has been applied
-#               successfully, and save the SUCCESS status in the output YAML
-#               file.
-#
-# Supported Operations:
-#               - Open PDP
-#               - Close PDP
-#
-# UI Parameters:
-#               - Protocol State (Open / Close)
-#               - HoldTime (10-255 seconds)
-#               - Transmission Cycle (5-254 seconds)
-#               - Protocol Version (Version1 / Version2)
-#
-# Input       : Device connection details from the Ansible inventory and
-#               runtime variables passed using -e.
-#
-# Output      : Open  -> output/<device-ip>_pdp_open.yml
-#               Close -> output/<device-ip>_pdp_close.yml
-#
-# Output File : Contains only:
-#               SUCCESS
-#
-# Testing     : Feature-specific PDP test cases are maintained separately
-#               in tests/features/test_pdp.yml.
-#
-# CI/CD       : This playbook is validated through the GitHub + Jenkins
-#               automation pipeline. Common checks are executed for every
-#               change, while the PDP-specific test is executed when
-#               this feature or its related test is affected.
-#
-# Execution   :
-#
-#   Open PDP
-#   ansible-playbook -i <inventory-file> playbooks/setpdp.yml \
-#   -e "pdp_state=Open holdtime=120 tx_interval=30 version=Version1"
-#
-#   Close PDP
-#   ansible-playbook -i <inventory-file> playbooks/setpdp.yml \
-#   -e "pdp_state=Close"
-#
-# Created on  : Sep 01, 2026
-# Created by  : Gayatri Mendiratta (Gayatri.Mendiratta@alphabridge.tech)
-#
-# Copyright (c), ALPHA BRIDGE, Inc.
-# Address     : 357D, Udyog Vihar Industrial Area Phase VI,
-#               Sector 37, Gurugram, Haryana.
-#
-# All rights reserved.
-#
-# This software is the confidential and proprietary information of
-# ALPHA BRIDGE, Inc. ("Confidential Information"). You shall not disclose
-# such Confidential Information and shall use it only in accordance with
-# the terms of the license agreement you entered into with ALPHA BRIDGE.
-# ============================================================================
 ---
 - name: Configure PDP Protocol
   hosts: alphabridge_devices
   gather_facts: no
 
-  tasks:
+  vars:
+    pdp_state: "{{ pdp_state | default('Close') }}"
+    holdtime: "{{ holdtime | default('180') }}"
+    tx_interval: "{{ tx_interval | default('60') }}"
+    version: "{{ version | default('Version1') }}"
 
-    # ========================================================================
-    # Validate Protocol State
-    # ========================================================================
+  tasks:
 
     - name: Validate Protocol State
       ansible.builtin.assert:
         that:
-          - pdp_state is defined
           - pdp_state | lower in ['open', 'close']
-        fail_msg: "pdp_state must be Open or Close."
-
-
-    # ========================================================================
-    # Validate parameters only when PDP is being OPENED
-    # ========================================================================
+        fail_msg: "Invalid pdp_state. Use Open or Close."
 
     - name: Validate HoldTime
       ansible.builtin.assert:
         that:
-          - holdtime is defined
           - holdtime | int >= 10
           - holdtime | int <= 255
         fail_msg: "HoldTime must be between 10 and 255 seconds."
       when: pdp_state | lower == 'open'
 
-
     - name: Validate Transmission Cycle
       ansible.builtin.assert:
         that:
-          - tx_interval is defined
           - tx_interval | int >= 5
           - tx_interval | int <= 254
         fail_msg: "Transmission cycle must be between 5 and 254 seconds."
       when: pdp_state | lower == 'open'
 
-
     - name: Validate Protocol Version
       ansible.builtin.assert:
         that:
-          - version is defined
-          - version | lower in ['version1', 'version2', '1', '2']
-        fail_msg: "Protocol Version must be Version1 or Version2."
+          - version in ['Version1', 'Version2']
+        fail_msg: "Version must be Version1 or Version2."
       when: pdp_state | lower == 'open'
-
-
-    # ========================================================================
-    # Create Python SSH Script
-    #
-    # Ansible uses LOCAL connection.
-    #
-    # Python/Paramiko creates the actual SSH connection to the switch.
-    # ========================================================================
 
     - name: Create Python SSH script for PDP
       ansible.builtin.copy:
@@ -133,151 +52,95 @@
           import re
           import sys
 
-
-          # ==================================================================
-          # Device information
-          # ==================================================================
-
           HOST = "{{ ansible_host }}"
           USER = "{{ ansible_user }}"
           PASSWORD = "{{ ansible_password }}"
 
+          STATE = "{{ pdp_state | lower }}"
+          HOLDTIME = "{{ holdtime }}"
+          TX_INTERVAL = "{{ tx_interval }}"
+          VERSION = "{{ version }}"
 
-          # ==================================================================
-          # PDP configuration values
-          # ==================================================================
+          def read_available(shell, wait=1):
+              time.sleep(wait)
+              output = ""
 
-          PDP_STATE = "{{ pdp_state | lower }}"
+              while shell.recv_ready():
+                  output += shell.recv(65535).decode(errors="ignore")
+                  time.sleep(0.1)
 
-          HOLDTIME = "{{ holdtime | default('') }}"
+              return output
 
-          TX_INTERVAL = "{{ tx_interval | default('') }}"
+          def get_last_prompt(output):
+              for line in reversed(output.splitlines()):
+                  line = line.strip()
 
-          VERSION = "{{ version | default('') }}"
+                  if line and re.search(r"[>#]\s*$", line):
+                      return line
 
+              return None
 
-          # ==================================================================
-          # Convert protocol version
-          # ==================================================================
+          def send_command(shell, command, wait=1):
+              shell.send(command + "\n")
+              return read_available(shell, wait)
 
-          if VERSION.lower() == "version1":
-              PDP_VERSION = "1"
+          def send_paged_command(shell, command, wait=2):
+              shell.send(command + "\n")
 
-          elif VERSION.lower() == "version2":
-              PDP_VERSION = "2"
-
-          elif VERSION == "1":
-              PDP_VERSION = "1"
-
-          elif VERSION == "2":
-              PDP_VERSION = "2"
-
-          else:
-              PDP_VERSION = ""
-
-
-          # ==================================================================
-          # Read switch output until prompt
-          # ==================================================================
-
-          def read_until_prompt(shell, prompt_regex, timeout=10):
-
-              buffer = ""
-
-              end_time = time.time() + timeout
+              output = ""
+              end_time = time.time() + 30
 
               while time.time() < end_time:
 
                   if shell.recv_ready():
+                      data = shell.recv(65535).decode(errors="ignore")
+                      output += data
 
-                      data = shell.recv(65535).decode(
-                          errors="ignore"
-                      )
+                      if "--More--" in output:
+                          shell.send(" ")
+                          output = output.replace("--More--", "")
+                          time.sleep(0.5)
+                          continue
 
-                      buffer += data
+                      if "-- More --" in output:
+                          shell.send(" ")
+                          output = output.replace("-- More --", "")
+                          time.sleep(0.5)
+                          continue
 
-                      if re.search(
-                          prompt_regex,
-                          buffer
-                      ):
-                          return buffer
+                      if re.search(r"(?m)^[^\r\n]*[>#]\s*$", output):
+                          break
 
                   else:
+                      time.sleep(0.2)
 
-                      time.sleep(0.1)
+              return output
 
-              return buffer
+          def close_connection(shell, ssh):
+              try:
+                  shell.close()
+              except Exception:
+                  pass
 
+              try:
+                  ssh.close()
+              except Exception:
+                  pass
 
-          # ==================================================================
-          # Send command and wait for prompt
-          # ==================================================================
+          def fail(shell, ssh, message, output=""):
+              print("PDP CONFIGURATION FAILED")
+              print(message)
 
-          def send_command(
-              shell,
-              command,
-              prompt_regex,
-              timeout=5
-          ):
+              if output:
+                  print(output)
 
-              shell.send(command + "\n")
-
-              time.sleep(0.5)
-
-              return read_until_prompt(
-                  shell,
-                  prompt_regex,
-                  timeout
-              )
-
-
-          # ==================================================================
-          # Check whether CLI returned an error
-          # ==================================================================
-
-          def command_has_error(output):
-
-              error_patterns = [
-                  r"Unknown command",
-                  r"Invalid command",
-                  r"Invalid input",
-                  r"Incomplete command",
-                  r"% ?Error",
-                  r"failed"
-              ]
-
-              for pattern in error_patterns:
-
-                  if re.search(
-                      pattern,
-                      output,
-                      re.IGNORECASE
-                  ):
-                      return True
-
-              return False
-
-
-          # ==================================================================
-          # Main
-          # ==================================================================
+              close_connection(shell, ssh)
+              sys.exit(1)
 
           try:
 
-              # ==============================================================
-              # Create SSH client
-              # ==============================================================
-
               ssh = paramiko.SSHClient()
-
-              ssh.set_missing_host_key_policy(
-                  paramiko.AutoAddPolicy()
-              )
-
-
-              # ==============================================================
-              # Connect to switch
-              # ==============================================================
+              ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
 
               ssh.connect(
                   HOST,
@@ -290,347 +153,362 @@
                   auth_timeout=10
               )
 
-
-              # ==============================================================
-              # Create interactive shell
-              # ==============================================================
-
               shell = ssh.invoke_shell()
-
               time.sleep(1)
 
+              initial_output = read_available(shell, wait=1)
+              current_prompt = get_last_prompt(initial_output)
 
-              # ==============================================================
-              # Read initial prompt
-              # ==============================================================
-
-              initial = read_until_prompt(
-                  shell,
-                  r"[#>]\s*$",
-                  timeout=5
-              )
-
-
-              # ==============================================================
-              # Enter enable mode
-              #
-              # Always attempt "enable" regardless of the device's initial
-              # prompt text - checking for a literal "Switch>" substring is
-              # unreliable since real devices report their own hostname in
-              # the prompt (e.g. "AS212XTS_>", not "Switch>"), so that check
-              # never matched and "enable" was never sent, leaving the
-              # session in user-exec mode where "config" always fails.
-              # Sending "enable" while already privileged is harmless.
-              # ==============================================================
-
-              shell.send("enable\n")
-
-              time.sleep(0.5)
-
-              enable_output = read_until_prompt(
-                  shell,
-                  r"[#>]\s*$",
-                  timeout=3
-              )
-
-              if "assword" in enable_output:
-
-                  shell.send(
-                      PASSWORD + "\n"
-                  )
-
-                  time.sleep(0.5)
-
-                  read_until_prompt(
+              if not current_prompt:
+                  fail(
                       shell,
-                      r"[#>]\s*$",
-                      timeout=3
+                      ssh,
+                      "Unable to detect initial device prompt.",
+                      initial_output
                   )
 
+              if current_prompt.endswith(">"):
 
-              # ==============================================================
-              # Enter configuration mode
-              # ==============================================================
+                  enable_output = send_command(
+                      shell,
+                      "enable",
+                      wait=1
+                  )
+
+                  enable_prompt = get_last_prompt(enable_output)
+
+                  if not enable_prompt:
+                      fail(
+                          shell,
+                          ssh,
+                          "Unable to detect prompt after enable.",
+                          enable_output
+                      )
+
+                  if not enable_prompt.endswith("#"):
+                      fail(
+                          shell,
+                          ssh,
+                          "Unable to enter privileged mode.",
+                          enable_output
+                      )
+
+                  current_prompt = enable_prompt
+
+              if not current_prompt.endswith("#"):
+                  fail(
+                      shell,
+                      ssh,
+                      "Device is not in privileged mode.",
+                      current_prompt
+                  )
 
               config_output = send_command(
                   shell,
                   "config",
-                  r"config#\s*$",
-                  timeout=5
+                  wait=1
               )
 
+              config_prompt = get_last_prompt(config_output)
 
-              if not re.search(
-                  r"config#\s*$",
-                  config_output
-              ):
-
-                  print(
-                      "PDP CONFIGURATION FAILED"
+              if not config_prompt:
+                  fail(
+                      shell,
+                      ssh,
+                      "Unable to detect configuration prompt.",
+                      config_output
                   )
 
-                  print(
-                      "Unable to enter configuration mode."
+              if not config_prompt.endswith("#"):
+                  fail(
+                      shell,
+                      ssh,
+                      "Unable to enter configuration mode.",
+                      config_output
                   )
 
-                  shell.close()
-                  ssh.close()
+              send_command(
+                  shell,
+                  "terminal length 0",
+                  wait=1
+              )
 
-                  sys.exit(1)
+              if STATE == "open":
 
-
-              # ==============================================================
-              # OPEN PDP
-              # ==============================================================
-
-              if PDP_STATE == "open":
-
-                  # ----------------------------------------------------------
-                  # Enable PDP
-                  # ----------------------------------------------------------
-
-                  output_run = send_command(
+                  output = send_command(
                       shell,
                       "pdp run",
-                      r"config#\s*$",
-                      timeout=5
+                      wait=1
                   )
 
-                  if command_has_error(output_run):
-
-                      print(
-                          "PDP CONFIGURATION FAILED"
+                  if re.search(
+                      r"(unknown command|invalid|error|failed|incomplete)",
+                      output,
+                      re.IGNORECASE
+                  ):
+                      fail(
+                          shell,
+                          ssh,
+                          "Failed to enable PDP.",
+                          output
                       )
 
-                      print(output_run)
-
-                      shell.close()
-                      ssh.close()
-
-                      sys.exit(1)
-
-
-                  # ----------------------------------------------------------
-                  # Configure HoldTime
-                  # ----------------------------------------------------------
-
-                  output_holdtime = send_command(
+                  output = send_command(
                       shell,
                       "pdp holdtime " + HOLDTIME,
-                      r"config#\s*$",
-                      timeout=5
+                      wait=1
                   )
 
-                  if command_has_error(output_holdtime):
-
-                      print(
-                          "PDP CONFIGURATION FAILED"
+                  if re.search(
+                      r"(unknown command|invalid|error|failed|incomplete)",
+                      output,
+                      re.IGNORECASE
+                  ):
+                      fail(
+                          shell,
+                          ssh,
+                          "Failed to configure PDP holdtime.",
+                          output
                       )
 
-                      print(output_holdtime)
-
-                      shell.close()
-                      ssh.close()
-
-                      sys.exit(1)
-
-
-                  # ----------------------------------------------------------
-                  # Configure transmission cycle
-                  # ----------------------------------------------------------
-
-                  output_timer = send_command(
+                  output = send_command(
                       shell,
                       "pdp timer " + TX_INTERVAL,
-                      r"config#\s*$",
-                      timeout=5
+                      wait=1
                   )
 
-                  if command_has_error(output_timer):
-
-                      print(
-                          "PDP CONFIGURATION FAILED"
+                  if re.search(
+                      r"(unknown command|invalid|error|failed|incomplete)",
+                      output,
+                      re.IGNORECASE
+                  ):
+                      fail(
+                          shell,
+                          ssh,
+                          "Failed to configure PDP timer.",
+                          output
                       )
 
-                      print(output_timer)
+                  if VERSION == "Version1":
+                      version_number = "1"
+                  else:
+                      version_number = "2"
 
-                      shell.close()
-                      ssh.close()
-
-                      sys.exit(1)
-
-
-                  # ----------------------------------------------------------
-                  # Configure PDP version
-                  # ----------------------------------------------------------
-
-                  output_version = send_command(
+                  output = send_command(
                       shell,
-                      "pdp version " + PDP_VERSION,
-                      r"config#\s*$",
-                      timeout=5
+                      "pdp version " + version_number,
+                      wait=1
                   )
 
-                  if command_has_error(output_version):
-
-                      print(
-                          "PDP CONFIGURATION FAILED"
+                  if re.search(
+                      r"(parameter out of range|unknown command|invalid|error|failed|incomplete)",
+                      output,
+                      re.IGNORECASE
+                  ):
+                      fail(
+                          shell,
+                          ssh,
+                          "Failed to configure PDP version.",
+                          output
                       )
-
-                      print(output_version)
-
-                      shell.close()
-                      ssh.close()
-
-                      sys.exit(1)
-
-
-                  # ----------------------------------------------------------
-                  # OPEN SUCCESS
-                  # ----------------------------------------------------------
-
-                  print("SUCCESS")
-
-                  shell.close()
-                  ssh.close()
-
-                  sys.exit(0)
-
-
-              # ==============================================================
-              # CLOSE PDP
-              # ==============================================================
-
-              elif PDP_STATE == "close":
-
-                  # ----------------------------------------------------------
-                  # Disable PDP
-                  # ----------------------------------------------------------
-
-                  output_close = send_command(
-                      shell,
-                      "no pdp run",
-                      r"config#\s*$",
-                      timeout=5
-                  )
-
-
-                  if command_has_error(output_close):
-
-                      print(
-                          "PDP CONFIGURATION FAILED"
-                      )
-
-                      print(output_close)
-
-                      shell.close()
-                      ssh.close()
-
-                      sys.exit(1)
-
-
-                  # ----------------------------------------------------------
-                  # CLOSE SUCCESS
-                  # ----------------------------------------------------------
-
-                  print("SUCCESS")
-
-                  shell.close()
-                  ssh.close()
-
-                  sys.exit(0)
-
-
-              # ==============================================================
-              # Invalid state
-              # ==============================================================
 
               else:
 
-                  print(
-                      "PDP CONFIGURATION FAILED"
+                  output = send_command(
+                      shell,
+                      "no pdp run",
+                      wait=1
                   )
 
-                  print(
-                      "Invalid PDP state."
+                  if re.search(
+                      r"(unknown command|invalid|error|failed|incomplete)",
+                      output,
+                      re.IGNORECASE
+                  ):
+                      fail(
+                          shell,
+                          ssh,
+                          "Failed to disable PDP.",
+                          output
+                      )
+
+              verify_output = send_paged_command(
+                  shell,
+                  "show running-config",
+                  wait=2
+              )
+
+              if not verify_output:
+                  fail(
+                      shell,
+                      ssh,
+                      "Unable to retrieve running configuration."
                   )
 
-                  shell.close()
-                  ssh.close()
+              verify_output = verify_output.replace("--More--", "")
+              verify_output = verify_output.replace("-- More --", "")
 
-                  sys.exit(1)
+              if STATE == "open":
 
+                  if not re.search(
+                      r"(?m)^\s*pdp\s+run\s*$",
+                      verify_output,
+                      re.IGNORECASE
+                  ):
+                      fail(
+                          shell,
+                          ssh,
+                          "PDP run configuration was not found.",
+                          verify_output
+                      )
 
-          # ==================================================================
-          # Exception handling
-          # ==================================================================
+                  holdtime_match = re.search(
+                      r"(?m)^\s*pdp\s+holdtime\s+(\d+)\s*$",
+                      verify_output,
+                      re.IGNORECASE
+                  )
+
+                  timer_match = re.search(
+                      r"(?m)^\s*pdp\s+timer\s+(\d+)\s*$",
+                      verify_output,
+                      re.IGNORECASE
+                  )
+
+                  if not holdtime_match:
+                      fail(
+                          shell,
+                          ssh,
+                          "PDP holdtime was not found.",
+                          verify_output
+                      )
+
+                  if not timer_match:
+                      fail(
+                          shell,
+                          ssh,
+                          "PDP timer was not found.",
+                          verify_output
+                      )
+
+                  actual_holdtime = holdtime_match.group(1)
+                  actual_timer = timer_match.group(1)
+
+                  if actual_holdtime != HOLDTIME:
+                      fail(
+                          shell,
+                          ssh,
+                          "PDP holdtime verification failed. Expected "
+                          + HOLDTIME
+                          + ", got "
+                          + actual_holdtime,
+                          verify_output
+                      )
+
+                  if actual_timer != TX_INTERVAL:
+                      fail(
+                          shell,
+                          ssh,
+                          "PDP timer verification failed. Expected "
+                          + TX_INTERVAL
+                          + ", got "
+                          + actual_timer,
+                          verify_output
+                      )
+
+                  version_number = "1" if VERSION == "Version1" else "2"
+
+                  version_command_output = send_command(
+                      shell,
+                      "pdp version ?",
+                      wait=1
+                  )
+
+                  if "1-2" not in version_command_output:
+                      fail(
+                          shell,
+                          ssh,
+                          "Unable to verify supported PDP version range.",
+                          version_command_output
+                      )
+
+                  version_test_output = send_command(
+                      shell,
+                      "pdp version " + version_number,
+                      wait=1
+                  )
+
+                  if re.search(
+                      r"(parameter out of range|unknown command|invalid|error|failed|incomplete)",
+                      version_test_output,
+                      re.IGNORECASE
+                  ):
+                      fail(
+                          shell,
+                          ssh,
+                          "PDP version verification failed.",
+                          version_test_output
+                      )
+
+              else:
+
+                  if re.search(
+                      r"(?m)^\s*pdp\s+run\s*$",
+                      verify_output,
+                      re.IGNORECASE
+                  ):
+                      fail(
+                          shell,
+                          ssh,
+                          "PDP is still enabled.",
+                          verify_output
+                      )
+
+              close_connection(shell, ssh)
+
+              print("SUCCESS")
+              sys.exit(0)
 
           except Exception as error:
 
-              print(
-                  "PDP CONFIGURATION FAILED"
-              )
-
-              print(
-                  "Error: " + str(error)
-              )
+              print("PDP CONFIGURATION FAILED")
+              print("Error: " + str(error))
 
               sys.exit(1)
 
-
-    # ========================================================================
-    # Run Python PDP script
-    # ========================================================================
-
     - name: Run PDP configuration script
-      ansible.builtin.command: >
-        python3
-        /opt/librenms/librenms-ansible-inventory-plugin/tmp/set_pdp.py
+      ansible.builtin.command:
+        cmd: >
+          /opt/librenms/librenms-ansible-inventory-plugin/bin/python3
+          /opt/librenms/librenms-ansible-inventory-plugin/tmp/set_pdp.py
       register: pdp_result
       changed_when: false
-      failed_when: pdp_result.rc != 0
-
-
-    # ========================================================================
-    # Create separate output file for OPEN
-    # ========================================================================
+      failed_when: false
 
     - name: Save PDP Open success
       ansible.builtin.copy:
         dest: "/opt/librenms/librenms-ansible-inventory-plugin/output/{{ ansible_host }}_pdp_open.yml"
-        content: |
-          SUCCESS
-      when: pdp_state | lower == 'open'
-
-
-    # ========================================================================
-    # Create separate output file for CLOSE
-    # ========================================================================
+        content: "SUCCESS\n"
+      when:
+        - pdp_state | lower == 'open'
+        - pdp_result.rc == 0
+        - pdp_result.stdout | trim == 'SUCCESS'
 
     - name: Save PDP Close success
       ansible.builtin.copy:
         dest: "/opt/librenms/librenms-ansible-inventory-plugin/output/{{ ansible_host }}_pdp_close.yml"
-        content: |
-          SUCCESS
-      when: pdp_state | lower == 'close'
+        content: "SUCCESS\n"
+      when:
+        - pdp_state | lower == 'close'
+        - pdp_result.rc == 0
+        - pdp_result.stdout | trim == 'SUCCESS'
 
-
-    # ========================================================================
-    # Display OPEN result
-    # ========================================================================
-
-    - name: Display PDP Open result
+    - name: Display PDP result
       ansible.builtin.debug:
-        msg: "SUCCESS"
-      when: pdp_state | lower == 'open'
+        msg: "{{ pdp_result.stdout | trim }}"
 
-
-    # ========================================================================
-    # Display CLOSE result
-    # ========================================================================
-
-    - name: Display PDP Close result
-      ansible.builtin.debug:
-        msg: "SUCCESS"
-      when: pdp_state | lower == 'close'
-
+    - name: Fail if PDP configuration failed
+      ansible.builtin.fail:
+        msg: "{{ pdp_result.stdout | trim }}"
+      when:
+        - pdp_result.rc != 0
+          or pdp_result.stdout | trim != 'SUCCESS'

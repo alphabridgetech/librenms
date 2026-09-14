@@ -1,0 +1,406 @@
+---
+# ============================================================
+# PDP Interface Configuration - GET ALL INTERFACES
+# ============================================================
+#
+# This GET playbook automatically gets PDP configuration for
+# all GigaEthernet and TGigaEthernet interfaces.
+#
+# No interface argument is required.
+#
+# Usage:
+#
+# ansible-playbook -i inventory/192.168.2.245.yml \
+# playbooks/pdp/getpdpinterfaceconfi.yml
+#
+# ============================================================
+
+- name: Get PDP Interface Configuration
+  hosts: alphabridge_devices
+  gather_facts: false
+
+  tasks:
+
+    # --------------------------------------------------------
+    # Create temporary Python GET script
+    # --------------------------------------------------------
+    - name: Create PDP interface GET script
+      ansible.builtin.copy:
+        dest: /opt/librenms/librenms-ansible-inventory-plugin/tmp/get_pdp_interface.py
+        mode: '0755'
+        content: |
+          import paramiko
+          import re
+          import sys
+          import time
+
+          HOST = "{{ ansible_host }}"
+          USER = "{{ ansible_user }}"
+          PASSWORD = "{{ ansible_password }}"
+
+          client = paramiko.SSHClient()
+          client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+
+          try:
+              # ------------------------------------------------
+              # Connect to switch
+              # ------------------------------------------------
+              client.connect(
+                  HOST,
+                  username=USER,
+                  password=PASSWORD,
+                  look_for_keys=False,
+                  allow_agent=False,
+                  timeout=10,
+                  auth_timeout=10,
+                  banner_timeout=10
+              )
+
+              shell = client.invoke_shell()
+              shell.settimeout(5)
+
+              time.sleep(1)
+
+              # ------------------------------------------------
+              # Read initial prompt
+              # ------------------------------------------------
+              try:
+                  output = shell.recv(65535).decode(
+                      "utf-8",
+                      errors="ignore"
+                  )
+              except Exception:
+                  output = ""
+
+              # ------------------------------------------------
+              # Send command helper
+              # ------------------------------------------------
+              def send_cmd(command, wait=1):
+                  shell.send(command + "\n")
+                  time.sleep(wait)
+
+                  data = b""
+
+                  while True:
+                      try:
+                          chunk = shell.recv(65535)
+
+                          if not chunk:
+                              break
+
+                          data += chunk
+
+                          if len(chunk) < 65535:
+                              break
+
+                      except Exception:
+                          break
+
+                  return data.decode(
+                      "utf-8",
+                      errors="ignore"
+                  )
+
+              # ------------------------------------------------
+              # Detect current prompt
+              # ------------------------------------------------
+              prompt_matches = re.findall(
+                  r'([^\r\n]+[>#])\s*$',
+                  output
+              )
+
+              prompt = (
+                  prompt_matches[-1].strip()
+                  if prompt_matches
+                  else ""
+              )
+
+              # ------------------------------------------------
+              # Enter enable mode
+              # ------------------------------------------------
+              if prompt.endswith(">"):
+                  output = send_cmd("enable", 1)
+
+              # ------------------------------------------------
+              # Detect prompt again
+              # ------------------------------------------------
+              prompt_matches = re.findall(
+                  r'([^\r\n]+#)\s*$',
+                  output
+              )
+
+              prompt = (
+                  prompt_matches[-1].strip()
+                  if prompt_matches
+                  else ""
+              )
+
+              # ------------------------------------------------
+              # Enter config mode
+              # ------------------------------------------------
+              if (
+                  prompt.endswith("#")
+                  and "_config" not in prompt
+              ):
+                  output = send_cmd("config", 1)
+
+              # ------------------------------------------------
+              # Disable pagination
+              # ------------------------------------------------
+              send_cmd("terminal length 0", 1)
+
+              # ------------------------------------------------
+              # Get complete running configuration
+              # ------------------------------------------------
+              running_config = send_cmd(
+                  "show running-config",
+                  4
+              )
+
+              # ------------------------------------------------
+              # Remove pagination strings
+              # ------------------------------------------------
+              running_config = running_config.replace(
+                  "--More--",
+                  ""
+              )
+
+              # ------------------------------------------------
+              # Find ALL interface blocks
+              #
+              # Only GigaEthernet and TGigaEthernet interfaces
+              # are required for PDP interface configuration.
+              #
+              # Interface names are NOT hardcoded.
+              # ------------------------------------------------
+              lines = running_config.splitlines()
+
+              interfaces = []
+
+              current_interface = None
+              current_block = []
+
+              for line in lines:
+
+                  stripped = line.strip()
+
+                  # ------------------------------------------------
+                  # Detect interface line dynamically
+                  # ------------------------------------------------
+                  interface_match = re.match(
+                      r'^interface\s+'
+                      r'((?:GigaEthernet|gigaEthernet|'
+                      r'TGigaEthernet|tgigaEthernet)'
+                      r'[0-9]+/[0-9]+)\s*$',
+                      stripped,
+                      re.IGNORECASE
+                  )
+
+                  # ------------------------------------------------
+                  # New interface found
+                  # ------------------------------------------------
+                  if interface_match:
+
+                      # Save previous interface
+                      if current_interface is not None:
+
+                          interfaces.append(
+                              (
+                                  current_interface,
+                                  current_block
+                              )
+                          )
+
+                      current_interface = (
+                          interface_match.group(1)
+                      )
+
+                      current_block = []
+
+                      continue
+
+                  # ------------------------------------------------
+                  # End of interface block
+                  # ------------------------------------------------
+                  if (
+                      current_interface is not None
+                      and stripped == "!"
+                  ):
+
+                      interfaces.append(
+                          (
+                              current_interface,
+                              current_block
+                          )
+                      )
+
+                      current_interface = None
+                      current_block = []
+
+                      continue
+
+                  # ------------------------------------------------
+                  # Store interface configuration
+                  # ------------------------------------------------
+                  if current_interface is not None:
+                      current_block.append(line)
+
+              # ------------------------------------------------
+              # Save last interface if no ! was found
+              # ------------------------------------------------
+              if current_interface is not None:
+
+                  interfaces.append(
+                      (
+                          current_interface,
+                          current_block
+                      )
+                  )
+
+              # ------------------------------------------------
+              # Remove duplicate interfaces while preserving
+              # order.
+              # ------------------------------------------------
+              unique_interfaces = []
+
+              seen = set()
+
+              for interface_name, block in interfaces:
+
+                  key = interface_name.lower()
+
+                  if key not in seen:
+
+                      seen.add(key)
+
+                      unique_interfaces.append(
+                          (
+                              interface_name,
+                              block
+                          )
+                      )
+
+              # ------------------------------------------------
+              # If no interfaces found
+              # ------------------------------------------------
+              if not unique_interfaces:
+
+                  print("PDP INTERFACE GET FAILED")
+                  print(
+                      "No GigaEthernet or TGigaEthernet "
+                      "interfaces found"
+                  )
+
+                  sys.exit(1)
+
+              # ------------------------------------------------
+              # Build output
+              # ------------------------------------------------
+              result_lines = []
+
+              for interface_name, block in unique_interfaces:
+
+                  block_text = "\n".join(block)
+
+                  # --------------------------------------------
+                  # Device behavior:
+                  #
+                  # Enable:
+                  #   pdp enable
+                  #
+                  # is NOT displayed in running config.
+                  #
+                  # Disable:
+                  #   no pdp enable
+                  #
+                  # IS displayed.
+                  # --------------------------------------------
+
+                  disabled_match = re.search(
+                      r'(?im)^\s*no\s+pdp\s+enable\s*$',
+                      block_text
+                  )
+
+                  if disabled_match:
+                      status = "Disable"
+                  else:
+                      status = "Enable"
+
+                  result_lines.append(
+                      "  - interface: "
+                      + interface_name
+                  )
+
+                  result_lines.append(
+                      "    status: "
+                      + status
+                  )
+
+              # ------------------------------------------------
+              # Print complete result
+              # ------------------------------------------------
+              print("pdp_interfaces:")
+
+              for line in result_lines:
+                  print(line)
+
+          except Exception as e:
+
+              print("PDP INTERFACE GET FAILED")
+              print(str(e))
+              sys.exit(1)
+
+          finally:
+
+              try:
+                  client.close()
+              except Exception:
+                  pass
+
+    # --------------------------------------------------------
+    # Run GET script
+    # --------------------------------------------------------
+    - name: Run PDP interface GET script
+      ansible.builtin.command:
+        cmd: >
+          /opt/librenms/librenms-ansible-inventory-plugin/bin/python3
+          /opt/librenms/librenms-ansible-inventory-plugin/tmp/get_pdp_interface.py
+      register: pdp_get_result
+      changed_when: false
+      failed_when: false
+
+    # --------------------------------------------------------
+    # Ensure output directory exists
+    # --------------------------------------------------------
+    - name: Ensure output directory exists
+      ansible.builtin.file:
+        path: /opt/librenms/librenms-ansible-inventory-plugin/output
+        state: directory
+        mode: '0755'
+
+    # --------------------------------------------------------
+    # Save complete GET output
+    # --------------------------------------------------------
+    - name: Write PDP interface GET result
+      ansible.builtin.copy:
+        dest: "/opt/librenms/librenms-ansible-inventory-plugin/output/{{ ansible_host }}_pdp_interface_get.yml"
+        mode: '0644'
+        content: |
+          {{ pdp_get_result.stdout | trim }}
+
+    # --------------------------------------------------------
+    # Display result
+    # --------------------------------------------------------
+    - name: Display PDP interface configuration
+      ansible.builtin.debug:
+        msg: "{{ pdp_get_result.stdout_lines }}"
+
+    # --------------------------------------------------------
+    # Fail if GET failed
+    # --------------------------------------------------------
+    - name: Validate PDP interface GET result
+      ansible.builtin.fail:
+        msg: "{{ pdp_get_result.stdout | default('PDP interface GET failed') }}"
+      when:
+        - pdp_get_result.rc != 0
+

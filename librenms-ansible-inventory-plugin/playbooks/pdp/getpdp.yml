@@ -1,0 +1,494 @@
+# ============================================================================
+# File        : getpdp.yml
+# Feature     : PDP Protocol GET
+# Purpose     : Retrieve PDP configuration from the device using
+#               "show running-config".
+#
+# Supported Output:
+#               - PDP State     : Open / Close
+#               - HoldTime       : 10-255
+#               - Transmission  : 5-254
+#               - Version        : Version1 / Version2
+#
+# Output:
+#               /opt/librenms/librenms-ansible-inventory-plugin/output/<device-ip>_pdp.yml
+#
+# ============================================================================
+
+---
+- name: Get PDP Protocol Configuration
+  hosts: alphabridge_devices
+  gather_facts: no
+
+  tasks:
+
+    # ========================================================================
+    # Create Python SSH Script
+    # ========================================================================
+
+    - name: Create Python SSH script for PDP GET
+      ansible.builtin.copy:
+        dest: "/opt/librenms/librenms-ansible-inventory-plugin/tmp/get_pdp.py"
+        mode: '0755'
+        content: |
+          #!/usr/bin/env python3
+
+          import paramiko
+          import time
+          import re
+          import sys
+          import yaml
+
+
+          # ==================================================================
+          # Device information
+          # ==================================================================
+
+          HOST = "{{ ansible_host }}"
+          USER = "{{ ansible_user }}"
+          PASSWORD = "{{ ansible_password }}"
+
+
+          # ==================================================================
+          # Read available SSH output
+          # ==================================================================
+
+          def read_available(shell, wait=1):
+
+              time.sleep(wait)
+
+              output = ""
+
+              while shell.recv_ready():
+
+                  data = shell.recv(65535).decode(
+                      errors="ignore"
+                  )
+
+                  output += data
+
+                  time.sleep(0.1)
+
+              return output
+
+
+          # ==================================================================
+          # Get last CLI prompt dynamically
+          # ==================================================================
+
+          def get_last_prompt(output):
+
+              lines = output.splitlines()
+
+              for line in reversed(lines):
+
+                  line = line.strip()
+
+                  if not line:
+                      continue
+
+                  if re.search(r"[>#]$", line):
+
+                      return line
+
+              return None
+
+
+          # ==================================================================
+          # Send command
+          # ==================================================================
+
+          def send_command(
+              shell,
+              command,
+              wait=1
+          ):
+
+              shell.send(command + "\n")
+
+              return read_available(
+                  shell,
+                  wait
+              )
+
+
+          # ==================================================================
+          # Close connection
+          # ==================================================================
+
+          def close_connection(
+              shell,
+              ssh
+          ):
+
+              try:
+                  shell.close()
+              except Exception:
+                  pass
+
+              try:
+                  ssh.close()
+              except Exception:
+                  pass
+
+
+          # ==================================================================
+          # Main
+          # ==================================================================
+
+          try:
+
+              # ==============================================================
+              # Create SSH client
+              # ==============================================================
+
+              ssh = paramiko.SSHClient()
+
+              ssh.set_missing_host_key_policy(
+                  paramiko.AutoAddPolicy()
+              )
+
+
+              # ==============================================================
+              # Connect to device
+              # ==============================================================
+
+              ssh.connect(
+                  HOST,
+                  username=USER,
+                  password=PASSWORD,
+                  look_for_keys=False,
+                  allow_agent=False,
+                  timeout=10,
+                  banner_timeout=10,
+                  auth_timeout=10
+              )
+
+
+              # ==============================================================
+              # Create interactive shell
+              # ==============================================================
+
+              shell = ssh.invoke_shell()
+
+              time.sleep(1)
+
+
+              # ==============================================================
+              # Read initial prompt
+              # ==============================================================
+
+              initial_output = read_available(
+                  shell,
+                  wait=1
+              )
+
+
+              current_prompt = get_last_prompt(
+                  initial_output
+              )
+
+
+              if not current_prompt:
+
+                  print(
+                      "PDP GET FAILED"
+                  )
+
+                  print(
+                      "Unable to detect device prompt."
+                  )
+
+                  close_connection(
+                      shell,
+                      ssh
+                  )
+
+                  sys.exit(1)
+
+
+              # ==============================================================
+              # Enter enable mode if required
+              # ==============================================================
+              #
+              # Example:
+              #
+              # production>
+              #
+              # becomes:
+              #
+              # production#
+              #
+              # No hostname is hardcoded.
+              # ==============================================================
+
+              if current_prompt.endswith(">"):
+
+                  enable_output = send_command(
+                      shell,
+                      "enable",
+                      wait=1
+                  )
+
+                  enable_prompt = get_last_prompt(
+                      enable_output
+                  )
+
+                  if not enable_prompt:
+
+                      print(
+                          "PDP GET FAILED"
+                      )
+
+                      print(
+                          "Unable to enter enable mode."
+                      )
+
+                      print(
+                          enable_output
+                      )
+
+                      close_connection(
+                          shell,
+                          ssh
+                      )
+
+                      sys.exit(1)
+
+                  current_prompt = enable_prompt
+
+
+              # ==============================================================
+              # Enter configuration mode
+              # ==============================================================
+
+              if current_prompt.endswith("#"):
+
+                  config_output = send_command(
+                      shell,
+                      "config",
+                      wait=1
+                  )
+
+                  config_prompt = get_last_prompt(
+                      config_output
+                  )
+
+              else:
+
+                  config_prompt = current_prompt
+
+
+              # ==============================================================
+              # Execute show running-config
+              # ==============================================================
+
+              running_config_output = send_command(
+                  shell,
+                  "show running-config",
+                  wait=2
+              )
+
+
+              if not running_config_output:
+
+                  print(
+                      "PDP GET FAILED"
+                  )
+
+                  print(
+                      "No running configuration received."
+                  )
+
+                  close_connection(
+                      shell,
+                      ssh
+                  )
+
+                  sys.exit(1)
+
+
+              # ==============================================================
+              # Extract PDP configuration
+              # ==============================================================
+
+              pdp_state = "Close"
+
+              holdtime = ""
+
+              tx_interval = ""
+
+              version = ""
+
+
+              # --------------------------------------------------------------
+              # PDP RUN
+              #
+              # If "pdp run" exists as a standalone configuration command,
+              # PDP is OPEN.
+              # --------------------------------------------------------------
+
+              if re.search(
+                  r"(?m)^\s*pdp\s+run\s*$",
+                  running_config_output,
+                  re.IGNORECASE
+              ):
+
+                  pdp_state = "Open"
+
+
+              # --------------------------------------------------------------
+              # HoldTime
+              # --------------------------------------------------------------
+
+              holdtime_match = re.search(
+                  r"(?m)^\s*pdp\s+holdtime\s+(\d+)\s*$",
+                  running_config_output,
+                  re.IGNORECASE
+              )
+
+              if holdtime_match:
+
+                  holdtime = holdtime_match.group(1)
+
+
+              # --------------------------------------------------------------
+              # Transmission Timer
+              # --------------------------------------------------------------
+
+              timer_match = re.search(
+                  r"(?m)^\s*pdp\s+timer\s+(\d+)\s*$",
+                  running_config_output,
+                  re.IGNORECASE
+              )
+
+              if timer_match:
+
+                  tx_interval = timer_match.group(1)
+
+
+              # --------------------------------------------------------------
+              # PDP Version
+              # --------------------------------------------------------------
+
+              version_match = re.search(
+                  r"(?m)^\s*pdp\s+version\s+(\d+)\s*$",
+                  running_config_output,
+                  re.IGNORECASE
+              )
+
+              if version_match:
+
+                  version_number = version_match.group(1)
+
+                  if version_number == "1":
+
+                      version = "Version1"
+
+                  elif version_number == "2":
+
+                      version = "Version2"
+
+                  else:
+
+                      version = version_number
+
+
+              # ==============================================================
+              # Build result
+              # ==============================================================
+
+              result = {
+
+                  "pdp_state": pdp_state,
+
+                  "holdtime": (
+                      int(holdtime)
+                      if holdtime
+                      else None
+                  ),
+
+                  "tx_interval": (
+                      int(tx_interval)
+                      if tx_interval
+                      else None
+                  ),
+
+                  "version": version
+
+              }
+
+
+              # ==============================================================
+              # Print result
+              # ==============================================================
+
+              print(
+                  yaml.safe_dump(
+                      result,
+                      default_flow_style=False,
+                      sort_keys=False
+                  )
+              )
+
+
+              # ==============================================================
+              # Close connection
+              # ==============================================================
+
+              close_connection(
+                  shell,
+                  ssh
+              )
+
+              sys.exit(0)
+
+
+          # ==================================================================
+          # Exception handling
+          # ==================================================================
+
+          except Exception as error:
+
+              print(
+                  "PDP GET FAILED"
+              )
+
+              print(
+                  "Error: " + str(error)
+              )
+
+              sys.exit(1)
+
+
+    # ========================================================================
+    # Run PDP GET script
+    # ========================================================================
+
+    - name: Run PDP GET script
+      ansible.builtin.command: >
+        /opt/librenms/librenms-ansible-inventory-plugin/bin/python3
+        /opt/librenms/librenms-ansible-inventory-plugin/tmp/get_pdp.py
+      register: pdp_get_result
+      changed_when: false
+      failed_when: pdp_get_result.rc != 0
+
+
+    # ========================================================================
+    # Display PDP configuration
+    # ========================================================================
+
+    - name: Display PDP configuration
+      ansible.builtin.debug:
+        msg: "{{ pdp_get_result.stdout }}"
+
+
+    # ========================================================================
+    # Save PDP GET output
+    # ========================================================================
+
+    - name: Save PDP configuration
+      ansible.builtin.copy:
+        dest: "/opt/librenms/librenms-ansible-inventory-plugin/output/{{ ansible_host }}_pdp.yml"
+        content: "{{ pdp_get_result.stdout }}"
+

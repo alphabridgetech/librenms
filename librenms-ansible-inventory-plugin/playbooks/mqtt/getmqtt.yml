@@ -1,0 +1,241 @@
+---
+# ============================================================================
+# File        : getmqtt.yml
+# Feature     : Get Remote NMS / MQTT Configuration
+#
+# Reads:
+#   - Remote NMS Enable
+#   - Default MQTT Server
+#   - MQTT Server
+#   - DNS 1
+#   - DNS 2
+#
+# Source:
+#   show running-config
+#
+# Output:
+#   /opt/librenms/librenms-ansible-inventory-plugin/output/<IP>mqtt_get.yml
+# ============================================================================
+
+- name: Get Remote NMS Configuration
+  hosts: alphabridge_devices
+  gather_facts: no
+
+  vars:
+    output_dir: "/opt/librenms/librenms-ansible-inventory-plugin/output"
+    tmp_dir: "/opt/librenms/librenms-ansible-inventory-plugin/tmp"
+
+  tasks:
+
+    # ------------------------------------------------------------------------
+    # Create directories
+    # ------------------------------------------------------------------------
+    - name: Create required directories
+      ansible.builtin.file:
+        path: "{{ item }}"
+        state: directory
+        mode: "0755"
+      loop:
+        - "{{ output_dir }}"
+        - "{{ tmp_dir }}"
+      delegate_to: localhost
+
+    # ------------------------------------------------------------------------
+    # Create Paramiko GET script
+    # ------------------------------------------------------------------------
+    - name: Create Remote NMS GET script
+      ansible.builtin.copy:
+        dest: "{{ tmp_dir }}/getmqtt.py"
+        mode: "0755"
+        content: |
+          #!/usr/bin/env python3
+
+          import paramiko
+          import time
+          import re
+          import sys
+
+          host = "{{ ansible_host }}"
+          username = "{{ ansible_user }}"
+          password = "{{ ansible_password }}"
+
+          output_file = "{{ output_dir }}/{{ ansible_host }}mqtt_get.yml"
+
+          try:
+
+              # -----------------------------------------------------------
+              # SSH connection
+              # -----------------------------------------------------------
+              client = paramiko.SSHClient()
+
+              client.set_missing_host_key_policy(
+                  paramiko.AutoAddPolicy()
+              )
+
+              client.connect(
+                  hostname=host,
+                  username=username,
+                  password=password,
+                  look_for_keys=False,
+                  allow_agent=False,
+                  timeout=15
+              )
+
+              shell = client.invoke_shell()
+
+              time.sleep(1)
+
+              # -----------------------------------------------------------
+              # Enable mode
+              # -----------------------------------------------------------
+              shell.send("enable\n")
+              time.sleep(0.5)
+
+              # -----------------------------------------------------------
+              # Disable paging
+              # -----------------------------------------------------------
+              shell.send("terminal length 0\n")
+              time.sleep(0.5)
+
+              # -----------------------------------------------------------
+              # Get running configuration
+              # -----------------------------------------------------------
+              shell.send("show running-config\n")
+
+              time.sleep(3)
+
+              output = shell.recv(65535).decode(
+                  "utf-8",
+                  errors="ignore"
+              )
+
+              print(output)
+
+              client.close()
+
+              # -----------------------------------------------------------
+              # Remove CR characters
+              # -----------------------------------------------------------
+              output = output.replace("\r", "")
+
+              # -----------------------------------------------------------
+              # DNS
+              # -----------------------------------------------------------
+              dns_list = re.findall(
+                  r"^\s*ip name-server\s+(\S+)",
+                  output,
+                  re.MULTILINE
+              )
+
+              dns1 = dns_list[0] if len(dns_list) > 0 else ""
+              dns2 = dns_list[1] if len(dns_list) > 1 else ""
+
+              # -----------------------------------------------------------
+              # Remote NMS Enable
+              # -----------------------------------------------------------
+              remote_nms_enable = (
+                  "Enable"
+                  if re.search(
+                      r"^\s*mqtt client enable\s*$",
+                      output,
+                      re.MULTILINE
+                  )
+                  else "Disable"
+              )
+
+              # -----------------------------------------------------------
+              # Default MQTT Server
+              # -----------------------------------------------------------
+              default_match = re.search(
+                  r"^\s*mqtt client server default\s+(\S+)",
+                  output,
+                  re.MULTILINE
+              )
+
+              default_server = (
+                  default_match.group(1)
+                  if default_match
+                  else ""
+              )
+
+              # -----------------------------------------------------------
+              # MQTT Server
+              # -----------------------------------------------------------
+              server_match = re.search(
+                  r"^\s*mqtt client server\s+(?!default\s)(\S+)",
+                  output,
+                  re.MULTILINE
+              )
+
+              server = (
+                  server_match.group(1)
+                  if server_match
+                  else ""
+              )
+
+              # -----------------------------------------------------------
+              # Write clean YAML output
+              # -----------------------------------------------------------
+              with open(output_file, "w") as f:
+
+                  f.write(
+                      "remote_nms_enable: "
+                      + remote_nms_enable
+                      + "\n"
+                  )
+
+                  f.write(
+                      "default_server: "
+                      + default_server
+                      + "\n"
+                  )
+
+                  f.write(
+                      "server: "
+                      + server
+                      + "\n"
+                  )
+
+                  f.write(
+                      "dns1: "
+                      + dns1
+                      + "\n"
+                  )
+
+                  f.write(
+                      "dns2: "
+                      + dns2
+                      + "\n"
+                  )
+
+              print("GET SUCCESS")
+
+          except Exception as e:
+
+              print("ERROR:", str(e))
+
+              with open(output_file, "w") as f:
+                  f.write("remote_nms_enable: ERROR\n")
+                  f.write("default_server: ERROR\n")
+                  f.write("server: ERROR\n")
+                  f.write("dns1: ERROR\n")
+                  f.write("dns2: ERROR\n")
+
+              sys.exit(1)
+
+    # ------------------------------------------------------------------------
+    # Execute GET script
+    # ------------------------------------------------------------------------
+    - name: Get Remote NMS configuration
+      ansible.builtin.command:
+        cmd: "python3 {{ tmp_dir }}/getmqtt.py"
+      delegate_to: localhost
+      register: mqtt_get_result
+      changed_when: false
+
+    # ------------------------------------------------------------------------
+    # Display output
+    # ------------------------------------------------------------------------
+    - name: Show Remote NMS configuration
+      ansible.builtin.debug:
+        msg: "{{ lookup('file', output_dir + '/' + ansible_host + 'mqtt_get.yml') }}"

@@ -1,0 +1,516 @@
+---
+# ============================================================================
+# File        : setmqtt.yml
+# Feature     : Remote NMS / MQTT Configuration
+#
+# UI Arguments:
+#   1. remote_nms_enable
+#   2. default_server
+#   3. server
+#   4. dns1                 OPTIONAL
+#   5. dns2                 OPTIONAL
+#
+# DNS:
+#   DNS configuration is OPTIONAL.
+#
+#   If DNS is provided:
+#       no ip name-server
+#       ip name-server <dns1>
+#       ip name-server <dns2>
+#
+#   If DNS is not provided:
+#       No DNS command is executed.
+#
+# MQTT:
+#       mqtt client enable
+#       mqtt client server default <default_server>
+#       mqtt client server <server>
+#
+# Output:
+#   /opt/librenms/librenms-ansible-inventory-plugin/output/<IP>mqtt.yml
+#
+# Output contains ONLY:
+#   SUCCESS
+#   or
+#   FAILED
+# ============================================================================
+
+- name: Configure Remote NMS
+  hosts: alphabridge_devices
+  gather_facts: no
+
+  vars:
+
+    # ------------------------------------------------------------------------
+    # Directories
+    # ------------------------------------------------------------------------
+    output_dir: "/opt/librenms/librenms-ansible-inventory-plugin/output"
+    tmp_dir: "/opt/librenms/librenms-ansible-inventory-plugin/tmp"
+
+    # ------------------------------------------------------------------------
+    # MQTT parameters
+    # ------------------------------------------------------------------------
+    mqtt_enable: "{{ remote_nms_enable | default(true) }}"
+    mqtt_default_server: "{{ default_server | default('') }}"
+    mqtt_server: "{{ server | default('') }}"
+
+    # ------------------------------------------------------------------------
+    # DNS parameters - OPTIONAL
+    # ------------------------------------------------------------------------
+    mqtt_dns1: "{{ dns1 | default('') }}"
+    mqtt_dns2: "{{ dns2 | default('') }}"
+
+  tasks:
+
+    # ========================================================================
+    # Create required directories
+    # ========================================================================
+    - name: Create required directories
+      ansible.builtin.file:
+        path: "{{ item }}"
+        state: directory
+        mode: "0755"
+      loop:
+        - "{{ output_dir }}"
+        - "{{ tmp_dir }}"
+      delegate_to: localhost
+
+    # ========================================================================
+    # Validate MQTT Server
+    # ========================================================================
+    - name: Validate MQTT Server
+      ansible.builtin.assert:
+        that:
+          - mqtt_server | length > 0
+        fail_msg: "MQTT Server must be provided."
+
+    # ========================================================================
+    # Validate DNS 1 only when provided
+    # ========================================================================
+    - name: Validate DNS 1
+      ansible.builtin.assert:
+        that:
+          - mqtt_dns1 | length > 0
+        fail_msg: "DNS 1 cannot be empty when DNS 2 is provided."
+      when:
+        - mqtt_dns2 | length > 0
+
+    # ========================================================================
+    # Validate DNS 2 only when provided
+    # ========================================================================
+    - name: Validate DNS 2
+      ansible.builtin.assert:
+        that:
+          - mqtt_dns2 | length > 0
+        fail_msg: "DNS 2 cannot be empty when DNS 1 is provided."
+      when:
+        - mqtt_dns1 | length > 0
+
+    # ========================================================================
+    # Create Paramiko script
+    # ========================================================================
+    - name: Create Remote NMS configuration script
+      ansible.builtin.copy:
+        dest: "{{ tmp_dir }}/setmqtt.py"
+        mode: "0755"
+        content: |
+          #!/usr/bin/env python3
+
+          import paramiko
+          import time
+          import sys
+          import re
+
+          host = "{{ ansible_host }}"
+          username = "{{ ansible_user }}"
+          password = "{{ ansible_password }}"
+
+          output_file = (
+              "{{ output_dir }}/{{ ansible_host }}mqtt.yml"
+          )
+
+          commands = []
+
+          # ===============================================================
+          # DNS CONFIGURATION - OPTIONAL
+          # ===============================================================
+
+          {% if mqtt_dns1 | length > 0 and mqtt_dns2 | length > 0 %}
+
+          # Remove existing DNS configuration
+          commands.append(
+              "no ip name-server"
+          )
+
+          # Configure DNS 1
+          commands.append(
+              "ip name-server {{ mqtt_dns1 }}"
+          )
+
+          # Configure DNS 2
+          commands.append(
+              "ip name-server {{ mqtt_dns2 }}"
+          )
+
+          {% endif %}
+
+          # ===============================================================
+          # MQTT ENABLE / DISABLE
+          # ===============================================================
+
+          {% if mqtt_enable | bool %}
+
+          commands.append(
+              "mqtt client enable"
+          )
+
+          {% else %}
+
+          commands.append(
+              "no mqtt client enable"
+          )
+
+          {% endif %}
+
+          # ===============================================================
+          # DEFAULT MQTT SERVER - OPTIONAL
+          # ===============================================================
+
+          {% if mqtt_default_server | length > 0 %}
+
+          commands.append(
+              "mqtt client server default {{ mqtt_default_server }}"
+          )
+
+          {% endif %}
+
+          # ===============================================================
+          # MQTT SERVER - REQUIRED
+          # ===============================================================
+
+          commands.append(
+              "mqtt client server {{ mqtt_server }}"
+          )
+
+          failed = False
+
+          try:
+
+              # ===========================================================
+              # SSH connection
+              # ===========================================================
+
+              client = paramiko.SSHClient()
+
+              client.set_missing_host_key_policy(
+                  paramiko.AutoAddPolicy()
+              )
+
+              client.connect(
+                  hostname=host,
+                  username=username,
+                  password=password,
+                  look_for_keys=False,
+                  allow_agent=False,
+                  timeout=15,
+                  auth_timeout=15,
+                  banner_timeout=15
+              )
+
+              shell = client.invoke_shell()
+
+              shell.settimeout(5)
+
+              time.sleep(1)
+
+              # ===========================================================
+              # Read initial output
+              # ===========================================================
+
+              try:
+
+                  initial_output = shell.recv(
+                      65535
+                  ).decode(
+                      "utf-8",
+                      errors="ignore"
+                  )
+
+              except Exception:
+
+                  initial_output = ""
+
+              # ===========================================================
+              # Helper function
+              # ===========================================================
+
+              def send_command(command, wait=1):
+
+                  shell.send(command + "\n")
+
+                  time.sleep(wait)
+
+                  data = b""
+
+                  while True:
+
+                      try:
+
+                          chunk = shell.recv(
+                              65535
+                          )
+
+                          if not chunk:
+                              break
+
+                          data += chunk
+
+                          if len(chunk) < 65535:
+                              break
+
+                      except Exception:
+
+                          break
+
+                  return data.decode(
+                      "utf-8",
+                      errors="ignore"
+                  )
+
+              # ===========================================================
+              # Detect prompt
+              # ===========================================================
+
+              prompt_matches = re.findall(
+                  r'([^\r\n]+[>#])\s*$',
+                  initial_output
+              )
+
+              prompt = (
+                  prompt_matches[-1].strip()
+                  if prompt_matches
+                  else ""
+              )
+
+              # ===========================================================
+              # Enter enable mode if required
+              # ===========================================================
+
+              if prompt.endswith(">"):
+
+                  output = send_command(
+                      "enable",
+                      1
+                  )
+
+              else:
+
+                  output = initial_output
+
+              # ===========================================================
+              # Enter configuration mode
+              # ===========================================================
+
+              prompt_matches = re.findall(
+                  r'([^\r\n]+#)\s*$',
+                  output
+              )
+
+              prompt = (
+                  prompt_matches[-1].strip()
+                  if prompt_matches
+                  else ""
+              )
+
+              if (
+                  prompt.endswith("#")
+                  and "_config" not in prompt
+              ):
+
+                  output = send_command(
+                      "config",
+                      1
+                  )
+
+              # ===========================================================
+              # Disable pagination
+              # ===========================================================
+
+              send_command(
+                  "terminal length 0",
+                  1
+              )
+
+              # ===========================================================
+              # Execute configuration commands
+              # ===========================================================
+
+              for command in commands:
+
+                  print(
+                      "Executing:",
+                      command
+                  )
+
+                  output = send_command(
+                      command,
+                      1
+                  )
+
+                  print(output)
+
+                  # =======================================================
+                  # Detect CLI errors
+                  # =======================================================
+
+                  error_patterns = [
+                      "Incomplete command",
+                      "Parameter invalid",
+                      "Parameter out of range",
+                      "Too many parameters",
+                      "Invalid input",
+                      "Unknown command",
+                      "Invalid address or dns name",
+                      "fail with ret -1",
+                      "Error",
+                      "error",
+                      "%Error"
+                  ]
+
+                  for error_pattern in error_patterns:
+
+                      if error_pattern in output:
+
+                          print(
+                              "CLI ERROR DETECTED:",
+                              error_pattern
+                          )
+
+                          failed = True
+                          break
+
+                  if failed:
+                      break
+
+              # ===========================================================
+              # Save configuration only when all commands succeeded
+              # ===========================================================
+
+              if not failed:
+
+                  output = send_command(
+                      "write",
+                      2
+                  )
+
+                  print(output)
+
+                  # Check write operation for errors
+                  write_errors = [
+                      "Error",
+                      "error",
+                      "%Error",
+                      "failed",
+                      "Failed"
+                  ]
+
+                  for error_pattern in write_errors:
+
+                      if error_pattern in output:
+
+                          failed = True
+                          break
+
+              # ===========================================================
+              # Close SSH
+              # ===========================================================
+
+              client.close()
+
+              # ===========================================================
+              # Write result
+              # ===========================================================
+
+              with open(
+                  output_file,
+                  "w"
+              ) as f:
+
+                  if failed:
+
+                      f.write(
+                          "FAILED\n"
+                      )
+
+                  else:
+
+                      f.write(
+                          "SUCCESS\n"
+                      )
+
+              # ===========================================================
+              # Return status
+              # ===========================================================
+
+              if failed:
+
+                  sys.exit(1)
+
+              sys.exit(0)
+
+          except Exception as e:
+
+              print(
+                  "ERROR:",
+                  str(e)
+              )
+
+              try:
+
+                  with open(
+                      output_file,
+                      "w"
+                  ) as f:
+
+                      f.write(
+                          "FAILED\n"
+                      )
+
+              except Exception:
+                  pass
+
+              sys.exit(1)
+
+    # ========================================================================
+    # Execute Paramiko script
+    # ========================================================================
+    - name: Execute Remote NMS configuration
+      ansible.builtin.command:
+        cmd: "python3 {{ tmp_dir }}/setmqtt.py"
+      delegate_to: localhost
+      register: mqtt_result
+      changed_when: true
+      failed_when: false
+
+    # ========================================================================
+    # Show result
+    # ========================================================================
+    - name: Show Remote NMS result
+      ansible.builtin.debug:
+        msg: >-
+          {{
+            lookup(
+              'file',
+              output_dir + '/' + ansible_host + 'mqtt.yml'
+            ) | trim
+          }}
+
+    # ========================================================================
+    # Fail Ansible when configuration failed
+    # ========================================================================
+    - name: Validate Remote NMS configuration
+      ansible.builtin.fail:
+        msg: "Remote NMS / MQTT configuration FAILED"
+      when:
+        - mqtt_result.rc != 0
+

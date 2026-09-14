@@ -79,6 +79,8 @@ Route::prefix('v0')->group(function () {
         Route::post('portconfig/set/{hostname}', [App\Api\Controllers\KunalApiController::class, 'setportconfiguration'])->name('portconfig.set');
         Route::get('pdp/show/{hostname}', [App\Api\Controllers\KunalApiController::class, 'getpdp'])->name('pdp.show');
         Route::post('pdp/set/{hostname}', [App\Api\Controllers\KunalApiController::class, 'setpdp'])->name('pdp.set');
+        Route::get('mqtt/show/{hostname}', [App\Api\Controllers\KunalApiController::class, 'getmqtt'])->name('mqtt.show');
+        Route::post('mqtt/set/{hostname}', [App\Api\Controllers\KunalApiController::class, 'setmqtt'])->name('mqtt.set');
         Route::post('vlandelete/{hostname}', [App\Api\Controllers\KunalApiController::class, 'vlandelete'])->name('vlandelete');
         Route::get('voicevlanshow/{hostname}', [App\Api\Controllers\KunalApiController::class, 'voicevlanshow'])->name('voicevlanshow');
         Route::post('voicevlan/batch/{hostname}', [App\Api\Controllers\KunalApiController::class, 'voicevlandelete'])->name('voicevlandelete');

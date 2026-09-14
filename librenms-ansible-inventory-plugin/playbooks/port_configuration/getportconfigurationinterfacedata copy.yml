@@ -20,7 +20,7 @@
 #   These parameters are obtained from "show interface".
 #
 # Output:
-#   /home/gayatri/ansible/output/<device-ip>_port_configuration.yml
+#   /opt/librenms/librenms-ansible-inventory-plugin/output/<device-ip>_port_configuration.yml
 # ============================================================================
 
 ---
@@ -29,8 +29,8 @@
   gather_facts: no
 
   vars:
-    output_dir: "/home/gayatri/ansible/output"
-    script_dir: "/home/gayatri/ansible/tmp"
+    output_dir: "/opt/librenms/librenms-ansible-inventory-plugin/output"
+    script_dir: "/opt/librenms/librenms-ansible-inventory-plugin/tmp"
     script_file: "{{ script_dir }}/get_port_configuration.py"
 
   tasks:
@@ -708,7 +708,7 @@
               # ==============================================================
 
               output_file = (
-                  "/home/gayatri/ansible/output/"
+                  "/opt/librenms/librenms-ansible-inventory-plugin/output/"
                   + HOST
                   + "_port_configuration.yml"
               )
@@ -766,7 +766,7 @@
 
     - name: Run Port Configuration GET
       ansible.builtin.command: >
-        /home/gayatri/ansible/bin/python3
+        /opt/librenms/librenms-ansible-inventory-plugin/bin/python3
         {{ script_file }}
       register: port_get_result
       changed_when: false

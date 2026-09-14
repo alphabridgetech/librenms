@@ -1,0 +1,378 @@
+---
+# ============================================================
+# PDP Interface Configuration - SET
+# ============================================================
+
+- name: Set PDP Interface Configuration
+  hosts: alphabridge_devices
+  gather_facts: false
+
+  vars:
+    pdp_interface: "{{ interface | default('') }}"
+    pdp_status: "{{ status | default('') }}"
+
+  tasks:
+
+    # --------------------------------------------------------
+    # Validate interface
+    # --------------------------------------------------------
+    - name: Validate interface
+      ansible.builtin.assert:
+        that:
+          - pdp_interface | length > 0
+          - pdp_interface is match(
+              '^(GigaEthernet|gigaEthernet|TGigaEthernet|tgigaEthernet)[0-9]+/[0-9]+$'
+            )
+        fail_msg: >-
+          Invalid interface '{{ pdp_interface }}'.
+          Example: GigaEthernet0/1 or TGigaEthernet0/1
+
+    # --------------------------------------------------------
+    # Validate status
+    # --------------------------------------------------------
+    - name: Validate PDP status
+      ansible.builtin.assert:
+        that:
+          - pdp_status in ['Enable', 'Disable']
+        fail_msg: "Status must be Enable or Disable."
+
+    # --------------------------------------------------------
+    # Create temporary Python SET script
+    # --------------------------------------------------------
+    - name: Create PDP interface SET script
+      ansible.builtin.copy:
+        dest: /opt/librenms/librenms-ansible-inventory-plugin/tmp/set_pdp_interface.py
+        mode: '0755'
+        content: |
+          import paramiko
+          import re
+          import sys
+          import time
+
+          HOST = "{{ ansible_host }}"
+          USER = "{{ ansible_user }}"
+          PASSWORD = "{{ ansible_password }}"
+
+          INTERFACE = "{{ pdp_interface }}"
+          STATUS = "{{ pdp_status }}"
+
+          client = paramiko.SSHClient()
+          client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+
+          try:
+              # ------------------------------------------------
+              # Connect to switch
+              # ------------------------------------------------
+              client.connect(
+                  HOST,
+                  username=USER,
+                  password=PASSWORD,
+                  look_for_keys=False,
+                  allow_agent=False,
+                  timeout=10,
+                  auth_timeout=10,
+                  banner_timeout=10
+              )
+
+              shell = client.invoke_shell()
+              shell.settimeout(5)
+
+              time.sleep(1)
+
+              # ------------------------------------------------
+              # Read initial prompt
+              # ------------------------------------------------
+              try:
+                  output = shell.recv(65535).decode(
+                      "utf-8",
+                      errors="ignore"
+                  )
+              except Exception:
+                  output = ""
+
+              # ------------------------------------------------
+              # Send command helper
+              # ------------------------------------------------
+              def send_cmd(command, wait=1):
+                  shell.send(command + "\n")
+                  time.sleep(wait)
+
+                  data = b""
+
+                  while True:
+                      try:
+                          chunk = shell.recv(65535)
+
+                          if not chunk:
+                              break
+
+                          data += chunk
+
+                          if len(chunk) < 65535:
+                              break
+
+                      except Exception:
+                          break
+
+                  return data.decode(
+                      "utf-8",
+                      errors="ignore"
+                  )
+
+              # ------------------------------------------------
+              # Detect current prompt
+              # ------------------------------------------------
+              prompt_matches = re.findall(
+                  r'([^\r\n]+[>#])\s*$',
+                  output
+              )
+
+              prompt = (
+                  prompt_matches[-1].strip()
+                  if prompt_matches
+                  else ""
+              )
+
+              # ------------------------------------------------
+              # Enter enable mode
+              # ------------------------------------------------
+              if prompt.endswith(">"):
+                  output = send_cmd("enable", 1)
+
+              # ------------------------------------------------
+              # Enter config mode
+              # ------------------------------------------------
+              prompt_matches = re.findall(
+                  r'([^\r\n]+#)\s*$',
+                  output
+              )
+
+              prompt = (
+                  prompt_matches[-1].strip()
+                  if prompt_matches
+                  else ""
+              )
+
+              if (
+                  prompt.endswith("#")
+                  and "_config" not in prompt
+              ):
+                  output = send_cmd("config", 1)
+
+              # ------------------------------------------------
+              # Disable pagination
+              # ------------------------------------------------
+              send_cmd("terminal length 0", 1)
+
+              # ------------------------------------------------
+              # Enter requested interface
+              # ------------------------------------------------
+              interface_output = send_cmd(
+                  "interface {{ pdp_interface }}",
+                  1
+              )
+
+              # ------------------------------------------------
+              # Configure PDP
+              # ------------------------------------------------
+              if STATUS == "Enable":
+                  config_output = send_cmd(
+                      "pdp enable",
+                      1
+                  )
+              else:
+                  config_output = send_cmd(
+                      "no pdp enable",
+                      1
+                  )
+
+              # ------------------------------------------------
+              # Exit interface configuration
+              # ------------------------------------------------
+              send_cmd("exit", 1)
+
+              # ------------------------------------------------
+              # IMPORTANT:
+              # Run show running-config only AFTER exiting
+              # interface configuration mode.
+              # ------------------------------------------------
+              running_config = send_cmd(
+                  "show running-config",
+                  3
+              )
+
+              running_config = running_config.replace(
+                  "--More--",
+                  ""
+              )
+
+              # ------------------------------------------------
+              # Find requested interface block
+              # ------------------------------------------------
+              lines = running_config.splitlines()
+
+              interface_block = []
+
+              inside_interface = False
+
+              for line in lines:
+
+                  stripped = line.strip()
+
+                  # Requested interface found
+                  if re.match(
+                      r'^interface\s+'
+                      + re.escape(INTERFACE)
+                      + r'\s*$',
+                      stripped,
+                      re.IGNORECASE
+                  ):
+                      inside_interface = True
+                      interface_block = []
+                      continue
+
+                  # Next interface reached
+                  if (
+                      inside_interface
+                      and re.match(
+                          r'^interface\s+',
+                          stripped,
+                          re.IGNORECASE
+                      )
+                  ):
+                      break
+
+                  # End of interface block
+                  if (
+                      inside_interface
+                      and stripped == "!"
+                  ):
+                      break
+
+                  if inside_interface:
+                      interface_block.append(line)
+
+              interface_block_text = "\n".join(
+                  interface_block
+              )
+
+              # ------------------------------------------------
+              # Normalize for verification
+              # ------------------------------------------------
+              block_lower = interface_block_text.lower()
+
+              # =================================================
+              # ENABLE VERIFICATION
+              # =================================================
+              #
+              # On this switch:
+              #
+              # pdp enable
+              #
+              # is accepted by CLI but is NOT displayed in
+              # show running-config.
+              #
+              # Therefore:
+              #
+              # Enable = absence of "no pdp enable"
+              #
+              # =================================================
+
+              if STATUS == "Enable":
+
+                  disabled_command = re.search(
+                      r'(?im)^\s*no\s+pdp\s+enable\s*$',
+                      interface_block_text
+                  )
+
+                  if disabled_command:
+                      print("PDP INTERFACE CONFIGURATION FAILED")
+                      print(
+                          "PDP interface verification failed for "
+                          + INTERFACE
+                      )
+                      print("INTERFACE BLOCK:")
+                      print(interface_block_text)
+                      sys.exit(1)
+
+                  # No "no pdp enable" means PDP is enabled.
+                  print("SUCCESS")
+
+              # =================================================
+              # DISABLE VERIFICATION
+              # =================================================
+              else:
+
+                  disabled_command = re.search(
+                      r'(?im)^\s*no\s+pdp\s+enable\s*$',
+                      interface_block_text
+                  )
+
+                  if disabled_command:
+                      print("SUCCESS")
+                  else:
+                      print("PDP INTERFACE CONFIGURATION FAILED")
+                      print(
+                          "PDP interface verification failed for "
+                          + INTERFACE
+                      )
+                      print("INTERFACE BLOCK:")
+                      print(interface_block_text)
+                      sys.exit(1)
+
+          except Exception as e:
+
+              print("PDP INTERFACE CONFIGURATION FAILED")
+              print(str(e))
+              sys.exit(1)
+
+          finally:
+
+              try:
+                  client.close()
+              except Exception:
+                  pass
+
+    # --------------------------------------------------------
+    # Run PDP SET script
+    # --------------------------------------------------------
+    - name: Run PDP interface configuration script
+      ansible.builtin.command:
+        cmd: >
+          /opt/librenms/librenms-ansible-inventory-plugin/bin/python3
+          /opt/librenms/librenms-ansible-inventory-plugin/tmp/set_pdp_interface.py
+      register: pdp_result
+      changed_when: false
+      failed_when: false
+
+    # --------------------------------------------------------
+    # Ensure output directory exists
+    # --------------------------------------------------------
+    - name: Ensure output directory exists
+      ansible.builtin.file:
+        path: /opt/librenms/librenms-ansible-inventory-plugin/output
+        state: directory
+        mode: '0755'
+
+    # --------------------------------------------------------
+    # Write result
+    # --------------------------------------------------------
+    - name: Write PDP interface result
+      ansible.builtin.copy:
+        dest: "/opt/librenms/librenms-ansible-inventory-plugin/output/{{ ansible_host }}_pdp_interface.yml"
+        mode: '0644'
+        content: |
+          interface: {{ pdp_interface }}
+          status: {{ pdp_status }}
+          result: {{ 'SUCCESS' if pdp_result.rc == 0 and pdp_result.stdout | trim == 'SUCCESS' else 'FAILED' }}
+
+    # --------------------------------------------------------
+    # Fail if configuration failed
+    # --------------------------------------------------------
+    - name: Validate PDP interface configuration result
+      ansible.builtin.fail:
+        msg: "{{ pdp_result.stdout | default('PDP interface configuration failed') }}"
+      when:
+        - pdp_result.rc != 0
+          or pdp_result.stdout | trim != 'SUCCESS'
+
