@@ -1,10 +1,10 @@
 {
-    "name": "Un-tag traffic to single S-tag in AS210T",
+    "name": "L2TP on uplink for AS20012XTS",
     "type": "form",
     "hostname": "",
     "interfaces": [],
     "hardware_models": [
-        "AS210T mother card"
+        "AS200\/12\/XTS"
     ],
     "fields": [
         {
@@ -13,6 +13,34 @@
             "options": null,
             "command": "description {{value}}",
             "required": false
+        },
+        {
+            "label": "L2TP - CDP",
+            "type": "checkbox",
+            "options": null,
+            "command": "l2protocol-tunnel cdp",
+            "required": true
+        },
+        {
+            "label": "L2TP - LLDP",
+            "type": "checkbox",
+            "options": null,
+            "command": "l2protocol-tunnel LLDP",
+            "required": true
+        },
+        {
+            "label": "L2TP - STP",
+            "type": "checkbox",
+            "options": null,
+            "command": "l2protocol-tunnel stp",
+            "required": true
+        },
+        {
+            "label": "L2TP - LACP",
+            "type": "checkbox",
+            "options": null,
+            "command": "l2protocol-tunnel lacp",
+            "required": true
         },
         {
             "label": null,
@@ -25,29 +53,15 @@
             "label": null,
             "type": "putonlycmd",
             "options": null,
-            "command": "switchport mode trunk",
+            "command": "switchport mode dot1q-tunnel-uplink",
             "required": true
         },
         {
-            "label": "Allowed VLANs",
+            "label": "Allowed Vlans",
             "type": "text",
             "options": null,
             "command": "switchport trunk vlan-allowed {{value}}",
-            "required": true
-        },
-        {
-            "label": "PVID",
-            "type": "text",
-            "options": null,
-            "command": "switchport pvid {{value}}",
-            "required": true
-        },
-        {
-            "label": "S-tag",
-            "type": "text",
-            "options": null,
-            "command": "switchport dot1q-translating-tunnel mode QinQ translate {{value}} 1 0",
-            "required": true
+            "required": false
         },
         {
             "label": null,
@@ -55,7 +69,8 @@
             "options": null,
             "command": "interface {{interface}}",
             "required": true
-        },
+        }
+        ,
         {
             "label": "Ingress (in kbps)",
             "type": "number",
@@ -77,7 +92,7 @@
             "type": "putonlycmd",
             "options": null,
             "command": "!",
-            "required": false
+            "required": true
         },
         {
             "label": "Burst-size",
@@ -87,5 +102,5 @@
             "required": false
         }
     ],
-    "created_at": "2026-09-09 15:15:52"
+    "created_at": "2026-09-09 15:11:32"
 }

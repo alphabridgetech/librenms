@@ -86,6 +86,11 @@
                                         <br><em>{{ __('Example:') }}</em> <code>switchport pvid @{{field:VLAN ID}}</code>
                                     </li>
                                     <li>
+                                        <strong>{{ __('Divide Value By:') }}</strong>
+                                        {{ __('On a Number field, set') }} <code>{{ __('Divide value by') }}</code> {{ __('(e.g.') }} <code>64</code>{{ __(') to have the entered value divided by that number and rounded to the nearest whole number before it\'s inserted into') }} <code>@{{value}}</code>.
+                                        <br><em>{{ __('Example:') }}</em> {{ __('an "Ingress (in kbps)" field with divisor') }} <code>64</code> {{ __('and command') }} <code>switchport rate-limit @{{value}} ingress</code> {{ __('turns a user-entered') }} <code>1000</code> {{ __('into') }} <code>switchport rate-limit 16 ingress</code>.
+                                    </li>
+                                    <li>
                                         <strong>{{ __('Dynamic Interface Context:') }}</strong>
                                         {{ __('Use') }} <code>interface @{{interface}}</code> {{ __('to start an interface block. Subsequent commands up to a') }} <code>!</code> {{ __('will repeat for each selected interface.') }}
                                         <br><em>{{ __('Example:') }}</em>
@@ -399,6 +404,7 @@ switchport pvid @{{value}}
                 const options = data ? (data.options || '') : '';
                 const command = data ? data.command : '';
                 const required = data ? (data.required !== false) : true;
+                const divisor = data && data.divisor ? data.divisor : '';
                 const usesInterface = (command || '').indexOf('@{{interface}}') !== -1;
 
                 const html = `
@@ -423,6 +429,11 @@ switchport pvid @{{value}}
                                 <label>{{ __('Dropdown Options') }}</label>
                                 <input type="text" class="form-control input-sm field-options" value="${_.escape(options)}" placeholder="{{ __('val:cmd, val2:cmd2') }}">
                                 <span class="help-block" style="font-size: 11px; margin-bottom: 0;">{{ __('Use') }} <code>value:command</code> {{ __('for per-option commands, or just') }} <code>value</code> {{ __('to use the template') }}</span>
+                            </div>
+                            <div class="col-sm-3 field-divisor-col" style="display:none;">
+                                <label>{{ __('Divide value by') }}</label>
+                                <input type="number" min="1" step="any" class="form-control input-sm field-divisor" value="${_.escape(divisor)}" placeholder="{{ __('e.g. 64 (optional)') }}">
+                                <span class="help-block" style="font-size: 11px; margin-bottom: 0;">{{ __('If set, the entered value is divided by this and rounded to the nearest whole number before being inserted into') }} <code>@{{value}}</code>.</span>
                             </div>
                             <div class="col-sm-2 field-required-col">
                                 <label>&nbsp;</label>
@@ -470,6 +481,7 @@ switchport pvid @{{value}}
                     const val = $(this).val();
                     const $label = $(this).closest('.builder-field').find('.field-label-col');
                     const $options = $(this).closest('.builder-field').find('.field-options-col');
+                    const $divisor = $(this).closest('.builder-field').find('.field-divisor-col');
                     const $command = $(this).closest('.builder-field').find('.field-command').closest('.row');
                     const $commandInput = $(this).closest('.builder-field').find('.field-command');
                     const $help = $(this).closest('.builder-field').find('.field-command').siblings('.help-block');
@@ -477,27 +489,40 @@ switchport pvid @{{value}}
                     if (val === 'dropdown') {
                         $label.show();
                         $options.show();
+                        $divisor.hide();
                         $command.show();
                         $commandInput.attr('placeholder', 'e.g. switchport pvid @{{value}}');
                         $help.html('Use <code>@{{value}}</code> where the field value should be inserted. You can also use <code>interface @{{interface}}</code> to start an interface block.');
                     } else if (val === 'checkbox') {
                         $label.show();
                         $options.hide();
+                        $divisor.hide();
                     } else if (val === 'putonlycmd') {
                         $label.hide();
                         $options.hide();
+                        $divisor.hide();
                         $command.show();
                         $commandInput.attr('placeholder', 'e.g. switchport pvid @{{value}}');
                         $help.html('Use <code>@{{value}}</code> where the field value should be inserted. You can also use <code>interface @{{interface}}</code> to start an interface block.');
                     } else if (val === 'dynamic_list') {
                         $label.show();
                         $options.hide();
+                        $divisor.hide();
                         $command.show();
                         $commandInput.attr('placeholder', 'e.g. switchport dot1q-translating-tunnel mode QinQ translate @{{from}} @{{to}}');
                         $help.html('Use variables like <code>@{{from}}</code>, <code>@{{to}}</code>, etc. A row layout will be generated dynamically for each variable.');
-                    } else {
+                    } else if (val === 'number') {
                         $label.show();
                         $options.hide();
+                        $divisor.show();
+                        $command.show();
+                        $commandInput.attr('placeholder', 'e.g. switchport pvid @{{value}}');
+                        $help.html('Use <code>@{{value}}</code> where the field value should be inserted. You can also use <code>interface @{{interface}}</code> to start an interface block.');
+                    } else {
+                        // text
+                        $label.show();
+                        $options.hide();
+                        $divisor.hide();
                         $command.show();
                         $commandInput.attr('placeholder', 'e.g. switchport pvid @{{value}}');
                         $help.html('Use <code>@{{value}}</code> where the field value should be inserted. You can also use <code>interface @{{interface}}</code> to start an interface block.');
@@ -535,7 +560,7 @@ switchport pvid @{{value}}
                     updateBuilderPreview();
                 });
 
-                $lastField.find('.field-label, .field-type, .field-options, .field-command, .field-required').on('input change', function() {
+                $lastField.find('.field-label, .field-type, .field-options, .field-divisor, .field-command, .field-required').on('input change', function() {
                     updateBuilderPreview();
                 });
 
@@ -553,12 +578,18 @@ switchport pvid @{{value}}
             function collectBuilderFields() {
                 const fields = [];
                 $('#builder_fields_container .builder-field').each(function() {
+                    const fieldType = $(this).find('.field-type').val();
+                    // "Divide value by" only applies (and is only shown) for
+                    // Number fields - ignore any stray leftover value if the
+                    // field was switched to a different type afterwards.
+                    const divisorRaw = fieldType === 'number' ? $(this).find('.field-divisor').val() : '';
                     fields.push({
                         label: $(this).find('.field-label').val(),
-                        type: $(this).find('.field-type').val(),
+                        type: fieldType,
                         options: $(this).find('.field-options').val(),
                         command: $(this).find('.field-command').val(),
-                        required: $(this).find('.field-required').is(':checked')
+                        required: $(this).find('.field-required').is(':checked'),
+                        divisor: divisorRaw ? parseFloat(divisorRaw) : null
                     });
                 });
                 return fields;
@@ -828,12 +859,17 @@ switchport pvid @{{value}}
 
                     let val = isFilled ? (type === 'dropdown' ? rawValue.split(':', 2)[0].trim() : rawValue) : ($field.data('label') || 'value');
 
-                    if (isFilled && (label === 'Ingress (1= 64kbps)' || label === 'Egress (1= 64kbps)')) {
+                    // Optional per-field "divide by N" rule (set in the Template
+                    // Builder, e.g. Ingress/Egress kbps -> switch's 64kbps units) -
+                    // the entered value is divided down and rounded to the
+                    // nearest whole unit before being inserted into @{{value}}.
+                    const fieldDivisor = parseFloat($field.data('divisor'));
+                    if (isFilled && !isNaN(fieldDivisor) && fieldDivisor > 0) {
                         let valNum = parseFloat(val);
-                        if (isNaN(valNum) || valNum < 64) {
-                            valNum = 64;
+                        if (isNaN(valNum) || valNum < fieldDivisor) {
+                            valNum = fieldDivisor;
                         }
-                        val = Math.floor(valNum / 64).toString();
+                        val = Math.round(valNum / fieldDivisor).toString();
                     }
 
                     let cmd = '';
@@ -1336,8 +1372,6 @@ switchport pvid @{{value}}
                             opts += '<option value="' + _.escape(o) + '">' + _.escape(display) + '</option>';
                         });
                         inputHtml = '<select class="form-control dynamic-field-value" style="width: 100%;">' + opts + '</select>';
-                    } else if (field.type === 'number') {
-                        inputHtml = '<input type="number" class="form-control dynamic-field-value" placeholder="' + _.escape(field.label) + '">';
                     } else if (field.type === 'checkbox') {
                         inputHtml = '<input type="checkbox" class="dynamic-field-value" value="1"> <span>{{ __('Enable') }}</span>';
                     } else if (field.type === 'putonlycmd') {
@@ -1352,15 +1386,24 @@ switchport pvid @{{value}}
                             </div>
                         `;
                     } else {
-                        if (field.label === 'Ingress (1= 64kbps)' || field.label === 'Egress (1= 64kbps)') {
-                            inputHtml = '<input type="number" class="form-control dynamic-field-value" placeholder="' + _.escape(field.label) + '" min="64">';
-                        } else {
-                            inputHtml = '<input type="text" class="form-control dynamic-field-value" placeholder="' + _.escape(field.label) + '">';
+                        // 'number' and 'text' fields (and any unrecognized type,
+                        // as a safe fallback). An optional per-field "divide
+                        // value by N" rule set in the Template Builder - e.g.
+                        // Ingress/Egress kbps entered by the user gets divided
+                        // down (and rounded) to the switch's own 64kbps units -
+                        // is surfaced here as the input's min and a help hint;
+                        // the actual divide+round happens in generateCommands().
+                        const divisor = parseFloat(field.divisor);
+                        const hasDivisor = !isNaN(divisor) && divisor > 0;
+                        const inputType = field.type === 'number' || hasDivisor ? 'number' : 'text';
+                        inputHtml = '<input type="' + inputType + '" class="form-control dynamic-field-value" placeholder="' + _.escape(field.label) + '"' + (hasDivisor ? ' min="' + divisor + '"' : '') + '>';
+                        if (hasDivisor) {
+                            inputHtml += '<span class="help-block" style="font-size: 11px; margin-bottom: 0;">{{ __('Divided by') }} ' + divisor + ' {{ __('and rounded before being sent to the device.') }}</span>';
                         }
                     }
 
                     const row = `
-                        <div class="form-group dynamic-field-row" data-label="${_.escape(field.label)}" data-type="${_.escape(field.type)}" data-command="${_.escape(field.command)}" data-options="${_.escape(field.options || '')}" data-required="${isRequired}"${isPureInterfaceOpener ? ' style="display:none;"' : ''}>
+                        <div class="form-group dynamic-field-row" data-label="${_.escape(field.label)}" data-type="${_.escape(field.type)}" data-command="${_.escape(field.command)}" data-options="${_.escape(field.options || '')}" data-required="${isRequired}" data-divisor="${_.escape(field.divisor || '')}"${isPureInterfaceOpener ? ' style="display:none;"' : ''}>
                             <label class="col-sm-3 control-label">${_.escape(field.label)} ${isRequired ? '<span class="text-danger">*</span>' : '<span class="text-muted" style="font-weight: normal;">(optional)</span>'}</label>
                             <div class="col-sm-9">
                                 ${inputHtml}
@@ -1446,9 +1489,9 @@ switchport pvid @{{value}}
                 $container.find('.dynamic-field-value').on('change input', function() {
                     const $input = $(this);
                     const $row = $input.closest('.dynamic-field-row');
-                    const label = $row.data('label') || '';
-                    
-                    if (label === 'Ingress (1= 64kbps)' || label === 'Egress (1= 64kbps)') {
+                    const rowDivisor = parseFloat($row.data('divisor'));
+
+                    if (!isNaN(rowDivisor) && rowDivisor > 0) {
                         const val = $input.val();
                         let $errorSpan = $row.find('.validation-error-msg');
                         if ($errorSpan.length === 0) {
@@ -1460,8 +1503,8 @@ switchport pvid @{{value}}
                             const valNum = parseFloat(val);
                             if (isNaN(valNum)) {
                                 $errorSpan.text('Value must be a number').show();
-                            } else if (valNum < 64) {
-                                $errorSpan.text('Value cannot be less than 64').show();
+                            } else if (valNum < rowDivisor) {
+                                $errorSpan.text('Value cannot be less than ' + rowDivisor).show();
                             } else {
                                 $errorSpan.hide();
                             }
@@ -1676,16 +1719,17 @@ switchport pvid @{{value}}
                     }
 
                     const val = $(this).find('.dynamic-field-value').val();
+                    const rowDivisor = parseFloat($(this).data('divisor'));
                     if (!val || val.trim() === '') {
                         if (isRequired) {
                             missingFields.push(label);
                         }
-                    } else if (label === 'Ingress (1= 64kbps)' || label === 'Egress (1= 64kbps)') {
+                    } else if (!isNaN(rowDivisor) && rowDivisor > 0) {
                         const valNum = parseFloat(val);
                         if (isNaN(valNum)) {
                             missingFields.push(label + ' (Value must be a number)');
-                        } else if (valNum < 64) {
-                            missingFields.push(label + ' (Value cannot be less than 64)');
+                        } else if (valNum < rowDivisor) {
+                            missingFields.push(label + ' (Value cannot be less than ' + rowDivisor + ')');
                         }
                     }
                 });

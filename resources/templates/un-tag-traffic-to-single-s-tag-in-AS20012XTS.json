@@ -4,7 +4,7 @@
     "hostname": "",
     "interfaces": [],
     "hardware_models": [
-        "AS210T mother card"
+        "AS200\/12\/XTS"
     ],
     "fields": [
         {
@@ -55,36 +55,6 @@
             "options": null,
             "command": "interface {{interface}}",
             "required": true
-        },
-        {
-            "label": "Ingress (in kbps)",
-            "type": "number",
-            "options": null,
-            "command": "switchport rate-limit  {{value}} ingress",
-            "required": false,
-            "divisor": 64
-        },
-        {
-            "label": "Egress (in kbps)",
-            "type": "number",
-            "options": null,
-            "command": "switchport rate-limit  {{value}} egress",
-            "required": false,
-            "divisor": 64
-        },
-        {
-            "label": null,
-            "type": "putonlycmd",
-            "options": null,
-            "command": "!",
-            "required": false
-        },
-        {
-            "label": "Burst-size",
-            "type": "dropdown",
-            "options": "low:rate-limit burst-size low, Middle:rate-limit burst-size middle, High:rate-limit burst-size high",
-            "command": null,
-            "required": false
         }
     ],
     "created_at": "2026-09-09 15:15:52"
