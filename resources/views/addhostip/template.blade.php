@@ -342,10 +342,27 @@ switchport pvid @{{value}}
                 allowClear: true
             });
 
+            // Highlight templates that have no hardware_models restriction -
+            // those are "Global" (shown for every device's hardware model) -
+            // with a badge, both in the dropdown list and once selected.
+            function renderTemplateOption(data) {
+                if (!data.id || !data.element) {
+                    return data.text;
+                }
+                const hardware = $.trim($(data.element).data('hardware') || '');
+                const $result = $('<span></span>').text(data.text);
+                if (hardware === '') {
+                    $result.append(' <span class="label label-success">{{ __('Global') }}</span>');
+                }
+                return $result;
+            }
+
             $('#load_template').select2({
                 placeholder: "{{ __('-- Select Template --') }}",
                 allowClear: true,
                 width: '100%',
+                templateResult: renderTemplateOption,
+                templateSelection: renderTemplateOption,
                 matcher: function(params, data) {
                     if (!data.element) {
                         return data;
