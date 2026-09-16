@@ -1,0 +1,851 @@
+# ============================================================
+# SET Interface VLAN Attribute
+#
+# Ansible command:
+#
+# ansible-playbook -i inventory/192.168.2.245.yml \
+# playbooks/vlan/setinterfacevlanattribute.yml \
+# -e "interface=GigaEthernet0/3 pvid=120 mode=Access vlan_allowed_range=120 vlan_untagged_range=132"
+#
+# For Port-Aggregator:
+#
+# ansible-playbook -i inventory/192.168.2.245.yml \
+# playbooks/vlan/setinterfacevlanattribute.yml \
+# -e "interface=Port-aggregator1 pvid=120 mode=Trunk vlan_allowed_range=130 vlan_untagged_range=132"
+#
+# ============================================================
+
+- name: Set Interface VLAN Attribute
+  hosts: alphabridge_devices
+  gather_facts: false
+
+  vars:
+
+    # ==========================================================
+    # LibreNMS Ansible Inventory Plugin Paths
+    # ==========================================================
+
+    output_dir: "/opt/librenms/librenms-ansible-inventory-plugin/output"
+
+    temp_dir: "/opt/librenms/librenms-ansible-inventory-plugin/tmp"
+
+    python_bin: "/opt/librenms/librenms-ansible-inventory-plugin/bin/python3"
+
+    # ==========================================================
+    # Optional VLAN Allowed ADD/REMOVE
+    # ==========================================================
+
+    vlan_allowed_add: ""
+    vlan_allowed_remove: ""
+
+    # ==========================================================
+    # Optional VLAN Untagged ADD/REMOVE
+    # ==========================================================
+
+    vlan_untagged_add: ""
+    vlan_untagged_remove: ""
+
+  tasks:
+
+    # ==========================================================
+    # Validate Interface
+    # ==========================================================
+    - name: Validate interface
+      ansible.builtin.assert:
+        that:
+          - interface is defined
+          - interface | string | length > 0
+        fail_msg: "interface is required"
+
+    # ==========================================================
+    # Validate Mode
+    # ==========================================================
+    - name: Validate mode
+      ansible.builtin.assert:
+        that:
+          - mode is defined
+          - mode | lower in ['access', 'trunk']
+        fail_msg: "mode must be Access or Trunk"
+
+    # ==========================================================
+    # Validate PVID
+    # ==========================================================
+    - name: Validate PVID
+      ansible.builtin.assert:
+        that:
+          - pvid is defined
+          - pvid | string | regex_search('^[0-9]+$')
+          - pvid | int >= 1
+          - pvid | int <= 4094
+        fail_msg: "PVID must be between 1 and 4094"
+
+    # ==========================================================
+    # Validate VLAN Allowed Range
+    # ==========================================================
+    - name: Validate VLAN allowed range
+      ansible.builtin.assert:
+        that:
+          - vlan_allowed_range is defined
+          - vlan_allowed_range | string | length > 0
+        fail_msg: "vlan_allowed_range cannot be empty"
+
+    # ==========================================================
+    # Validate VLAN Untagged Range
+    # ==========================================================
+    - name: Validate VLAN untagged range
+      ansible.builtin.assert:
+        that:
+          - vlan_untagged_range is defined
+          - vlan_untagged_range | string | length > 0
+        fail_msg: "vlan_untagged_range cannot be empty"
+
+    # ==========================================================
+    # Access Mode Validation
+    # ==========================================================
+    - name: Validate Access mode VLAN values
+      ansible.builtin.assert:
+        that:
+          - mode | lower != 'access' or
+            (pvid | string == vlan_allowed_range | string)
+        fail_msg: >-
+          For Access mode, PVID and VLAN-allowed Range must be the same.
+          VLAN-untagged Range can be different.
+
+    # ==========================================================
+    # Validate VLAN Range Syntax
+    # ==========================================================
+    - name: Validate VLAN range syntax
+      ansible.builtin.assert:
+        that:
+          - item.value | string | regex_search('^[0-9 ,\-]+$')
+        fail_msg: "{{ item.key }} contains invalid VLAN range syntax"
+      loop:
+        - key: vlan_allowed_range
+          value: "{{ vlan_allowed_range | default('') }}"
+
+        - key: vlan_untagged_range
+          value: "{{ vlan_untagged_range | default('') }}"
+
+        - key: vlan_allowed_add
+          value: "{{ vlan_allowed_add | default('') }}"
+
+        - key: vlan_allowed_remove
+          value: "{{ vlan_allowed_remove | default('') }}"
+
+        - key: vlan_untagged_add
+          value: "{{ vlan_untagged_add | default('') }}"
+
+        - key: vlan_untagged_remove
+          value: "{{ vlan_untagged_remove | default('') }}"
+
+      when:
+        - item.value | string | length > 0
+
+    # ==========================================================
+    # Create Output Directory
+    # ==========================================================
+    - name: Create output directory
+      ansible.builtin.file:
+        path: "{{ output_dir }}"
+        state: directory
+        mode: "0755"
+      delegate_to: localhost
+
+    # ==========================================================
+    # Create Temporary Directory
+    # ==========================================================
+    - name: Create temporary directory
+      ansible.builtin.file:
+        path: "{{ temp_dir }}"
+        state: directory
+        mode: "0755"
+      delegate_to: localhost
+
+    # ==========================================================
+    # Create Python SET Script
+    # ==========================================================
+    - name: Create Interface VLAN Attribute SET script
+      ansible.builtin.copy:
+        dest: "{{ temp_dir }}/set_interface_vlan_attribute.py"
+        mode: "0755"
+
+        content: |
+          #!/usr/bin/env python3
+
+          import re
+          import sys
+          import time
+          import yaml
+          import paramiko
+
+
+          # =====================================================
+          # Device Details
+          # =====================================================
+
+          HOST = "{{ ansible_host }}"
+          USERNAME = "{{ ansible_user }}"
+          PASSWORD = "{{ ansible_password }}"
+
+
+          # =====================================================
+          # Input Parameters
+          # =====================================================
+
+          INTERFACE = "{{ interface }}"
+          PVID = "{{ pvid }}"
+          MODE = "{{ mode | lower }}"
+
+          VLAN_ALLOWED_RANGE = "{{ vlan_allowed_range | default('') }}"
+          VLAN_ALLOWED_ADD = "{{ vlan_allowed_add | default('') }}"
+          VLAN_ALLOWED_REMOVE = "{{ vlan_allowed_remove | default('') }}"
+
+          VLAN_UNTAGGED_RANGE = "{{ vlan_untagged_range | default('') }}"
+          VLAN_UNTAGGED_ADD = "{{ vlan_untagged_add | default('') }}"
+          VLAN_UNTAGGED_REMOVE = "{{ vlan_untagged_remove | default('') }}"
+
+
+          # =====================================================
+          # Output File
+          # =====================================================
+
+          OUTPUT_FILE = (
+              "{{ output_dir }}/"
+              + HOST
+              + "_interface_vlan_attribute.yml"
+          )
+
+
+          # =====================================================
+          # Convert GUI Interface Name
+          # =====================================================
+
+          def normalize_interface(interface):
+
+              interface = interface.strip()
+
+              match = re.match(
+                  r"^g(\d+)/(\d+)$",
+                  interface,
+                  re.IGNORECASE
+              )
+
+              if match:
+                  return (
+                      f"GigaEthernet"
+                      f"{match.group(1)}/"
+                      f"{match.group(2)}"
+                  )
+
+              match = re.match(
+                  r"^tg(\d+)/(\d+)$",
+                  interface,
+                  re.IGNORECASE
+              )
+
+              if match:
+                  return (
+                      f"TGigaEthernet"
+                      f"{match.group(1)}/"
+                      f"{match.group(2)}"
+                  )
+
+              match = re.match(
+                  r"^p(\d+)$",
+                  interface,
+                  re.IGNORECASE
+              )
+
+              if match:
+                  return f"Port-aggregator{match.group(1)}"
+
+              return interface
+
+
+          DEVICE_INTERFACE = normalize_interface(INTERFACE)
+
+
+          # =====================================================
+          # Result Structure
+          # =====================================================
+
+          result = {
+              "status": "FAILED",
+              "device_ip": HOST,
+              "interface": INTERFACE,
+              "device_interface": DEVICE_INTERFACE,
+              "pvid": PVID,
+              "mode": MODE.capitalize(),
+              "vlan_allowed_range": VLAN_ALLOWED_RANGE,
+              "vlan_allowed_add": VLAN_ALLOWED_ADD,
+              "vlan_allowed_remove": VLAN_ALLOWED_REMOVE,
+              "vlan_untagged_range": VLAN_UNTAGGED_RANGE,
+              "vlan_untagged_add": VLAN_UNTAGGED_ADD,
+              "vlan_untagged_remove": VLAN_UNTAGGED_REMOVE,
+              "commands": []
+          }
+
+
+          command_log = []
+
+
+          # =====================================================
+          # Write Result YAML
+          # =====================================================
+
+          def write_result():
+
+              with open(OUTPUT_FILE, "w") as f:
+
+                  yaml.safe_dump(
+                      result,
+                      f,
+                      sort_keys=False
+                  )
+
+
+          # =====================================================
+          # Read Data From SSH Shell
+          # =====================================================
+
+          def read_shell(shell, timeout=3):
+
+              buffer = ""
+
+              end_time = time.time() + timeout
+
+              while time.time() < end_time:
+
+                  if shell.recv_ready():
+
+                      data = shell.recv(65535).decode(
+                          "utf-8",
+                          errors="ignore"
+                      )
+
+                      buffer += data
+
+                  else:
+
+                      time.sleep(0.2)
+
+              return buffer
+
+
+          # =====================================================
+          # Detect Device Prompt
+          # =====================================================
+
+          def detect_prompt(text):
+
+              lines = [
+                  line.strip()
+                  for line in text.splitlines()
+                  if line.strip()
+              ]
+
+              for line in reversed(lines):
+
+                  if re.search(
+                      r"(>|#)\s*$",
+                      line
+                  ):
+
+                      return line
+
+              return ""
+
+
+          # =====================================================
+          # Get Current Device Prompt
+          # =====================================================
+
+          def get_prompt(shell):
+
+              output = read_shell(
+                  shell,
+                  timeout=3
+              )
+
+              prompt = detect_prompt(output)
+
+              if prompt:
+
+                  return prompt
+
+              shell.send("\n")
+
+              output = read_shell(
+                  shell,
+                  timeout=3
+              )
+
+              prompt = detect_prompt(output)
+
+              return prompt
+
+
+          # =====================================================
+          # Send CLI Command
+          # =====================================================
+
+          def send_command(shell, command, wait=1):
+
+              shell.send(command + "\n")
+
+              time.sleep(wait)
+
+              output = ""
+
+              end_time = time.time() + 4
+
+              while time.time() < end_time:
+
+                  if shell.recv_ready():
+
+                      data = shell.recv(65535).decode(
+                          "utf-8",
+                          errors="ignore"
+                      )
+
+                      output += data
+
+                  else:
+
+                      time.sleep(0.2)
+
+              command_log.append(
+                  {
+                      "command": command,
+                      "output": output
+                  }
+              )
+
+              return output
+
+
+          # =====================================================
+          # Check Device Output For Errors
+          # =====================================================
+
+          def has_error(output):
+
+              error_patterns = [
+                  r"%Error",
+                  r"Unknown command",
+                  r"Invalid",
+                  r"Error:",
+                  r"ERROR",
+                  r"Failed",
+                  r"failed",
+                  r"cannot",
+                  r"Cannot",
+                  r"syntax error"
+              ]
+
+              for pattern in error_patterns:
+
+                  if re.search(
+                      pattern,
+                      output,
+                      re.IGNORECASE
+                  ):
+
+                      return True
+
+              return False
+
+
+          client = None
+          shell = None
+
+
+          try:
+
+              # =================================================
+              # Connect To Device
+              # =================================================
+
+              client = paramiko.SSHClient()
+
+              client.set_missing_host_key_policy(
+                  paramiko.AutoAddPolicy()
+              )
+
+              client.connect(
+                  HOST,
+                  username=USERNAME,
+                  password=PASSWORD,
+                  look_for_keys=False,
+                  allow_agent=False,
+                  timeout=10,
+                  banner_timeout=10,
+                  auth_timeout=10
+              )
+
+
+              # =================================================
+              # Start Interactive CLI Shell
+              # =================================================
+
+              shell = client.invoke_shell()
+
+              time.sleep(2)
+
+
+              # =================================================
+              # Detect Initial Prompt
+              # =================================================
+
+              prompt = get_prompt(shell)
+
+              if not prompt:
+
+                  raise Exception(
+                      "Unable to detect device prompt"
+                  )
+
+
+              # =================================================
+              # Enter Privileged Mode
+              # =================================================
+
+              if prompt.endswith(">"):
+
+                  output = send_command(
+                      shell,
+                      "enable",
+                      wait=1
+                  )
+
+                  if has_error(output):
+
+                      raise Exception(
+                          "Failed to enter privileged mode"
+                      )
+
+                  prompt = get_prompt(shell)
+
+                  if not prompt.endswith("#"):
+
+                      raise Exception(
+                          "Privileged prompt not detected"
+                      )
+
+
+              # =================================================
+              # Enter Configuration Mode
+              # =================================================
+
+              if not re.search(
+                  r"(?:_+config|\(config(?:-[^)]*)?\))#\s*$",
+                  prompt,
+                  re.IGNORECASE
+              ):
+
+                  output = send_command(
+                      shell,
+                      "config",
+                      wait=1
+                  )
+
+                  if has_error(output):
+
+                      raise Exception(
+                          "Failed to enter configuration mode"
+                      )
+
+                  prompt = get_prompt(shell)
+
+                  if not re.search(
+                      r"(?:_+config|\(config(?:-[^)]*)?\))#\s*$",
+                      prompt,
+                      re.IGNORECASE
+                  ):
+
+                      raise Exception(
+                          "Configuration prompt not detected"
+                      )
+
+
+              # =================================================
+              # Enter Interface Configuration
+              # =================================================
+
+              output = send_command(
+                  shell,
+                  f"interface {DEVICE_INTERFACE}",
+                  wait=1
+              )
+
+              if has_error(output):
+
+                  raise Exception(
+                      f"Failed to enter interface "
+                      f"{DEVICE_INTERFACE}"
+                  )
+
+
+              # =================================================
+              # Configure PVID
+              # =================================================
+
+              output = send_command(
+                  shell,
+                  f"switchport pvid {PVID}",
+                  wait=0.8
+              )
+
+              if has_error(output):
+
+                  raise Exception(
+                      f"Failed to configure PVID {PVID}"
+                  )
+
+
+              # =================================================
+              # Configure Interface Mode
+              # =================================================
+
+              output = send_command(
+                  shell,
+                  f"switchport mode {MODE}",
+                  wait=0.8
+              )
+
+              if has_error(output):
+
+                  raise Exception(
+                      f"Failed to configure mode {MODE}"
+                  )
+
+
+              # =================================================
+              # Configure VLAN Allowed Range
+              # =================================================
+
+              if VLAN_ALLOWED_RANGE:
+
+                  output = send_command(
+                      shell,
+                      "switchport trunk vlan-allowed "
+                      + VLAN_ALLOWED_RANGE,
+                      wait=0.8
+                  )
+
+                  if has_error(output):
+
+                      raise Exception(
+                          "Failed to configure VLAN allowed range"
+                      )
+
+
+              # =================================================
+              # Configure VLAN Untagged Range
+              # =================================================
+
+              if VLAN_UNTAGGED_RANGE:
+
+                  output = send_command(
+                      shell,
+                      "switchport trunk vlan-untagged "
+                      + VLAN_UNTAGGED_RANGE,
+                      wait=0.8
+                  )
+
+                  if has_error(output):
+
+                      raise Exception(
+                          "Failed to configure VLAN untagged range"
+                      )
+
+
+              # =================================================
+              # Add VLAN Allowed Range
+              # =================================================
+
+              if VLAN_ALLOWED_ADD:
+
+                  output = send_command(
+                      shell,
+                      "switchport trunk vlan-allowed add "
+                      + VLAN_ALLOWED_ADD,
+                      wait=0.8
+                  )
+
+                  if has_error(output):
+
+                      raise Exception(
+                          "Failed to add VLAN allowed range"
+                      )
+
+
+              # =================================================
+              # Remove VLAN Allowed Range
+              # =================================================
+
+              if VLAN_ALLOWED_REMOVE:
+
+                  output = send_command(
+                      shell,
+                      "switchport trunk vlan-allowed remove "
+                      + VLAN_ALLOWED_REMOVE,
+                      wait=0.8
+                  )
+
+                  if has_error(output):
+
+                      raise Exception(
+                          "Failed to remove VLAN allowed range"
+                      )
+
+
+              # =================================================
+              # Add VLAN Untagged Range
+              # =================================================
+
+              if VLAN_UNTAGGED_ADD:
+
+                  output = send_command(
+                      shell,
+                      "switchport trunk vlan-untagged add "
+                      + VLAN_UNTAGGED_ADD,
+                      wait=0.8
+                  )
+
+                  if has_error(output):
+
+                      raise Exception(
+                          "Failed to add VLAN untagged range"
+                      )
+
+
+              # =================================================
+              # Remove VLAN Untagged Range
+              # =================================================
+
+              if VLAN_UNTAGGED_REMOVE:
+
+                  output = send_command(
+                      shell,
+                      "switchport trunk vlan-untagged remove "
+                      + VLAN_UNTAGGED_REMOVE,
+                      wait=0.8
+                  )
+
+                  if has_error(output):
+
+                      raise Exception(
+                          "Failed to remove VLAN untagged range"
+                      )
+
+
+              # =================================================
+              # Exit Interface Configuration
+              # =================================================
+
+              send_command(
+                  shell,
+                  "exit",
+                  wait=0.5
+              )
+
+
+              # =================================================
+              # SET Operation Successful
+              # =================================================
+
+              result["status"] = "SUCCESS"
+
+              result["commands"] = command_log
+
+              write_result()
+
+              print("SUCCESS")
+
+              sys.exit(0)
+
+
+          except Exception as exc:
+
+              # =================================================
+              # SET Operation Failed
+              # =================================================
+
+              result["status"] = "FAILED"
+
+              result["reason"] = str(exc)
+
+              result["commands"] = command_log
+
+              write_result()
+
+              print(
+                  "FAILED: "
+                  + str(exc)
+              )
+
+              sys.exit(1)
+
+
+          finally:
+
+              # =================================================
+              # Close SSH Shell and Connection
+              # =================================================
+
+              try:
+
+                  if shell:
+
+                      shell.close()
+
+              except Exception:
+
+                  pass
+
+
+              try:
+
+                  if client:
+
+                      client.close()
+
+              except Exception:
+
+                  pass
+
+
+    # ==========================================================
+    # Execute SET Python Script
+    # ==========================================================
+    - name: Run Interface VLAN Attribute SET
+      ansible.builtin.command:
+        cmd: >
+          {{ python_bin }}
+          {{ temp_dir }}/set_interface_vlan_attribute.py
+      register: set_result
+      delegate_to: localhost
+
+      changed_when: "'SUCCESS' in (set_result.stdout | default(''))"
+
+      failed_when: >
+        set_result.rc != 0 or
+        ('SUCCESS' not in (set_result.stdout | default('')))
+
+    # ==========================================================
+    # Read SET Result File
+    # ==========================================================
+    - name: Read Interface VLAN Attribute result
+      ansible.builtin.slurp:
+        src: "{{ output_dir }}/{{ ansible_host }}_interface_vlan_attribute.yml"
+      register: vlan_result_file
+      delegate_to: localhost
+
+    # ==========================================================
+    # Display Final SET Result
+    # ==========================================================
+    - name: Show Interface VLAN Attribute result
+      ansible.builtin.debug:
+        msg: "{{ vlan_result_file.content | b64decode }}"
+

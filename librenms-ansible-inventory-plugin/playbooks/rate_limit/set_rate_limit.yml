@@ -1,0 +1,669 @@
+# ==========================================
+# set_rate_limit.yml
+# Created on Sept 15, 2026 by Vikash Kumar (vikash.kumar@alphabrige.tech).
+#
+# Device Type : AS210T
+# Firmware Version : 2.2.0D Build 159890
+#
+# Copyright (c), ALPHA BRIDGE, Inc.
+# 357D, Udyog Vihar Industrial Area Phase VI, Sector 37, Gurugram, Haryana.
+#
+# All rights reserved.
+#
+# This software is the confidential and proprietary information of
+# ALPHA BRIDGE, Inc. ("Confidential Information").  You shall not
+# disclose such Confidential Information and shall use it only in
+# accordance with the terms of the license agreement you entered into
+# with ALPHA BRIDGE.
+
+# =============================================================================
+# Playbook Name : Set Interface Rate Limit
+# =============================================================================
+#
+# Description:
+# This playbook configures ingress/receive and/or egress/send rate limits on
+# switch interfaces through SSH.
+#
+# Interface input is used directly as entered by the user.
+# Examples:
+#   interface=GigaEthernet0/1
+#   interface=g0/1
+#   interface=TGigaEthernet0/1
+#   interface=tg0/1
+#
+# No interface-name validation or alias conversion is performed.
+#
+# Mandatory CLI flow after SSH login:
+#
+#   enable
+#   config
+#   interface <interface-name>
+#     <rate-limit command(s)>
+#   exit
+#
+# IMPORTANT:
+#   Configuration commands MUST be executed from global configuration mode.
+#   Therefore this playbook always sends "enable" first and then "config"
+#   before any interface/rate-limit command is sent to the switch.
+#
+# Example switch command sequences:
+#
+#   # Configure ingress and egress using 64kbps units
+#   enable
+#   config
+#   interface GigaEthernet0/1
+#   switchport rate-limit 300 ingress
+#   switchport rate-limit 500 egress
+#   exit
+#
+#   # Disable ingress only
+#   enable
+#   config
+#   interface GigaEthernet0/3
+#   no switchport rate-limit ingress
+#   exit
+#
+#   # Configure egress using percentage
+#   enable
+#   config
+#   interface TGigaEthernet0/1
+#   switchport rate-limit bandwidth 60 egress
+#   exit
+#
+# Input rules:
+#
+#   Receive:
+#     receive_status: Enable | Disable
+#     receive_speed_unit: 64kbps | Percent
+#     receive_speed:
+#       64kbps -> 1..15625
+#       Percent -> 1..100
+#
+#   Send:
+#     send_status: Enable | Disable
+#     send_speed_unit: 64kbps | Percent
+#     send_speed:
+#       64kbps -> 1..15625
+#       Percent -> 1..100
+#
+# Notes:
+#   - Receive fields map to ingress.
+#   - Send fields map to egress.
+#   - A direction is changed only when its status is supplied.
+#   - Enable requires both speed unit and speed.
+#   - Disable generates "no switchport rate-limit <direction>".
+#   - Unit aliases "percentage", "percent", "64kpbs" are accepted and
+#     normalized to Percent / 64kbps.
+#
+# -----------------------------------------------------------------------------
+# Single-interface examples
+# -----------------------------------------------------------------------------
+#
+# 1) Configure both receive and send:
+#
+# ansible-playbook set_rate_limit.yml \
+#   -e "interface=GigaEthernet0/1 \
+#       receive_status=Enable receive_speed_unit=64kbps receive_speed=300 \
+#       send_status=Enable send_speed_unit=64kbps send_speed=500"
+#
+# 2) Configure only receive:
+#
+# ansible-playbook set_rate_limit.yml \
+#   -e "interface=GigaEthernet0/1 \
+#       receive_status=Enable receive_speed_unit=64kbps receive_speed=600"
+#
+# 3) Disable only receive:
+#
+# ansible-playbook set_rate_limit.yml \
+#   -e "interface=GigaEthernet0/3 receive_status=Disable"
+#
+# 4) Configure TGigaEthernet receive as 64kbps and send as Percent:
+#
+# ansible-playbook set_rate_limit.yml \
+#   -e "interface=TGigaEthernet0/1 \
+#       receive_status=Enable receive_speed_unit=64kbps receive_speed=300 \
+#       send_status=Enable send_speed_unit=Percent send_speed=60"
+#
+# Output:
+#   output/<switch_ip>_set_rate_limit.yml
+# =============================================================================
+
+- name: Set interface rate limit
+  hosts: alphabridge_devices
+  gather_facts: false
+
+  tasks:
+
+    # ==========================================
+    # Validate top-level input mode
+    # ==========================================
+
+    - name: Validate Rate Limit input
+      ansible.builtin.assert:
+        that:
+          - >
+            (rate_limits is defined and rate_limits is iterable and
+             rate_limits is not string and rate_limits | length > 0)
+            or
+            (interface is defined and interface | string | length > 0)
+        fail_msg: >-
+          Provide either:
+          (1) a single interface using -e "interface=GigaEthernet0/1 ..."
+          or
+          (2) rate_limits as a non-empty list of dictionaries.
+
+    # ==========================================
+    # Normalize single / multiple input
+    # ==========================================
+    # The API may send either:
+    #   1) one interface through normal extra-vars, or
+    #   2) many interfaces through the rate_limits list.
+    #
+    # Converting both forms to one list here keeps the SSH/Python logic
+    # identical for single and multiple interface configuration.
+
+    - name: Build normalized Rate Limit request list
+      ansible.builtin.set_fact:
+        rate_limit_requests: >-
+          {{
+            rate_limits
+            if (rate_limits is defined)
+            else
+            [
+              {
+                'interface': interface | default(''),
+                'receive_status': receive_status | default(none),
+                'receive_speed_unit': receive_speed_unit | default(none),
+                'receive_speed': receive_speed | default(none),
+                'send_status': send_status | default(none),
+                'send_speed_unit': send_speed_unit | default(none),
+                'send_speed': send_speed | default(none)
+              }
+            ]
+          }}
+
+    # ==========================================
+    # Create Python SSH Script
+    # ==========================================
+    # A temporary Python script is generated for the target switch.
+    # It performs four main jobs:
+    #   - validates every interface and value,
+    #   - opens the SSH session and enters enable -> config mode,
+    #   - applies one or more interface configurations sequentially.
+
+    - name: Create Python SSH Script for Rate Limit set
+      ansible.builtin.copy:
+        dest: "/opt/librenms/librenms-ansible-inventory-plugin/tmp/rate_limit_set_exec.py"
+        mode: '0755'
+        content: |
+          #!/usr/bin/env python3
+
+          import json
+          import paramiko
+          import re
+          import time
+
+          HOST = "{{ ansible_host }}"
+          USER = "{{ ansible_user }}"
+          PASSWORD = "{{ ansible_password }}"
+
+          REQUESTS = json.loads(r'''{{ rate_limit_requests | to_json }}''')
+
+
+          # --------------------------------------------------------------
+          # Read CLI output until the switch prompt returns.
+          # This prevents us from sending the next command before the
+          # previous command has completed.
+          # --------------------------------------------------------------
+          def read_until_prompt(shell, prompt_regex=r'[>#]\s*$', timeout=10):
+              buf = ""
+              end_time = time.time() + timeout
+
+              while time.time() < end_time:
+                  if shell.recv_ready():
+                      chunk = shell.recv(65535).decode(errors="ignore")
+                      buf += chunk
+                      if re.search(prompt_regex, buf):
+                          return buf
+                  else:
+                      time.sleep(0.1)
+
+              return buf
+
+
+          # Remove terminal ANSI escape characters before checking output.
+          def clean_cli_output(text):
+              ansi_re = re.compile(r'\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])')
+              return ansi_re.sub("", text)
+
+
+          # --------------------------------------------------------------
+          # Normalize status values.
+          # Only Enable and Disable are valid when a direction is supplied.
+          # --------------------------------------------------------------
+          def normalize_status(value, field_name):
+              if value is None:
+                  return None
+
+              value = str(value).strip().lower()
+
+              if value == "enable":
+                  return "Enable"
+
+              if value == "disable":
+                  return "Disable"
+
+              raise ValueError(
+                  f"{field_name} must be Enable or Disable."
+              )
+
+
+          # --------------------------------------------------------------
+          # Normalize speed-unit values.
+          # Percent/percentage/% use the switch "bandwidth" syntax.
+          # 64kbps uses the normal numeric rate-limit syntax.
+          # The common input typo "64kpbs" is accepted intentionally.
+          # --------------------------------------------------------------
+          def normalize_unit(value, field_name):
+              if value is None:
+                  return None
+
+              value = str(value).strip().lower().replace(" ", "")
+
+              if value in ("percent", "percentage", "%"):
+                  return "Percent"
+
+              if value in ("64kbps", "64kpbs"):
+                  return "64kbps"
+
+              raise ValueError(
+                  f"{field_name} must be 64kbps or Percent."
+              )
+
+
+          # Speed values must be whole numbers.
+          def normalize_speed(value, field_name):
+              if value is None or str(value).strip() == "":
+                  return None
+
+              text = str(value).strip()
+              if not re.fullmatch(r'\d+', text):
+                  raise ValueError(
+                      f"{field_name} must be an integer."
+                  )
+
+              return int(text)
+
+
+          # --------------------------------------------------------------
+          # Keep the interface exactly as supplied by the user.
+          #
+          # Examples:
+          #   GigaEthernet0/1
+          #   g0/1
+          #   TGigaEthernet0/1
+          #   tg0/1
+          #
+          # No interface-name validation or alias conversion is performed.
+          # Only surrounding spaces are removed.
+          # --------------------------------------------------------------
+          def get_interface_input(interface_name):
+              if interface_name is None:
+                  raise ValueError("interface is required.")
+
+              interface_name = str(interface_name).strip()
+
+              if not interface_name:
+                  raise ValueError("interface is required.")
+
+              return interface_name
+
+
+          # --------------------------------------------------------------
+          # Receive -> ingress
+          # Send    -> egress
+          #
+          # Enable + 64kbps:
+          #   switchport rate-limit <1-15625> ingress|egress
+          #
+          # Enable + Percent:
+          #   switchport rate-limit bandwidth <1-100> ingress|egress
+          #
+          # Disable:
+          #   no switchport rate-limit ingress|egress
+          #
+          # Returning None means that direction was not provided by the
+          # user, so the existing switch setting for that direction is left
+          # unchanged.
+          # --------------------------------------------------------------
+          def build_direction_command(
+              direction,
+              status,
+              unit,
+              speed,
+              status_field,
+              unit_field,
+              speed_field
+          ):
+              status = normalize_status(status, status_field)
+
+              if status is None:
+                  if unit is not None or speed is not None:
+                      raise ValueError(
+                          f"{status_field} is required when {unit_field} or "
+                          f"{speed_field} is supplied."
+                      )
+                  return None
+
+              if status == "Disable":
+                  if unit is not None or speed is not None:
+                      raise ValueError(
+                          f"{unit_field} and {speed_field} must not be supplied "
+                          f"when {status_field}=Disable."
+                      )
+                  return f"no switchport rate-limit {direction}"
+
+              unit = normalize_unit(unit, unit_field)
+              speed = normalize_speed(speed, speed_field)
+
+              if unit is None:
+                  raise ValueError(
+                      f"{unit_field} is required when {status_field}=Enable."
+                  )
+
+              if speed is None:
+                  raise ValueError(
+                      f"{speed_field} is required when {status_field}=Enable."
+                  )
+
+              if unit == "Percent":
+                  if not 1 <= speed <= 100:
+                      raise ValueError(
+                          f"{speed_field} must be between 1 and 100 "
+                          f"when {unit_field}=Percent."
+                      )
+
+                  return (
+                      f"switchport rate-limit bandwidth {speed} {direction}"
+                  )
+
+              if unit == "64kbps":
+                  if not 1 <= speed <= 15625:
+                      raise ValueError(
+                          f"{speed_field} must be between 1 and 15625 "
+                          f"when {unit_field}=64kbps."
+                      )
+
+                  return f"switchport rate-limit {speed} {direction}"
+
+              raise ValueError(f"Unsupported unit for {unit_field}: {unit}")
+
+
+          # --------------------------------------------------------------
+          # Validate one interface request and build the commands that must
+          # run while already inside global configuration mode.
+          #
+          # Example result:
+          #   interface GigaEthernet0/1
+          #   switchport rate-limit 300 ingress
+          #   switchport rate-limit bandwidth 60 egress
+          #   exit
+          # --------------------------------------------------------------
+          def normalize_request(item, index):
+              if not isinstance(item, dict):
+                  raise ValueError(
+                      f"rate_limits[{index}] must be a dictionary."
+                  )
+
+              # Use the interface exactly as supplied by the user.
+              interface_name = get_interface_input(
+                  item.get("interface", "")
+              )
+
+              ingress_command = build_direction_command(
+                  direction="ingress",
+                  status=item.get("receive_status"),
+                  unit=item.get("receive_speed_unit"),
+                  speed=item.get("receive_speed"),
+                  status_field="receive_status",
+                  unit_field="receive_speed_unit",
+                  speed_field="receive_speed"
+              )
+
+              egress_command = build_direction_command(
+                  direction="egress",
+                  status=item.get("send_status"),
+                  unit=item.get("send_speed_unit"),
+                  speed=item.get("send_speed"),
+                  status_field="send_status",
+                  unit_field="send_speed_unit",
+                  speed_field="send_speed"
+              )
+
+              if ingress_command is None and egress_command is None:
+                  raise ValueError(
+                      "At least one of receive_status or send_status must be "
+                      f"supplied for {interface_name}."
+                  )
+
+              commands = [f"interface {interface_name}"]
+
+              if ingress_command is not None:
+                  commands.append(ingress_command)
+
+              if egress_command is not None:
+                  commands.append(egress_command)
+
+              commands.append("exit")
+
+              return {
+                  "interface": interface_name,
+                  "commands": commands
+              }
+
+
+          shell = None
+          ssh = None
+
+          try:
+              if not isinstance(REQUESTS, list) or not REQUESTS:
+                  raise ValueError(
+                      "rate_limit_requests must be a non-empty list."
+                  )
+
+              normalized_requests = []
+
+              for index, item in enumerate(REQUESTS):
+                  normalized_requests.append(
+                      normalize_request(item, index)
+                  )
+
+              ssh = paramiko.SSHClient()
+              ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+              ssh.connect(
+                  HOST,
+                  username=USER,
+                  password=PASSWORD,
+                  look_for_keys=False,
+                  allow_agent=False,
+                  timeout=10
+              )
+
+              # Open an interactive shell because the switch requires
+              # configuration mode before interface commands can be applied.
+              shell = ssh.invoke_shell()
+              time.sleep(0.5)
+
+              # 1) Wait for the initial user/exec prompt after SSH login.
+              read_until_prompt(shell, timeout=5)
+
+              # 2) Enter privileged EXEC mode.
+              #    Required command flow: SSH -> enable -> config -> commands.
+              shell.send("enable\n")
+              read_until_prompt(shell, timeout=5)
+
+              # 3) Enter global configuration mode.
+              #    This is mandatory for set/create operations on the switch.
+              #    All interface and rate-limit commands below are executed
+              #    only after this command has succeeded.
+              shell.send("config\n")
+              read_until_prompt(shell, timeout=5)
+
+              results = []
+
+              # 4) Apply each requested interface configuration.
+              #    normalize_request() already builds the correct sequence:
+              #      interface <name>
+              #      <ingress command, when supplied>
+              #      <egress command, when supplied>
+              #      exit
+              #
+              #    The per-interface "exit" returns to global config mode,
+              #    ready for the next interface in a multi-interface request.
+              for request in normalized_requests:
+                  interface_name = request["interface"]
+                  command_results = []
+
+                  for command in request["commands"]:
+                      shell.send(command + "\n")
+                      output = read_until_prompt(shell, timeout=10)
+                      output = clean_cli_output(output)
+
+                      error_patterns = [
+                          r'%\s*Invalid input',
+                          r'%\s*Incomplete command',
+                          r'%\s*Ambiguous command',
+                          r'%\s*Error',
+                          r'Command rejected',
+                          r'Unknown command'
+                      ]
+
+                      failed = any(
+                          re.search(pattern, output, re.IGNORECASE)
+                          for pattern in error_patterns
+                      )
+
+                      command_results.append({
+                          "command": command,
+                          "status": "failed" if failed else "success",
+                          "output": output.strip()
+                      })
+
+                      if failed:
+                          raise RuntimeError(
+                              f"Command failed on {interface_name}: {command}"
+                          )
+
+                  results.append({
+                      "interface": interface_name,
+                      "status": "success",
+                      "commands": command_results
+                  })
+
+              # All interface operations are complete.  At this point the
+              # switch is back at global configuration mode because every
+              # request ends with an interface-level "exit".
+              # Exit global configuration mode before closing the SSH shell.
+              shell.send("exit\n")
+              read_until_prompt(shell, timeout=5)
+
+              shell.close()
+              ssh.close()
+              shell = None
+              ssh = None
+
+              print(json.dumps({
+                  "ip": HOST,
+                  "status": "success"
+              }, indent=4))
+
+          except Exception as e:
+              try:
+                  if shell:
+                      shell.close()
+
+                  if ssh:
+                      ssh.close()
+              except Exception:
+                  pass
+
+              print(json.dumps({
+                  "ip": HOST,
+                  "status": "failed",
+                  "error": str(e)
+              }, indent=4))
+
+    # ==========================================
+    # Execute the script
+    # ==========================================
+
+    - name: Execute Rate Limit set script
+      ansible.builtin.command:
+        cmd: >
+          /opt/librenms/librenms-ansible-inventory-plugin/bin/python3
+          /opt/librenms/librenms-ansible-inventory-plugin/tmp/rate_limit_set_exec.py
+      register: rate_limit_raw
+      changed_when: false
+      failed_when: false
+
+    # ==========================================
+    # Parse JSON result
+    # ==========================================
+
+    - name: Convert Rate Limit result to JSON
+      ansible.builtin.set_fact:
+        rate_limit_result: "{{ rate_limit_raw.stdout | from_json }}"
+
+    # ==========================================
+    # Display result (on success)
+    # ==========================================
+
+    - name: Display Rate Limit result
+      ansible.builtin.debug:
+        msg: |
+          ip: {{ rate_limit_result.ip }}
+          status: {{ rate_limit_result.status }}
+      when: rate_limit_result.status == "success"
+
+    # ==========================================
+    # Display error (if failed)
+    # ==========================================
+
+    - name: Display error
+      ansible.builtin.debug:
+        msg: "Error: {{ rate_limit_result.error }}"
+      when: rate_limit_result.status == "failed"
+
+    # ==========================================
+    # Save result (only on success)
+    # ==========================================
+
+    - name: Save Rate Limit set result
+      ansible.builtin.copy:
+        dest: "/opt/librenms/librenms-ansible-inventory-plugin/output/{{ ansible_host }}_set_rate_limit.yml"
+        content: |
+          ip: {{ rate_limit_result.ip }}
+          status: {{ rate_limit_result.status }}
+      when: rate_limit_result.status == "success"
+
+    # ==========================================
+    # Fail for real errors
+    # ==========================================
+
+    - name: Fail if Rate Limit set failed
+      ansible.builtin.fail:
+        msg: "{{ rate_limit_result.error }}"
+      when: rate_limit_result.status == "failed"
+
+    # ==========================================
+    # Final message (only on success)
+    # ==========================================
+
+    - name: Display result file
+      ansible.builtin.debug:
+        msg: >-
+          Rate limit configuration applied successfully.
+          Result saved to output/{{ ansible_host }}_set_rate_limit.yml
+      when: rate_limit_result.status == "success"
+
+

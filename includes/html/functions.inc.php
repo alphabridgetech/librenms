@@ -590,6 +590,187 @@ function alert_details($details)
     return [$all_fault_detail, $max_row_length];
 }//end alert_details()
 
+/**
+ * Build a "which port(s) are down right now, and since when?" section to
+ * prepend to the existing (hidden-by-default, "+"-toggle) incident detail
+ * block on the alerts list - NOT a new column, just makes that same
+ * existing expand view identify a single newly-down port at a glance
+ * instead of only ever showing the full "All currently down items" list.
+ *
+ * Deliberately does not rely on the alert_log entry's own diff.added -
+ * RunAlerts/AlertRules only compute that some of the time (it can end up
+ * missing even when the port set genuinely changed), so instead every
+ * port_id captured in the rule[] snapshot is looked up live against
+ * ports/devices and given its own down-since time, computed the same way
+ * the Ports page already does it (device uptime minus ifLastChange, see
+ * app/Http/Controllers/Table/PortsController.php). A port that only just
+ * went down stands out with a much more recent timestamp than ports that
+ * were already down before it - no separate "added" tracking needed.
+ */
+function alert_live_port_status($details)
+{
+    if (is_string($details)) {
+        $details = json_decode(gzuncompress($details), true);
+    } elseif (! is_array($details)) {
+        $details = [];
+    }
+
+    $port_ids = [];
+    foreach ($details['rule'] ?? [] as $tmp_alerts) {
+        if (isset($tmp_alerts['port_id'])) {
+            $port_ids[$tmp_alerts['port_id']] = true;
+        }
+    }
+
+    if (empty($port_ids)) {
+        return '';
+    }
+
+    $live_ports = \App\Models\Port::whereIn('port_id', array_keys($port_ids))
+        ->with('device:device_id,uptime')
+        ->get(['port_id', 'device_id', 'ifIndex', 'ifName', 'ifDescr', 'ifAlias', 'ifOperStatus', 'ifAdminStatus', 'ifLastChange']);
+
+    $entries = [];
+    foreach ($live_ports as $port) {
+        // Only show a genuine fault: admin up but operationally down. Skip
+        // ports that have since recovered (stale snapshot), AND ports that
+        // are administratively shut down on purpose (ifAdminStatus=down) -
+        // those aren't an outage, just an intentionally-disabled port, and
+        // shouldn't clutter this "what's actually wrong right now" list.
+        if ($port->ifAdminStatus !== 'up' || $port->ifOperStatus !== 'down') {
+            continue;
+        }
+
+        $port_array = cleanPort($port->toArray());
+        $line = generate_port_link($port_array);
+
+        // Track how long this port has been down (in seconds) so the list
+        // can be sorted newest-down-first below - defaults to "forever"
+        // (sorts last) when it can't be determined.
+        $seconds_down = PHP_INT_MAX;
+        $device_uptime = $port->device->uptime ?? null;
+        if ($device_uptime && $port->ifLastChange !== null) {
+            $computed = $device_uptime - ($port->ifLastChange / 100);
+            if ($computed >= 0) {
+                $seconds_down = $computed;
+                $down_since = now()->subSeconds((int) round($computed))->format('Y-m-d H:i:s');
+                $line .= ' <span class="text-muted">(down since ' . htmlspecialchars($down_since) . ')</span>';
+            }
+        }
+
+        $entries[] = ['seconds_down' => $seconds_down, 'line' => $line];
+    }
+
+    if (empty($entries)) {
+        return '';
+    }
+
+    // Most-recently-down port first, so a single new failure is
+    // immediately visible at the top instead of buried alphabetically
+    // among ports that have been down for a while.
+    usort($entries, fn ($a, $b) => $a['seconds_down'] <=> $b['seconds_down']);
+
+    $lines = array_column($entries, 'line');
+
+    // A visual gap after the newest entry separates "what just went wrong"
+    // from "what's already been down for a while", so it doesn't blend
+    // into the rest of the list.
+    $list_html = count($lines) > 1
+        ? $lines[0] . '<br><br>' . implode('<br>', array_slice($lines, 1))
+        : $lines[0];
+
+    return '<b>' . __('Currently down') . ':</b><br>' . $list_html . '<br><br>';
+}//end alert_live_port_status()
+
+/**
+ * Build a "port(s) went down / came back up" summary for ONE historical
+ * alert_log row, for the Alert Log (/alert-log) page - a history of past
+ * events, unlike /alerts which only ever shows the CURRENT state of active
+ * alerts. A live ports/devices lookup (as alert_live_port_status() does)
+ * would be wrong here: an old row's ports may well be up again by now,
+ * which isn't what a past history entry is describing.
+ *
+ * Instead this compares the row's own stored port snapshot ('rule')
+ * against the immediately-preceding alert_log row for the same
+ * device+rule, purely from the two stored snapshots - added ports (in
+ * this row, not the previous one) "went down", removed ports (in the
+ * previous row, not this one) "came back up". This mirrors what
+ * AlertRules.php's own diff.added/diff.resolved is meant to capture, but
+ * computed independently at display time since that stored diff isn't
+ * always present (see alert_live_port_status() above for the same gap on
+ * /alerts).
+ *
+ * $time_logged (this alert_log row's own time_logged) is stamped on every
+ * port line - every port in a given transition changed at the same time
+ * (they're all part of the same historical event), unlike
+ * alert_live_port_status()'s per-port down-since on /alerts.
+ */
+function alert_log_port_transition($current_details, $previous_details, $time_logged = null)
+{
+    $decode = function ($details) {
+        if (is_string($details)) {
+            return json_decode(gzuncompress($details), true) ?: [];
+        }
+
+        return is_array($details) ? $details : [];
+    };
+
+    $current = $decode($current_details);
+    $previous = $decode($previous_details);
+
+    $index_by_port_id = function ($details) {
+        $ports = [];
+        foreach ($details['rule'] ?? [] as $item) {
+            if (isset($item['port_id'])) {
+                $ports[$item['port_id']] = $item;
+            }
+        }
+
+        return $ports;
+    };
+
+    $current_ports = $index_by_port_id($current);
+    $previous_ports = $index_by_port_id($previous);
+
+    if (empty($current_ports) && empty($previous_ports)) {
+        return '';
+    }
+
+    $went_down = array_diff_key($current_ports, $previous_ports);
+    $came_up = array_diff_key($previous_ports, $current_ports);
+
+    if (empty($went_down) && empty($came_up)) {
+        return '';
+    }
+
+    $render = function ($items, $time_word) use ($time_logged) {
+        $lines = [];
+        foreach ($items as $item) {
+            $line = generate_port_link(cleanPort($item));
+            if ($time_logged) {
+                $line .= ' <span class="text-muted">(' . $time_word . ' ' . htmlspecialchars($time_logged) . ')</span>';
+            }
+            $lines[] = $line;
+        }
+
+        // Same visual gap after the first entry used on /alerts, separating
+        // it from the rest of the list once there's more than one port.
+        return count($lines) > 1
+            ? $lines[0] . '<br><br>' . implode('<br>', array_slice($lines, 1))
+            : $lines[0];
+    };
+
+    $sections = [];
+    if (! empty($went_down)) {
+        $sections[] = '<b class="text-danger">' . __('Went down') . ':</b><br>' . $render($went_down, __('down since'));
+    }
+    if (! empty($came_up)) {
+        $sections[] = '<b class="text-success">' . __('Came back up') . ':</b><br>' . $render($came_up, __('up since'));
+    }
+
+    return implode('<br><br>', $sections) . '<br><br>';
+}//end alert_log_port_transition()
+
 function format_alert_details($alert_idx, $tmp_alerts, $type_info = null)
 {
     $fault_detail = '';

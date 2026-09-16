@@ -1,0 +1,629 @@
+---
+- name: Get Interface VLAN Attribute Configuration
+  hosts: alphabridge_devices
+  gather_facts: false
+
+  vars:
+    output_dir: "/opt/librenms/librenms-ansible-inventory-plugin/output"
+    temp_dir: "/opt/librenms/librenms-ansible-inventory-plugin/tmp"
+    python_bin: "/opt/librenms/librenms-ansible-inventory-plugin/bin/python3"
+
+  tasks:
+
+    # =====================================================
+    # Create temporary directory
+    # =====================================================
+    - name: Create temporary directory
+      ansible.builtin.file:
+        path: "{{ temp_dir }}"
+        state: directory
+        mode: "0755"
+      delegate_to: localhost
+
+    # =====================================================
+    # Create output directory
+    # =====================================================
+    - name: Create output directory
+      ansible.builtin.file:
+        path: "{{ output_dir }}"
+        state: directory
+        mode: "0755"
+      delegate_to: localhost
+
+    # =====================================================
+    # Create Interface VLAN Attribute GET Python script
+    # =====================================================
+    - name: Create Interface VLAN Attribute GET Python script
+      ansible.builtin.copy:
+        dest: "{{ temp_dir }}/get_interface_vlan_attribute.py"
+        mode: "0755"
+        content: |
+          import paramiko
+          import time
+          import re
+          import yaml
+          import os
+          import sys
+
+          # =====================================================
+          # Device details
+          # =====================================================
+          HOST = "{{ ansible_host }}"
+          USERNAME = "{{ ansible_user }}"
+          PASSWORD = "{{ ansible_password }}"
+
+          OUTPUT_FILE = (
+              "{{ output_dir }}/"
+              + HOST
+              + "_interface_vlan_attribute.yml"
+          )
+
+          # =====================================================
+          # Helper function to wait for device prompt
+          # =====================================================
+          def wait_for_prompt(shell, timeout=10):
+
+              output = ""
+
+              end_time = time.time() + timeout
+
+              while time.time() < end_time:
+
+                  if shell.recv_ready():
+
+                      data = shell.recv(65535)
+
+                      if not data:
+                          raise Exception("Socket is closed")
+
+                      output += data.decode(
+                          "utf-8",
+                          errors="ignore"
+                      )
+
+                      if re.search(
+                          r"(?:>|#)\s*$",
+                          output
+                      ):
+                          return output
+
+                  else:
+                      time.sleep(0.2)
+
+              return output
+
+          # =====================================================
+          # SSH connection
+          # =====================================================
+          client = paramiko.SSHClient()
+
+          client.set_missing_host_key_policy(
+              paramiko.AutoAddPolicy()
+          )
+
+          try:
+
+              # =================================================
+              # Connect to device
+              # =================================================
+              client.connect(
+                  hostname=HOST,
+                  username=USERNAME,
+                  password=PASSWORD,
+                  look_for_keys=False,
+                  allow_agent=False,
+                  timeout=20,
+                  banner_timeout=20,
+                  auth_timeout=20
+              )
+
+              # =================================================
+              # Open interactive shell
+              # =================================================
+              shell = client.invoke_shell(
+                  term="vt100",
+                  width=200,
+                  height=1000
+              )
+
+              time.sleep(1)
+
+              if shell.closed:
+                  raise Exception(
+                      "SSH interactive shell closed immediately"
+                  )
+
+              # =================================================
+              # Send ENTER to receive initial prompt
+              # =================================================
+              shell.send("\n")
+
+              initial_output = wait_for_prompt(
+                  shell,
+                  timeout=10
+              )
+
+              # =================================================
+              # Retry prompt detection if required
+              # =================================================
+              if not re.search(
+                  r"(?:>|#)\s*$",
+                  initial_output
+              ):
+
+                  shell.send("\n")
+
+                  initial_output += wait_for_prompt(
+                      shell,
+                      timeout=5
+                  )
+
+              # =================================================
+              # Verify shell
+              # =================================================
+              if shell.closed:
+                  raise Exception(
+                      "SSH interactive shell closed after login"
+                  )
+
+              # =================================================
+              # Enter enable mode
+              # =================================================
+              if ">" in initial_output:
+
+                  shell.send("enable\n")
+
+                  wait_for_prompt(
+                      shell,
+                      timeout=10
+                  )
+
+              # =================================================
+              # Enter configuration mode
+              # =================================================
+              shell.send("config\n")
+
+              wait_for_prompt(
+                  shell,
+                  timeout=10
+              )
+
+              # =================================================
+              # Exit configuration mode
+              # =================================================
+              shell.send("exit\n")
+
+              wait_for_prompt(
+                  shell,
+                  timeout=10
+              )
+
+              # =================================================
+              # Disable paging
+              # =================================================
+              shell.send("terminal length 0\n")
+
+              wait_for_prompt(
+                  shell,
+                  timeout=5
+              )
+
+              # =================================================
+              # Get running configuration
+              # =================================================
+              shell.send("show running-config\n")
+
+              running_config = ""
+
+              end_time = time.time() + 20
+
+              while time.time() < end_time:
+
+                  if shell.recv_ready():
+
+                      data = shell.recv(65535)
+
+                      if not data:
+                          raise Exception(
+                              "Socket is closed while reading running-config"
+                          )
+
+                      running_config += data.decode(
+                          "utf-8",
+                          errors="ignore"
+                      )
+
+                      if re.search(
+                          r"(?:production|production_config)[>#]\s*$",
+                          running_config
+                      ):
+                          break
+
+                  else:
+                      time.sleep(0.2)
+
+              # =====================================================
+              # Interface patterns
+              # =====================================================
+              physical_interface_pattern = re.compile(
+                  r"^(GigaEthernet|TGigaEthernet)\d+/\d+$",
+                  re.IGNORECASE
+              )
+
+              aggregator_pattern = re.compile(
+                  r"^Port-aggregator\d+$",
+                  re.IGNORECASE
+              )
+
+              # =====================================================
+              # Result list
+              # =====================================================
+              interface_vlan_attribute = []
+
+              current_interface = None
+
+              pvid = "1"
+              mode = "Access"
+              vlan_allowed = ""
+              vlan_untagged = ""
+              mac_vlan = "Disable"
+
+              # =====================================================
+              # Save interface information
+              # =====================================================
+              def save_interface():
+
+                  global current_interface
+                  global pvid
+                  global mode
+                  global vlan_allowed
+                  global vlan_untagged
+                  global mac_vlan
+
+                  if current_interface is None:
+                      return
+
+                  if not (
+                      physical_interface_pattern.match(
+                          current_interface
+                      )
+                      or
+                      aggregator_pattern.match(
+                          current_interface
+                      )
+                  ):
+                      return
+
+                  # =================================================
+                  # Access mode
+                  # =================================================
+                  if mode.lower() == "access":
+                      vlan_allowed = pvid
+
+                  # =================================================
+                  # Default VLAN allowed
+                  # =================================================
+                  if not vlan_allowed:
+                      vlan_allowed = pvid
+
+                  # =================================================
+                  # Default VLAN untagged
+                  # =================================================
+                  if not vlan_untagged:
+                      vlan_untagged = pvid
+
+                  # =================================================
+                  # GUI port-name conversion
+                  # =================================================
+                  port_name = current_interface
+
+                  # GigaEthernet0/1 -> g0/1
+                  match = re.match(
+                      r"^GigaEthernet(\d+)/(\d+)$",
+                      current_interface,
+                      re.IGNORECASE
+                  )
+
+                  if match:
+
+                      port_name = (
+                          "g"
+                          + match.group(1)
+                          + "/"
+                          + match.group(2)
+                      )
+
+                  # TGigaEthernet0/1 -> tg0/1
+                  match = re.match(
+                      r"^TGigaEthernet(\d+)/(\d+)$",
+                      current_interface,
+                      re.IGNORECASE
+                  )
+
+                  if match:
+
+                      port_name = (
+                          "tg"
+                          + match.group(1)
+                          + "/"
+                          + match.group(2)
+                      )
+
+                  # =================================================
+                  # Append interface data
+                  # =================================================
+                  interface_vlan_attribute.append({
+                      "port_name": port_name,
+                      "interface": current_interface,
+                      "pvid": str(pvid),
+                      "mode": mode,
+                      "vlan_allowed_range": str(vlan_allowed),
+                      "vlan_untagged_range": str(vlan_untagged),
+                      "mac_vlan": mac_vlan
+                  })
+
+              # =====================================================
+              # Parse running configuration
+              # =====================================================
+              for raw_line in running_config.splitlines():
+
+                  line = raw_line.strip()
+
+                  if not line:
+                      continue
+
+                  # =================================================
+                  # New interface
+                  # =================================================
+                  if line.startswith("interface "):
+
+                      save_interface()
+
+                      current_interface = (
+                          line[len("interface "):].strip()
+                      )
+
+                      pvid = "1"
+                      mode = "Access"
+                      vlan_allowed = ""
+                      vlan_untagged = ""
+                      mac_vlan = "Disable"
+
+                      continue
+
+                  # =================================================
+                  # End of interface block
+                  # =================================================
+                  if line == "!":
+
+                      save_interface()
+
+                      current_interface = None
+
+                      pvid = "1"
+                      mode = "Access"
+                      vlan_allowed = ""
+                      vlan_untagged = ""
+                      mac_vlan = "Disable"
+
+                      continue
+
+                  if current_interface is None:
+                      continue
+
+                  # =================================================
+                  # PVID
+                  # =================================================
+                  match = re.match(
+                      r"switchport\s+pvid\s+(\d+)",
+                      line,
+                      re.IGNORECASE
+                  )
+
+                  if match:
+
+                      pvid = match.group(1)
+
+                      continue
+
+                  # =================================================
+                  # Mode
+                  # =================================================
+                  match = re.match(
+                      r"switchport\s+mode\s+(access|trunk)\s*$",
+                      line,
+                      re.IGNORECASE
+                  )
+
+                  if match:
+
+                      mode = match.group(1).capitalize()
+
+                      continue
+
+                  # =================================================
+                  # VLAN Allowed
+                  # =================================================
+                  match = re.match(
+                      r"switchport\s+trunk\s+vlan-allowed\s+(.+)$",
+                      line,
+                      re.IGNORECASE
+                  )
+
+                  if match:
+
+                      vlan_allowed = match.group(1).strip()
+
+                      continue
+
+                  # =================================================
+                  # VLAN Untagged
+                  # =================================================
+                  match = re.match(
+                      r"switchport\s+trunk\s+vlan-untagged\s+(.+)$",
+                      line,
+                      re.IGNORECASE
+                  )
+
+                  if match:
+
+                      vlan_untagged = match.group(1).strip()
+
+                      continue
+
+                  # =================================================
+                  # MAC VLAN
+                  # =================================================
+                  if re.search(
+                      r"mac-vlan",
+                      line,
+                      re.IGNORECASE
+                  ):
+
+                      mac_vlan = "Enable"
+
+              # =====================================================
+              # Save last interface
+              # =====================================================
+              save_interface()
+
+              # =====================================================
+              # Remove duplicate interfaces
+              # =====================================================
+              unique_interfaces = []
+              seen = set()
+
+              for item in interface_vlan_attribute:
+
+                  interface_name = item["interface"]
+
+                  if interface_name not in seen:
+
+                      unique_interfaces.append(item)
+                      seen.add(interface_name)
+
+              interface_vlan_attribute = unique_interfaces
+
+              # =====================================================
+              # Final result
+              # =====================================================
+              result = {
+                  "status": "SUCCESS",
+                  "device_ip": HOST,
+                  "interface_vlan_attribute":
+                      interface_vlan_attribute
+              }
+
+              # =====================================================
+              # Create output directory
+              # =====================================================
+              os.makedirs(
+                  os.path.dirname(OUTPUT_FILE),
+                  exist_ok=True
+              )
+
+              # =====================================================
+              # Write YAML output
+              # =====================================================
+              with open(
+                  OUTPUT_FILE,
+                  "w",
+                  encoding="utf-8"
+              ) as file:
+
+                  yaml.safe_dump(
+                      result,
+                      file,
+                      sort_keys=False,
+                      default_flow_style=False
+                  )
+
+              # =====================================================
+              # Print result
+              # =====================================================
+              print(
+                  yaml.safe_dump(
+                      result,
+                      sort_keys=False,
+                      default_flow_style=False
+                  )
+              )
+
+              print("SUCCESS")
+
+              client.close()
+
+              sys.exit(0)
+
+          except Exception as exc:
+
+              result = {
+                  "status": "FAILED",
+                  "device_ip": HOST,
+                  "reason": str(exc)
+              }
+
+              try:
+
+                  os.makedirs(
+                      os.path.dirname(OUTPUT_FILE),
+                      exist_ok=True
+                  )
+
+                  with open(
+                      OUTPUT_FILE,
+                      "w",
+                      encoding="utf-8"
+                  ) as file:
+
+                      yaml.safe_dump(
+                          result,
+                          file,
+                          sort_keys=False
+                      )
+
+              except Exception:
+                  pass
+
+              print(
+                  yaml.safe_dump(
+                      result,
+                      sort_keys=False
+                  )
+              )
+
+              print("FAILED")
+
+              try:
+                  client.close()
+              except Exception:
+                  pass
+
+              sys.exit(1)
+
+      delegate_to: localhost
+
+    # =====================================================
+    # Run Interface VLAN Attribute GET
+    # =====================================================
+    - name: Run Interface VLAN Attribute GET
+      ansible.builtin.command:
+        cmd: >
+          {{ python_bin }}
+          {{ temp_dir }}/get_interface_vlan_attribute.py
+      register: interface_vlan_result
+      delegate_to: localhost
+
+      changed_when: "'SUCCESS' in (interface_vlan_result.stdout | default(''))"
+
+      failed_when: >
+        interface_vlan_result.rc != 0 or
+        'SUCCESS' not in (interface_vlan_result.stdout | default(''))
+
+    # =====================================================
+    # Display result
+    # =====================================================
+    - name: Display Interface VLAN Attribute GET result
+      ansible.builtin.debug:
+        var: interface_vlan_result.stdout
+

@@ -198,7 +198,7 @@ switchport pvid @{{value}}
                             <div class="form-group">
                                 <label for="template_name" class="col-sm-3 control-label">{{ __('Template Name') }}</label>
                                 <div class="col-sm-6">
-                                    <input type="text" name="template_name" id="template_name" class="form-control" placeholder="{{ __('Template Name') }}">
+                                    <input type="text" name="template_name" id="template_name" class="form-control" placeholder="{{ __('Template Name') }}" readonly>
                                 </div>
                                 <div class="col-sm-3" style="white-space: nowrap;">
                                     <button type="button" class="btn btn-primary btn-sm" id="editTemplateBtn" style="display: none; margin-right: 5px;">

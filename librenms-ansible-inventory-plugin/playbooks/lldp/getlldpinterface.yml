@@ -1,152 +1,332 @@
+# ============================================================================
+# File        : getlldpinterfaceconfiguration.yml
+# Feature     : LLDP Interface Configuration - GET
+#
+# Ansible Command:
+#
+# Single interface:
+# ansible-playbook -i inventory/192.168.2.245.yml \
+# playbooks/lldp/getlldpinterfaceconfiguration.yml \
+# -e "interface=GigaEthernet0/1"
+#
+# Multiple interfaces:
+# ansible-playbook -i inventory/192.168.2.245.yml \
+# playbooks/lldp/getlldpinterfaceconfiguration.yml \
+# -e "interface=GigaEthernet0/1,GigaEthernet0/2,GigaEthernet0/3"
+#
+# CLI command:
+#   show lldp interface <interface>
+# ============================================================================
+
 ---
-- name: Show LLDP interface configuration via SSH
+- name: Get LLDP Interface Configuration
   hosts: all
   gather_facts: no
 
   vars:
+
+    # Device IP from inventory
+    device_ip: "{{ ansible_host | default(inventory_hostname) }}"
+
+    # Interface(s) passed through -e
+    #
+    # Example:
+    # interface=GigaEthernet0/1,GigaEthernet0/2
+    interface_list: "{{ interface.split(',') }}"
+
+    # ----------------------------------------------------------------------
+    # LIBRENMS paths
+    # ----------------------------------------------------------------------
     output_dir: "/opt/librenms/librenms-ansible-inventory-plugin/output"
     script_path: "/opt/librenms/librenms-ansible-inventory-plugin/tmp/show_lldp_interface_exec.py"
     python_bin: "/opt/librenms/librenms-ansible-inventory-plugin/bin/python3"
 
   tasks:
 
-    - name: Copy Python LLDP interface SHOW script
+    # ----------------------------------------------------------------------
+    # Validate interface argument
+    # ----------------------------------------------------------------------
+    - name: Validate interface argument
+      ansible.builtin.assert:
+        that:
+          - interface is defined
+          - interface | trim | length > 0
+        fail_msg: >
+          Please provide interface argument.
+          Example:
+          -e "interface=GigaEthernet0/1,GigaEthernet0/2"
+
+    # ----------------------------------------------------------------------
+    # Create output directory
+    # ----------------------------------------------------------------------
+    - name: Create output directory
+      ansible.builtin.file:
+        path: "{{ output_dir }}"
+        state: directory
+        mode: '0755'
+
+    # ----------------------------------------------------------------------
+    # Create temporary directory
+    # ----------------------------------------------------------------------
+    - name: Create temporary directory
+      ansible.builtin.file:
+        path: "{{ script_path | dirname }}"
+        state: directory
+        mode: '0755'
+
+    # ----------------------------------------------------------------------
+    # Create LLDP Interface GET Python script
+    # ----------------------------------------------------------------------
+    - name: Create LLDP Interface GET script
       ansible.builtin.copy:
         dest: "{{ script_path }}"
-        mode: "0755"
+        mode: '0755'
         content: |
           import paramiko
-          import time
-          import os
           import sys
+          import time
           import re
-          import json
 
-          HOST = "{{ ansible_host }}"
-          USER = "{{ ansible_user }}"
-          PASSWORD = "{{ ansible_password }}"
-          OUTPUT_FILE = "{{ output_dir }}/{{ ansible_host }}_getlldpinterface.yml"
+          HOST = "{{ device_ip }}"
+          USERNAME = "admin"
+          PASSWORD = "admin"
 
-          TOTAL_PORTS = 28
-
-          def read_channel(chan, wait=1):
-              time.sleep(wait)
-              output = ""
-              while chan.recv_ready():
-                  output += chan.recv(65535).decode(errors="ignore")
-                  time.sleep(0.2)
-              return output
+          # -------------------------------------------------------------
+          # Interfaces received from Ansible
+          #
+          # Example:
+          #   GigaEthernet0/1
+          #   GigaEthernet100/1
+          #   Gi0/1
+          #   g0/1
+          #
+          # No conversion or hardcoding is performed.
+          # -------------------------------------------------------------
+          INTERFACES = {{ interface_list | map('trim') | list | to_json }}
 
           try:
+
+              # ---------------------------------------------------------
+              # Create SSH connection
+              # ---------------------------------------------------------
               ssh = paramiko.SSHClient()
               ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+
               ssh.connect(
-                  hostname=HOST,
-                  username=USER,
+                  HOST,
+                  username=USERNAME,
                   password=PASSWORD,
                   look_for_keys=False,
                   allow_agent=False,
                   timeout=10
               )
 
+              # ---------------------------------------------------------
+              # Open interactive shell
+              # ---------------------------------------------------------
               shell = ssh.invoke_shell()
-              read_channel(shell, 2)
+              shell.settimeout(2)
 
+              # ---------------------------------------------------------
+              # Wait for CLI
+              # ---------------------------------------------------------
+              time.sleep(2)
+
+              # Clear initial output
+              while shell.recv_ready():
+                  shell.recv(65535)
+
+              # ---------------------------------------------------------
+              # Enter enable mode
+              # ---------------------------------------------------------
               shell.send("enable\n")
-              read_channel(shell, 1)
-              shell.send(PASSWORD + "\n")
-              read_channel(shell, 1)
+              time.sleep(1)
 
-              shell.send("terminal length 0\n")
-              read_channel(shell, 1)
+              while shell.recv_ready():
+                  shell.recv(65535)
 
-              shell.send("show running-config\n")
-              output = read_channel(shell, 4)
+              # ---------------------------------------------------------
+              # Run LLDP command for every interface
+              # ---------------------------------------------------------
+              for interface in INTERFACES:
 
-              ssh.close()
+                  # Remove extra spaces
+                  interface = interface.strip()
 
-              # ---------------- GLOBAL FLAGS ----------------
-              lldp_enabled = False
-              global_mgmt_ip = ""
-
-              for line in output.splitlines():
-                  line = line.strip()
-                  if line == "lldp run":
-                      lldp_enabled = True
-
-                  m = re.match(r"lldp management-ip ([0-9.]+)", line)
-                  if m and not global_mgmt_ip:
-                      global_mgmt_ip = m.group(1)
-
-              # ---------------- INIT ALL PORTS ----------------
-              ports = {}
-              for i in range(1, TOTAL_PORTS + 1):
-                  ports[f"g0/{i}"] = {
-                      "receive": "Enable" if lldp_enabled else "Disable",
-                      "send": "Enable" if lldp_enabled else "Disable",
-                      "management_ip": global_mgmt_ip
-                  }
-
-              # ---------------- PARSE INTERFACES ----------------
-              current = None
-
-              for line in output.splitlines():
-                  line = line.strip()
-
-                  m = re.match(r"interface GigaEthernet0/(\d+)", line)
-                  if m:
-                      current = f"g0/{m.group(1)}"
+                  # Skip empty values
+                  if not interface:
                       continue
 
-                  if current:
-                      if line == "no lldp receive":
-                          ports[current]["receive"] = "Disable"
+                  # -----------------------------------------------------
+                  # Build CLI command
+                  # -----------------------------------------------------
+                  command = "show lldp interface " + interface
 
-                      if line == "no lldp transmit":
-                          ports[current]["send"] = "Disable"
+                  # Clear old output
+                  while shell.recv_ready():
+                      shell.recv(65535)
 
-                      m = re.match(r"lldp management-ip ([0-9.]+)", line)
-                      if m:
-                          ports[current]["management_ip"] = m.group(1)
+                  # -----------------------------------------------------
+                  # Execute command
+                  # -----------------------------------------------------
+                  shell.send(command + "\n")
 
-                  if line == "!":
-                      current = None
+                  # Wait for response
+                  time.sleep(1)
 
-              # ---------------- BUILD ARRAY ----------------
-              lldp_interfaces = []
-              for port in sorted(ports, key=lambda x: int(x.split('/')[1])):
-                  lldp_interfaces.append({
-                      "port": port,
-                      "receive": ports[port]["receive"],
-                      "send": ports[port]["send"],
-                      "management_ip": ports[port]["management_ip"]
-                  })
+                  output = ""
 
-              result = {
-                  "status": "success",
-                  "ip": HOST,
-                  "lldp": lldp_enabled,
-                  "lldp_interfaces": lldp_interfaces
-              }
+                  # -----------------------------------------------------
+                  # Read command output
+                  # -----------------------------------------------------
+                  end_time = time.time() + 3
 
-              os.makedirs(os.path.dirname(OUTPUT_FILE), exist_ok=True)
-              with open(OUTPUT_FILE, "w") as f:
-                  json.dump(result, f, indent=2)
+                  while time.time() < end_time:
 
-              print("SUCCESS")
+                      try:
+
+                          if shell.recv_ready():
+
+                              output += shell.recv(
+                                  65535
+                              ).decode(
+                                  errors="ignore"
+                              )
+
+                          else:
+                              time.sleep(0.1)
+
+                      except Exception:
+                          break
+
+                  # -----------------------------------------------------
+                  # Remove ANSI escape sequences
+                  # -----------------------------------------------------
+                  output = re.sub(
+                      r'\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])',
+                      '',
+                      output
+                  )
+
+                  # -----------------------------------------------------
+                  # Normalize line endings
+                  # -----------------------------------------------------
+                  output = output.replace("\r", "\n")
+
+                  # -----------------------------------------------------
+                  # Get Rx
+                  # -----------------------------------------------------
+                  rx_match = re.search(
+                      r'Rx\s*:\s*(enabled|disabled)',
+                      output,
+                      re.IGNORECASE
+                  )
+
+                  # -----------------------------------------------------
+                  # Get Tx
+                  # -----------------------------------------------------
+                  tx_match = re.search(
+                      r'Tx\s*:\s*(enabled|disabled)',
+                      output,
+                      re.IGNORECASE
+                  )
+
+                  # -----------------------------------------------------
+                  # Extract Rx
+                  # -----------------------------------------------------
+                  if rx_match:
+                      rx = rx_match.group(1).lower()
+                  else:
+                      rx = "unknown"
+
+                  # -----------------------------------------------------
+                  # Extract Tx
+                  # -----------------------------------------------------
+                  if tx_match:
+                      tx = tx_match.group(1).lower()
+                  else:
+                      tx = "unknown"
+
+                  # -----------------------------------------------------
+                  # Machine-readable output
+                  # -----------------------------------------------------
+                  print(
+                      "INTERFACE|"
+                      + interface
+                      + "|"
+                      + rx
+                      + "|"
+                      + tx
+                  )
+
+              # ---------------------------------------------------------
+              # Close SSH connection
+              # ---------------------------------------------------------
+              ssh.close()
+              sys.exit(0)
 
           except Exception as e:
-              print("ERROR")
-              print(str(e))
+
+              print(
+                  "ERROR|"
+                  + str(e).replace("\n", " ")
+              )
+
               sys.exit(1)
 
-    - name: Run LLDP interface SHOW script
+    # ----------------------------------------------------------------------
+    # Execute Python script
+    # ----------------------------------------------------------------------
+    - name: Execute LLDP Interface GET
       ansible.builtin.command:
-        cmd: "{{ python_bin }} {{ script_path }}"
-      register: lldp_output
-      changed_when: false
-      failed_when: "'ERROR' in lldp_output.stdout"
+        cmd: >
+          {{ python_bin }}
+          {{ script_path }}
+      register: lldp_get_result
+      ignore_errors: yes
 
-    - name: Display LLDP interface output
+    # ----------------------------------------------------------------------
+    # Save output
+    # ----------------------------------------------------------------------
+    - name: Save LLDP Interface GET output
+      ansible.builtin.copy:
+        dest: "{{ output_dir }}/{{ device_ip }}_lldp_interface_configuration.yml"
+        content: |
+          IP: {{ device_ip }}
+
+          {% for line in lldp_get_result.stdout.splitlines() %}
+          {% if line.startswith('INTERFACE|') %}
+          {% set parts = line.split('|') %}
+          Interface: {{ parts[1] }}
+          Rx: {{ parts[2] }}
+          Tx: {{ parts[3] }}
+
+          {% endif %}
+          {% endfor %}
+
+    # ----------------------------------------------------------------------
+    # Display GET result
+    # ----------------------------------------------------------------------
+    - name: Display GET result
       ansible.builtin.debug:
-        msg: "{{ lldp_output.stdout }}"
+        msg: |
+          IP: {{ device_ip }}
+
+          {% for line in lldp_get_result.stdout.splitlines() %}
+          {% if line.startswith('INTERFACE|') %}
+          {% set parts = line.split('|') %}
+          Interface: {{ parts[1] }}
+          Rx: {{ parts[2] }}
+          Tx: {{ parts[3] }}
+
+          {% endif %}
+          {% endfor %}
+
+    # ----------------------------------------------------------------------
+    # Fail if GET failed
+    # ----------------------------------------------------------------------
+    - name: Fail if GET failed
+      ansible.builtin.fail:
+        msg: "{{ lldp_get_result.stdout | default(lldp_get_result.stderr) }}"
+      when:
+        - lldp_get_result.rc != 0

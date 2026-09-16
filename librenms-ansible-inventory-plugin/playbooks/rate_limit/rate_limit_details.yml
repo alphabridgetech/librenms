@@ -1,0 +1,898 @@
+# ==========================================
+# rate_limit.yml
+# Created on Sep 9, 2026 by Vikash Kumar (vikash.kumar@alphabrige.tech).
+#
+# Device Type : AS210T
+# Firmware Version : 2.2.0D Build 159890
+#
+# Copyright (c), ALPHA BRIDGE, Inc.
+# 357D, Udyog Vihar Industrial Area Phase VI, Sector 37, Gurugram, Haryana.
+#
+# All rights reserved.
+#
+# This software is the confidential and proprietary information of
+# ALPHA BRIDGE, Inc. ("Confidential Information").  You shall not
+# disclose such Confidential Information and shall use it only in
+# accordance with the terms of the license agreement you entered into
+# with ALPHA BRIDGE.
+#
+# =============================================================================
+# Playbook Name : Show Interface Rate Limit
+# =============================================================================
+#
+# Description:
+# This playbook retrieves per-interface Rate Limit configuration from
+# AlphaBridge switches through SSH, by parsing:
+#
+#   show running-config range-interface <type> <range>
+#
+# The user supplies a single "interfaces" parameter containing one or more
+# comma-separated interface names.
+#
+# IMPORTANT:
+#   The interface value is used directly as entered by the user.
+#   No interface-name validation or alias conversion is performed.
+#
+# Examples:
+#   -e "interfaces=GigaEthernet0/1"
+#   -e "interfaces=g0/1"
+#   -e "interfaces=TGigaEthernet0/1"
+#   -e "interfaces=tg0/1"
+#   -e "interfaces=g0/1,g0/2,g0/3"
+#
+# For SHOW operation the alphabetic interface prefix and slot/port are
+# separated only because the switch command requires:
+#
+#   show running-config range-interface <type> <range>
+#
+# Examples:
+#
+#   interfaces=GigaEthernet0/1
+#       -> show running-config range-interface GigaEthernet 0/1
+#
+#   interfaces=g0/1
+#       -> show running-config range-interface g 0/1
+#
+# Output:
+#   output/<switch_ip>_rate_limit.yml
+#
+# =============================================================================
+
+- name: Show interface rate limit
+  hosts: alphabridge_devices
+  gather_facts: false
+
+  tasks:
+
+    # ==========================================
+    # Validate only that input is provided
+    # ==========================================
+    #
+    # We intentionally DO NOT validate the interface
+    # name/type here.
+    #
+    # Whatever interface name the user provides is
+    # passed to the switch directly.
+    # ==========================================
+
+    - name: Validate interfaces input is provided
+      ansible.builtin.assert:
+        that:
+          - interfaces is defined
+          - interfaces | string | trim | length > 0
+        fail_msg: >-
+          interfaces is required.
+          Example: -e "interfaces=GigaEthernet0/1"
+          or -e "interfaces=g0/1"
+
+    # ==========================================
+    # Create Python SSH Script
+    # ==========================================
+
+    - name: Create Python SSH Script for Rate Limit show
+      ansible.builtin.copy:
+        dest: "/opt/librenms/librenms-ansible-inventory-plugin/tmp/rate_limit_show_exec.py"
+        mode: '0755'
+        content: |
+          #!/usr/bin/env python3
+
+          import paramiko
+          import time
+          import re
+          import json
+
+          HOST = "{{ ansible_host }}"
+          USER = "{{ ansible_user }}"
+          PASSWORD = "{{ ansible_password }}"
+
+          # Interface input received from Ansible.
+          #
+          # Examples:
+          #   GigaEthernet0/1
+          #   g0/1
+          #   TGigaEthernet0/1
+          #   tg0/1
+          #   g0/1,g0/2,g0/3
+          INTERFACES_RAW = "{{ interfaces }}"
+
+
+          # --------------------------------------------------------------
+          # Read CLI output until the switch prompt is returned.
+          # --------------------------------------------------------------
+          def read_until_prompt(shell, prompt_regex, timeout=10):
+              buf = ""
+              end_time = time.time() + timeout
+
+              while time.time() < end_time:
+                  if shell.recv_ready():
+                      chunk = shell.recv(65535).decode(errors="ignore")
+                      buf += chunk
+
+                      if re.search(prompt_regex, buf):
+                          return buf
+
+                  else:
+                      time.sleep(0.1)
+
+              return buf
+
+
+          # --------------------------------------------------------------
+          # Read a complete interface block if required.
+          # --------------------------------------------------------------
+          def read_full_interface_block(
+              shell,
+              header_regex,
+              timeout=20
+          ):
+              buf = ""
+              end_time = time.time() + timeout
+              prompt_re = re.compile(
+                  r'[>#]\s*$',
+                  re.MULTILINE
+              )
+
+              while time.time() < end_time:
+                  if shell.recv_ready():
+                      chunk = shell.recv(
+                          65535
+                      ).decode(errors="ignore")
+
+                      buf += chunk
+
+                  else:
+                      time.sleep(0.1)
+                      continue
+
+                  cleaned = re.sub(
+                      r'\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])',
+                      "",
+                      buf
+                  )
+
+                  header_match = header_regex.search(
+                      cleaned
+                  )
+
+                  if header_match:
+                      after_header = cleaned[
+                          header_match.end():
+                      ]
+
+                      block_closed = bool(
+                          re.search(
+                              r'(?:^|\n)!\s*(?:\n|$)',
+                              after_header
+                          )
+                      )
+
+                      if (
+                          block_closed
+                          and prompt_re.search(cleaned)
+                      ):
+                          return buf
+
+              return buf
+
+
+          # --------------------------------------------------------------
+          # Convert individual ports into contiguous ranges.
+          #
+          # Example:
+          #
+          #   0/1
+          #   0/2
+          #   0/3
+          #
+          # becomes:
+          #
+          #   0/1-3
+          #
+          # This keeps the existing SHOW logic efficient.
+          # --------------------------------------------------------------
+          def group_into_ranges(ports):
+
+              parsed = []
+
+              for p in ports:
+
+                  if '/' not in p:
+                      continue
+
+                  slot, num = p.split('/')
+
+                  try:
+                      parsed.append(
+                          (
+                              int(slot),
+                              int(num),
+                              p
+                          )
+                      )
+
+                  except ValueError:
+                      continue
+
+              if not parsed:
+                  return []
+
+              parsed.sort()
+
+              ranges = []
+
+              current_slot = parsed[0][0]
+              start_num = parsed[0][1]
+              end_num = parsed[0][1]
+              current_ports = [parsed[0][2]]
+
+              for slot, num, port in parsed[1:]:
+
+                  if (
+                      slot == current_slot
+                      and num == end_num + 1
+                  ):
+                      end_num = num
+                      current_ports.append(port)
+
+                  else:
+
+                      if len(current_ports) == 1:
+                          ranges.append(
+                              f"{current_slot}/{start_num}"
+                          )
+
+                      else:
+                          ranges.append(
+                              f"{current_slot}/"
+                              f"{start_num}-{end_num}"
+                          )
+
+                      current_slot = slot
+                      start_num = num
+                      end_num = num
+                      current_ports = [port]
+
+              if current_ports:
+
+                  if len(current_ports) == 1:
+                      ranges.append(
+                          f"{current_slot}/{start_num}"
+                      )
+
+                  else:
+                      ranges.append(
+                          f"{current_slot}/"
+                          f"{start_num}-{end_num}"
+                      )
+
+              return ranges
+
+
+          ansi_re = re.compile(
+              r'\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])'
+          )
+
+          shell = None
+          ssh = None
+
+          try:
+
+              # ----------------------------------------------------------
+              # Establish SSH connection.
+              # ----------------------------------------------------------
+              ssh = paramiko.SSHClient()
+
+              ssh.set_missing_host_key_policy(
+                  paramiko.AutoAddPolicy()
+              )
+
+              ssh.connect(
+                  HOST,
+                  username=USER,
+                  password=PASSWORD,
+                  look_for_keys=False,
+                  allow_agent=False,
+                  timeout=10
+              )
+
+              shell = ssh.invoke_shell()
+
+              time.sleep(0.5)
+
+              # ----------------------------------------------------------
+              # Parse interfaces exactly as provided by the user.
+              #
+              # No interface type validation is performed.
+              #
+              # Examples:
+              #
+              #   GigaEthernet0/1
+              #   g0/1
+              #   TGigaEthernet0/1
+              #   tg0/1
+              #
+              # For the SHOW command we only separate:
+              #
+              #   alphabetic prefix
+              #
+              # from:
+              #
+              #   slot/port
+              #
+              # because the switch syntax is:
+              #
+              #   show running-config range-interface
+              #        <type> <range>
+              #
+              # ----------------------------------------------------------
+
+              items = [
+                  x.strip()
+                  for x in INTERFACES_RAW.split(',')
+                  if x.strip()
+              ]
+
+              if not items:
+                  raise Exception(
+                      "No interfaces provided."
+                  )
+
+              type_to_ports = {}
+
+              for item in items:
+
+                  # Split the alphabetic interface prefix
+                  # from the remaining slot/port.
+                  #
+                  # Examples:
+                  #
+                  #   GigaEthernet0/1
+                  #       type = GigaEthernet
+                  #       port = 0/1
+                  #
+                  #   g0/1
+                  #       type = g
+                  #       port = 0/1
+                  #
+                  # Nothing is converted or normalized.
+                  m = re.match(
+                      r'^([A-Za-z]+)(.+)$',
+                      item
+                  )
+
+                  if not m:
+                      raise Exception(
+                          f"Unable to split "
+                          f"interface input: {item}"
+                      )
+
+                  # Keep interface type exactly
+                  # as supplied by the user.
+                  iface_type = m.group(1)
+
+                  # Keep slot/port exactly
+                  # as supplied by the user.
+                  port = m.group(2)
+
+                  type_to_ports.setdefault(
+                      iface_type,
+                      []
+                  ).append(port)
+
+              # ----------------------------------------------------------
+              # Build list of:
+              #
+              #   (interface type, port range)
+              #
+              # Example:
+              #
+              #   ("g", "0/1-3")
+              #
+              # or:
+              #
+              #   ("GigaEthernet", "0/1-3")
+              # ----------------------------------------------------------
+
+              commands = []
+
+              for iface_type, ports in type_to_ports.items():
+
+                  ranges = group_into_ranges(
+                      ports
+                  )
+
+                  for rng in ranges:
+                      commands.append(
+                          (
+                              iface_type,
+                              rng
+                          )
+                      )
+
+              if not commands:
+                  raise Exception(
+                      "No valid interface ranges to query."
+                  )
+
+              # ----------------------------------------------------------
+              # SSH interaction
+              # ----------------------------------------------------------
+
+              # Wait for initial switch prompt.
+              read_until_prompt(
+                  shell,
+                  r'[>#]\s*$',
+                  timeout=5
+              )
+
+              # Enter privileged EXEC mode.
+              shell.send(
+                  "enable\n"
+              )
+
+              read_until_prompt(
+                  shell,
+                  r'[>#]\s*$',
+                  timeout=5
+              )
+
+              # Disable terminal paging so complete
+              # SHOW output can be collected.
+              shell.send(
+                  "terminal length 0\n"
+              )
+
+              read_until_prompt(
+                  shell,
+                  r'[>#]\s*$',
+                  timeout=5
+              )
+
+              # ----------------------------------------------------------
+              # Execute SHOW commands.
+              # ----------------------------------------------------------
+
+              range_config_output = ""
+
+              for iface_type, rng in commands:
+
+                  show_cmd = (
+                      "show running-config "
+                      f"range-interface "
+                      f"{iface_type} {rng}"
+                  )
+
+                  shell.send(
+                      show_cmd + "\n"
+                  )
+
+                  output = read_until_prompt(
+                      shell,
+                      r'[>#]\s*$',
+                      timeout=30
+                  )
+
+                  range_config_output += output
+
+              # Exit SSH session.
+              shell.send(
+                  "exit\n"
+              )
+
+              read_until_prompt(
+                  shell,
+                  r'[>#]\s*$',
+                  timeout=5
+              )
+
+              shell.close()
+              ssh.close()
+
+              # ----------------------------------------------------------
+              # Remove ANSI escape characters.
+              # ----------------------------------------------------------
+
+              range_config_output = ansi_re.sub(
+                  "",
+                  range_config_output
+              )
+
+              # ----------------------------------------------------------
+              # Parse interface configuration blocks.
+              # ----------------------------------------------------------
+
+              rate_limit_entries = []
+
+              lines = (
+                  range_config_output.splitlines()
+              )
+
+              # Switch SHOW output normally returns
+              # the complete canonical interface name.
+              eligible_port_re = re.compile(
+                  r'^(GigaEthernet|TGigaEthernet)',
+                  re.IGNORECASE
+              )
+
+              interface_start_re = re.compile(
+                  r'^interface\s+(\S+)\s*$'
+              )
+
+              # Percentage Receive / ingress:
+              #
+              # switchport rate-limit bandwidth
+              # <value> ingress
+              ingress_bandwidth_re = re.compile(
+                  r'^switchport\s+rate-limit\s+'
+                  r'bandwidth\s+(\d+)\s+'
+                  r'ingress\s*$',
+                  re.IGNORECASE
+              )
+
+              # 64kbps Receive / ingress:
+              #
+              # switchport rate-limit <value> ingress
+              ingress_kbps_re = re.compile(
+                  r'^switchport\s+rate-limit\s+'
+                  r'(\d+)\s+ingress\s*$',
+                  re.IGNORECASE
+              )
+
+              # Percentage Send / egress:
+              #
+              # switchport rate-limit bandwidth
+              # <value> egress
+              egress_bandwidth_re = re.compile(
+                  r'^switchport\s+rate-limit\s+'
+                  r'bandwidth\s+(\d+)\s+'
+                  r'egress\s*$',
+                  re.IGNORECASE
+              )
+
+              # 64kbps Send / egress:
+              #
+              # switchport rate-limit <value> egress
+              egress_kbps_re = re.compile(
+                  r'^switchport\s+rate-limit\s+'
+                  r'(\d+)\s+egress\s*$',
+                  re.IGNORECASE
+              )
+
+              current_port = None
+
+              receive_status = "Disable"
+              receive_unit = ""
+              receive_speed = ""
+
+              send_status = "Disable"
+              send_unit = ""
+              send_speed = ""
+
+              # Reset values whenever a new
+              # interface block starts.
+              def reset_block():
+                  return (
+                      "Disable",
+                      "",
+                      "",
+                      "Disable",
+                      "",
+                      ""
+                  )
+
+              for raw_line in lines:
+
+                  stripped = raw_line.strip()
+
+                  # Detect:
+                  #
+                  # interface GigaEthernet0/1
+                  iface_match = (
+                      interface_start_re.match(
+                          stripped
+                      )
+                  )
+
+                  if iface_match:
+
+                      current_port = (
+                          iface_match.group(1)
+                      )
+
+                      (
+                          receive_status,
+                          receive_unit,
+                          receive_speed,
+                          send_status,
+                          send_unit,
+                          send_speed
+                      ) = reset_block()
+
+                      continue
+
+                  # "!" closes an interface block.
+                  if stripped == "!":
+
+                      if (
+                          current_port
+                          and eligible_port_re.match(
+                              current_port
+                          )
+                      ):
+
+                          entry = {
+                              "Port":
+                                  current_port,
+
+                              "Receive Status":
+                                  receive_status,
+                          }
+
+                          if (
+                              receive_status
+                              == "Enable"
+                          ):
+                              entry[
+                                  "Receive Speed Unit"
+                              ] = receive_unit
+
+                              entry[
+                                  "Receive Speed"
+                              ] = receive_speed
+
+                          entry[
+                              "Send Status"
+                          ] = send_status
+
+                          if (
+                              send_status
+                              == "Enable"
+                          ):
+                              entry[
+                                  "Send Speed Unit"
+                              ] = send_unit
+
+                              entry[
+                                  "Send Speed"
+                              ] = send_speed
+
+                          rate_limit_entries.append(
+                              entry
+                          )
+
+                      current_port = None
+
+                      (
+                          receive_status,
+                          receive_unit,
+                          receive_speed,
+                          send_status,
+                          send_unit,
+                          send_speed
+                      ) = reset_block()
+
+                      continue
+
+                  if not current_port:
+                      continue
+
+                  # ------------------------------------------------------
+                  # Receive / ingress
+                  # ------------------------------------------------------
+
+                  bw_in = (
+                      ingress_bandwidth_re.match(
+                          stripped
+                      )
+                  )
+
+                  if bw_in:
+
+                      receive_status = "Enable"
+                      receive_unit = "Percent"
+                      receive_speed = int(
+                          bw_in.group(1)
+                      )
+
+                      continue
+
+                  kbps_in = (
+                      ingress_kbps_re.match(
+                          stripped
+                      )
+                  )
+
+                  if kbps_in:
+
+                      receive_status = "Enable"
+                      receive_unit = "64kbps"
+                      receive_speed = int(
+                          kbps_in.group(1)
+                      )
+
+                      continue
+
+                  # ------------------------------------------------------
+                  # Send / egress
+                  # ------------------------------------------------------
+
+                  bw_out = (
+                      egress_bandwidth_re.match(
+                          stripped
+                      )
+                  )
+
+                  if bw_out:
+
+                      send_status = "Enable"
+                      send_unit = "Percent"
+                      send_speed = int(
+                          bw_out.group(1)
+                      )
+
+                      continue
+
+                  kbps_out = (
+                      egress_kbps_re.match(
+                          stripped
+                      )
+                  )
+
+                  if kbps_out:
+
+                      send_status = "Enable"
+                      send_unit = "64kbps"
+                      send_speed = int(
+                          kbps_out.group(1)
+                      )
+
+                      continue
+
+              # ----------------------------------------------------------
+              # Return JSON to Ansible.
+              # ----------------------------------------------------------
+
+              print(
+                  json.dumps(
+                      {
+                          "ip": HOST,
+                          "rate_limit_entries":
+                              rate_limit_entries,
+                          "status": "success"
+                      },
+                      indent=4
+                  )
+              )
+
+          except Exception as e:
+
+              try:
+
+                  if shell:
+                      shell.close()
+
+                  if ssh:
+                      ssh.close()
+
+              except Exception:
+                  pass
+
+              print(
+                  json.dumps(
+                      {
+                          "ip": HOST,
+                          "status": "failed",
+                          "error": str(e)
+                      }
+                  )
+              )
+
+    # ==========================================
+    # Execute generated Python script
+    # ==========================================
+
+    - name: Execute Rate Limit show script
+      ansible.builtin.command:
+        cmd: >
+          /opt/librenms/librenms-ansible-inventory-plugin/bin/python3
+          /opt/librenms/librenms-ansible-inventory-plugin/tmp/rate_limit_show_exec.py
+      register: rate_limit_raw
+      changed_when: false
+      failed_when: false
+
+    # ==========================================
+    # Convert JSON result
+    # ==========================================
+
+    - name: Convert Rate Limit result to JSON
+      ansible.builtin.set_fact:
+        rate_limit_result: >-
+          {{ rate_limit_raw.stdout | from_json }}
+
+    # ==========================================
+    # Display successful result
+    # ==========================================
+
+    - name: Display Rate Limit result
+      ansible.builtin.debug:
+        msg: |
+          ip: {{ rate_limit_result.ip }}
+          rate_limit_entries:
+          {{ rate_limit_result.rate_limit_entries
+             | to_nice_yaml(indent=4)
+             | indent(2, True) }}
+          status: {{ rate_limit_result.status }}
+      when:
+        - rate_limit_result.status == "success"
+
+    # ==========================================
+    # Display error
+    # ==========================================
+
+    - name: Display error
+      ansible.builtin.debug:
+        msg: >-
+          Error: {{ rate_limit_result.error }}
+      when:
+        - rate_limit_result.status == "failed"
+
+    # ==========================================
+    # Save successful result
+    # ==========================================
+
+    - name: Save Rate Limit result
+      ansible.builtin.copy:
+        dest: >-
+          /opt/librenms/librenms-ansible-inventory-plugin/output/{{ ansible_host }}_rate_limit.yml
+        content: |
+          ip: {{ rate_limit_result.ip }}
+          rate_limit_entries:
+          {{ rate_limit_result.rate_limit_entries
+             | to_nice_yaml(indent=4)
+             | indent(2, True) }}
+          status: {{ rate_limit_result.status }}
+      when:
+        - rate_limit_result.status == "success"
+
+    # ==========================================
+    # Fail for actual SHOW/SSH errors
+    # ==========================================
+
+    - name: Fail if Rate Limit show failed
+      ansible.builtin.fail:
+        msg: "{{ rate_limit_result.error }}"
+      when:
+        - rate_limit_result.status == "failed"
+
+    # ==========================================
+    # Final success message
+    # ==========================================
+
+    - name: Display result file
+      ansible.builtin.debug:
+        msg: >-
+          Rate limit configuration collected successfully.
+          Result saved to
+          output/{{ ansible_host }}_rate_limit.yml
+      when:
+        - rate_limit_result.status == "success"

@@ -128,6 +128,18 @@ foreach (dbFetchRows($sql, $param) as $alertlog) {
         [$fault_detail, $max_row_length] = alert_details($alertlog['alert_log_details']);
     }
 
+    // Port-based rows: show which port(s) specifically went down / came
+    // back up in THIS history entry vs the one immediately before it,
+    // instead of the same full down-port snapshot repeated across rows.
+    // Comparing stored snapshots only (never a live ports lookup) - unlike
+    // /alerts, a history row can be arbitrarily old, so "currently down"
+    // doesn't apply here.
+    $previous_details = dbFetchCell('SELECT details FROM alert_log WHERE device_id = ? AND rule_id = ? AND id < ? ORDER BY id DESC LIMIT 1', [$alertlog['device_id'], $alertlog['rule_id'], $alertlog['alert_log_id']]);
+    $port_transition = alert_log_port_transition($alertlog['alert_log_details'], $previous_details, $alertlog['time_logged']);
+    if ($port_transition !== '') {
+        $fault_detail = $port_transition;
+    }
+
     if ($alert_state == '0') {
         $status = 'label-success';
     } elseif ($alert_state == '1') {
