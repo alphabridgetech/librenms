@@ -18,7 +18,8 @@
                 data-url="{{ route('table.inventory') }}">
                 <thead>
                 <tr>
-                    <th data-column-id="device" data-order="asc">@lang('Device')</th>
+                    <th data-column-id="device_ip" data-order="asc">@lang('Device Ip')</th>
+                    <th data-column-id="hostname">@lang('Hostname')</th>
                     <th data-column-id="mfg">@lang('Manufacturer')</th>
                     <th data-column-id="descr">@lang('Description')</th>
                     <th data-column-id="name">@lang('inventory.name')</th>

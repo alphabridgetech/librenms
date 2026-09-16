@@ -220,11 +220,19 @@ $pagetitle[] = 'Add host';
   <div class="alert alert-info">Devices will be checked for Ping/SNMP reachability before being probed.</div>
   <div class="well well-lg">
       <div class="form-group">
-          <label for="hostname" class="col-sm-3 control-label">Hostname or IP</label>
+          <label for="hostname" class="col-sm-3 control-label">Device IP</label>
           <div class="col-sm-9">
               <input type="text" id="hostname" name="hostname" class="form-control input-sm" placeholder="Hostname">
           </div>
       </div>
+      <?php if ($prefillDefaultSnmp) { ?>
+      <div class="form-group">
+          <div class="col-sm-9 col-sm-offset-3 alert alert-info">
+              Using saved Default SNMP</a> settings for this host.
+          </div>
+      </div>
+      <?php } ?>
+    <div id="advanced_fields" style="<?php echo $prefillDefaultSnmp ? 'display: none;' : ''; ?>">
       <div class='form-group'>
         <label for='hardware' class='col-sm-3 control-label'>SNMP</label>
         <div class='col-sm-4'>
@@ -295,6 +303,7 @@ foreach (PortAssociationMode::getModes() as $mode) {
             </select>
           </div>
         </div>
+        <div id="snmp_default_fields" style="<?php echo $prefillDefaultSnmp ? 'display: none;' : ''; ?>">
         <div id="snmpv1_2">
           <div class="form-group">
             <div class="col-sm-12 alert alert-info">
@@ -309,8 +318,8 @@ foreach (PortAssociationMode::getModes() as $mode) {
           </div>
         </div>
         <div id="snmpv3">
-            
-          <div class="form-group">  
+
+          <div class="form-group">
             <div class="col-sm-12 alert alert-info">
               <label class="control-label text-left input-sm">SNMPv3 Configuration</label>
             </div>
@@ -380,7 +389,7 @@ foreach (PortAssociationMode::getModes() as $mode) {
             </div>
           </div>
         </div>
-        
+        </div>
       </div>
 <?php
 if (LibrenmsConfig::get('distributed_poller') === true) {
@@ -409,8 +418,10 @@ if (LibrenmsConfig::get('distributed_poller') === true) {
                   <input type="checkbox" name="force_add" id="force_add" data-size="small">
           </div>
       </div>
+    </div>
 
     <hr>
+    <div id="ssh_default_fields" style="<?php echo $prefillDefaultSnmp ? 'display: none;' : ''; ?>">
     <div class="form-group">
             <div class="col-sm-12 alert alert-info">
               <label class="control-label text-left input-sm">SSH Configuration</label>
@@ -427,6 +438,7 @@ if (LibrenmsConfig::get('distributed_poller') === true) {
     <div class='col-sm-9'>
         <input type='password' name='ssh_pass' id='ssh_pass' value="<?php echo $prefillDefaultSnmp ? htmlspecialchars($dsSshPass) : ''; ?>" class='form-control input-sm' placeholder="SSH Password" autocomplete="off">
     </div>
+</div>
 </div>
 
 <hr>

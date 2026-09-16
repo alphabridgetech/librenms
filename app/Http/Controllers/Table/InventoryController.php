@@ -29,7 +29,6 @@ namespace App\Http\Controllers\Table;
 use App\Models\EntPhysical;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Support\Collection;
-use Illuminate\Support\Facades\Blade;
 
 class InventoryController extends TableController
 {
@@ -67,7 +66,8 @@ class InventoryController extends TableController
     protected function sortFields($request)
     {
         return [
-            'device' => 'device_id',
+            'device_ip' => 'device_id',
+            'hostname' => 'device_id',
             'mfg' => 'entPhysicalMfgName',
             'name' => 'entPhysicalName',
             'descr' => 'entPhysicalDescr',
@@ -107,8 +107,17 @@ class InventoryController extends TableController
      */
     public function formatItem($entPhysical)
     {
+        $device = $entPhysical->device;
+        $deviceIp = $device
+            ? htmlspecialchars((string) ($device->overwrite_ip ?: (\LibreNMS\Util\IP::isValid($device->hostname) ? $device->hostname : $device->ip)))
+            : '';
+        $hostnameLink = $device
+            ? '<a href="' . route('device', ['device' => $device->device_id]) . '">' . htmlspecialchars((string) ($device->sysName ?: $device->hostname)) . '</a>'
+            : '';
+
         return [
-            'device' => Blade::render('<x-device-link :device="$device"/>', ['device' => $entPhysical->device]),
+            'device_ip' => $deviceIp,
+            'hostname' => $hostnameLink,
             'mfg' => htmlspecialchars((string) ($entPhysical->entPhysicalMfgName ?: '')),
             'descr' => htmlspecialchars((string) ($entPhysical->entPhysicalDescr ?? '')),
             'name' => htmlspecialchars((string) ($entPhysical->entPhysicalName ?? '')),
@@ -126,7 +135,8 @@ class InventoryController extends TableController
     protected function getExportHeaders()
     {
         return [
-            'Device',
+            'Device IP',
+            'Hostname',
             'Manufacturer',
             'Description',
             'Name',
@@ -144,8 +154,11 @@ class InventoryController extends TableController
      */
     protected function formatExportRow($entPhysical)
     {
+        $device = $entPhysical->device;
+
         return [
-            $entPhysical->device ? $entPhysical->device->displayName() : '',
+            $device ? ($device->overwrite_ip ?: (\LibreNMS\Util\IP::isValid($device->hostname) ? $device->hostname : $device->ip)) : '',
+            $device ? ($device->sysName ?: $device->hostname) : '',
             $entPhysical->entPhysicalMfgName ?: '',
             $entPhysical->entPhysicalDescr ?: '',
             $entPhysical->entPhysicalName ?: '',

@@ -158,7 +158,8 @@
             data-url="{{ route('table.sfp-inventory') }}">
             <thead>
                 <tr>
-                    <th data-column-id="device">@lang('Device')</th>
+                    <th data-column-id="device_ip">@lang('Device Ip')</th>
+                    <th data-column-id="hostname">@lang('Hostname')</th>
                     <th data-column-id="port">@lang('Interface / Port')</th>
                     <th data-column-id="vendor" data-order="asc">@lang('Vendor')</th>
                     <th data-column-id="type">@lang('Type')</th>

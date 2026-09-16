@@ -914,6 +914,193 @@ public function getmtu($hostname)
     }
 
     #------------------------------------------------------------
+    #                    RATE LIMIT (GET)
+    #------------------------------------------------------------
+    /**
+     * The port list is sourced straight from LibreNMS's own `ports` table
+     * for this device (every GigaEthernet/TGigaEthernet port it knows
+     * about, regardless of VLAN) rather than discovered via SSH - the
+     * switch's rate-limit CLI only applies to those two interface types
+     * (see rate_limit_details.yml's eligible_port_re), so that's also what
+     * gets sent as the playbook's `interfaces=` input.
+     */
+    public function getratelimit($hostname)
+    {
+        if (!function_exists('yaml_parse_file')) {
+            return $this->error("PHP YAML extension missing", null);
+        }
+
+        $ports = $this->getEligibleRateLimitPorts($hostname);
+        if (empty($ports)) {
+            return $this->error("No GigaEthernet/TGigaEthernet ports found for this device in LibreNMS");
+        }
+
+        $playbook = "{$this->pluginPath}/playbooks/rate_limit/rate_limit_details.yml";
+        $hosts    = "{$this->pluginPath}/hosts/{$hostname}.yml";
+        $yamlFile = "{$this->pluginPath}/output/{$hostname}_rate_limit.yml";
+        $extraVars = ['interfaces' => implode(',', $ports)];
+
+        // If we already have a result from a previous run, serve it
+        // immediately and kick off a fresh SSH fetch in the background for
+        // next time - avoids making every page load wait on a live SSH
+        // round-trip.
+        if (file_exists($yamlFile)) {
+            $cached = yaml_parse_file($yamlFile);
+            $entries = $this->formatRateLimitEntries($cached);
+
+            $this->runAnsibleAsync($playbook, $hosts, $extraVars);
+
+            return $this->success([
+                "ports"   => $ports,
+                "entries" => $entries,
+                "cached"  => true,
+            ]);
+        }
+
+        // No usable cached result yet (first load) - fetch synchronously.
+        $output = $this->runAnsiblejs($playbook, $hosts, $extraVars);
+
+        if (!file_exists($yamlFile)) {
+            return $this->error("Rate Limit output file not found", $output);
+        }
+
+        $data = yaml_parse_file($yamlFile);
+        $entries = $this->formatRateLimitEntries($data);
+
+        return $this->success([
+            "ports"   => $ports,
+            "entries" => $entries,
+            "cached"  => false,
+        ]);
+    }
+
+    /**
+     * All of this device's GigaEthernet/TGigaEthernet port names, straight
+     * from LibreNMS's own `ports` table - no VLAN filtering, every port
+     * LibreNMS knows about for this device regardless of which VLAN(s)
+     * it's on.
+     */
+    private function getEligibleRateLimitPorts(string $hostname): array
+    {
+        $device = Device::where('hostname', $hostname)->first();
+        if (!$device) {
+            return [];
+        }
+
+        return $device->ports()
+            ->pluck('ifName')
+            ->filter(fn ($name) => is_string($name) && preg_match('/^(GigaEthernet|TGigaEthernet)/i', $name))
+            ->values()
+            ->all();
+    }
+
+    /**
+     * Normalize rate_limit_details.yml's `rate_limit_entries` list (each a
+     * {Port, Receive Status, Receive Speed Unit, Receive Speed, Send
+     * Status, Send Speed Unit, Send Speed} dict) into a Port-name-keyed map
+     * with snake_case keys, for easy lookup per row on the frontend.
+     */
+    private function formatRateLimitEntries(?array $data): array
+    {
+        if (!is_array($data) || empty($data['rate_limit_entries']) || !is_array($data['rate_limit_entries'])) {
+            return [];
+        }
+
+        $entries = [];
+        foreach ($data['rate_limit_entries'] as $row) {
+            if (!is_array($row) || empty($row['Port'])) {
+                continue;
+            }
+
+            $entries[$row['Port']] = [
+                'receive_status'     => $row['Receive Status'] ?? 'Disable',
+                'receive_speed_unit' => $row['Receive Speed Unit'] ?? null,
+                'receive_speed'      => $row['Receive Speed'] ?? null,
+                'send_status'        => $row['Send Status'] ?? 'Disable',
+                'send_speed_unit'    => $row['Send Speed Unit'] ?? null,
+                'send_speed'         => $row['Send Speed'] ?? null,
+            ];
+        }
+
+        return $entries;
+    }
+
+    #------------------------------------------------------------
+    #                    RATE LIMIT (SET)
+    #------------------------------------------------------------
+    public function setratelimit(Request $request, $hostname)
+    {
+        $data = $request->validate([
+            'interface'          => 'required|string',
+            'receive_status'     => 'nullable|in:Enable,Disable',
+            'receive_speed_unit' => 'nullable|in:64kbps,Percent',
+            'receive_speed'      => 'nullable|integer|min:1|max:15625',
+            'send_status'        => 'nullable|in:Enable,Disable',
+            'send_speed_unit'    => 'nullable|in:64kbps,Percent',
+            'send_speed'         => 'nullable|integer|min:1|max:15625',
+        ]);
+
+        if (empty($data['receive_status']) && empty($data['send_status'])) {
+            return $this->error('Provide at least one of Receive Status or Send Status');
+        }
+
+        foreach (['receive' => 'Receive', 'send' => 'Send'] as $prefix => $label) {
+            $status = $data["{$prefix}_status"] ?? null;
+            if ($status !== 'Enable') {
+                continue;
+            }
+
+            $unit = $data["{$prefix}_speed_unit"] ?? null;
+            $speed = $data["{$prefix}_speed"] ?? null;
+
+            if (empty($unit) || !isset($speed)) {
+                return $this->error("{$label} Speed Unit and {$label} Speed are required when {$label} Status is Enable");
+            }
+
+            if ($unit === 'Percent' && $speed > 100) {
+                return $this->error("{$label} Speed must be between 1 and 100 when {$label} Speed Unit is Percent");
+            }
+        }
+
+        $playbook = "{$this->pluginPath}/playbooks/rate_limit/set_rate_limit.yml";
+        $hosts    = "{$this->pluginPath}/hosts/{$hostname}.yml";
+
+        $extraVars = array_filter([
+            'interface'          => $data['interface'],
+            'receive_status'     => $data['receive_status'] ?? null,
+            'receive_speed_unit' => $data['receive_speed_unit'] ?? null,
+            'receive_speed'      => $data['receive_speed'] ?? null,
+            'send_status'        => $data['send_status'] ?? null,
+            'send_speed_unit'    => $data['send_speed_unit'] ?? null,
+            'send_speed'         => $data['send_speed'] ?? null,
+        ], fn ($value) => $value !== null && $value !== '');
+
+        $output = $this->runAnsiblejs($playbook, $hosts, $extraVars);
+
+        // Refresh the GET cache synchronously so the table the frontend
+        // reloads right after this call already reflects the change,
+        // instead of showing stale data until the next background refresh.
+        $ports = $this->getEligibleRateLimitPorts($hostname);
+        if (!empty($ports)) {
+            $this->runAnsiblejs(
+                "{$this->pluginPath}/playbooks/rate_limit/rate_limit_details.yml",
+                $hosts,
+                ['interfaces' => implode(',', $ports)]
+            );
+        }
+
+        if (stripos($output, 'FAILED!') !== false || stripos($output, '"status": "failed"') !== false) {
+            $reason = $this->extractPortConfigFailureReason($output);
+            return $this->error($reason ?: "Rate Limit SET failed", $output);
+        }
+
+        return $this->success([
+            "message" => "Rate limit configuration updated for {$data['interface']}",
+            "raw"     => $output,
+        ]);
+    }
+
+    #------------------------------------------------------------
     #                    GET PDP (last applied)
     #------------------------------------------------------------
     // setpdp.yml has no corresponding "show pdp" SSH read - the device
@@ -1626,9 +1813,14 @@ public function getvlan($hostname)
      * without waiting for it to finish. Used to silently refresh a cached
      * output file after already serving its previous contents to the user.
      */
-    private function runAnsibleAsync(string $playbook, string $hosts): void
+    private function runAnsibleAsync(string $playbook, string $hosts, array $extraVars = []): void
     {
-        $cmd = "source {$this->venv} && ansible-playbook -i {$hosts} {$playbook} > /dev/null 2>&1 &";
+        $extraVarsString = "";
+        if (!empty($extraVars)) {
+            $extraVarsString = " --extra-vars '" . json_encode($extraVars) . "'";
+        }
+
+        $cmd = "source {$this->venv} && ansible-playbook -i {$hosts} {$playbook}{$extraVarsString} > /dev/null 2>&1 &";
         shell_exec($cmd);
     }
 

@@ -77,6 +77,8 @@ Route::prefix('v0')->group(function () {
         Route::get('getlldpinterface/{hostname}', [App\Api\Controllers\KunalApiController::class, 'getlldpinterface'])->name('getlldpinterface');
         Route::get('portconfig/show/{hostname}', [App\Api\Controllers\KunalApiController::class, 'getportconfiguration'])->name('portconfig.show');
         Route::post('portconfig/set/{hostname}', [App\Api\Controllers\KunalApiController::class, 'setportconfiguration'])->name('portconfig.set');
+        Route::get('ratelimit/show/{hostname}', [App\Api\Controllers\KunalApiController::class, 'getratelimit'])->name('ratelimit.show');
+        Route::post('ratelimit/set/{hostname}', [App\Api\Controllers\KunalApiController::class, 'setratelimit'])->name('ratelimit.set');
         Route::get('pdp/show/{hostname}', [App\Api\Controllers\KunalApiController::class, 'getpdp'])->name('pdp.show');
         Route::post('pdp/set/{hostname}', [App\Api\Controllers\KunalApiController::class, 'setpdp'])->name('pdp.set');
         Route::get('mqtt/show/{hostname}', [App\Api\Controllers\KunalApiController::class, 'getmqtt'])->name('mqtt.show');

@@ -342,6 +342,7 @@ class ConfigurationController implements DeviceTab
     {
         $tabs = [
             ['name' => __('Port Configuration'), 'url' => 'portconfig'],
+            ['name' => __('Rate Limit'), 'url' => 'ratelimitconfig'],
         ];
 
         return $tabs;

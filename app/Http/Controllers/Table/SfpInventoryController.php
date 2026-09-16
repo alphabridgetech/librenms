@@ -46,7 +46,8 @@ class SfpInventoryController extends TableController
     protected function sortFields($request)
     {
         return [
-            'device' => 'device_id',
+            'device_ip' => 'device_id',
+            'hostname' => 'device_id',
             'vendor' => 'vendor',
             'type' => 'type',
             'model' => 'model',
@@ -113,7 +114,8 @@ class SfpInventoryController extends TableController
     protected function getExportHeaders()
     {
         return [
-            'Device',
+            'Device IP',
+            'Hostname',
             'Port',
             'Vendor',
             'Type',
@@ -129,8 +131,12 @@ class SfpInventoryController extends TableController
     public function formatItem($item)
     {
         if ($item instanceof Transceiver) {
-            $deviceLink = $item->device
-                ? '<a href="' . route('device', ['device' => $item->device->device_id]) . '">' . htmlspecialchars((string) $item->device->displayName()) . '</a>'
+            $device = $item->device;
+            $deviceIp = $device
+                ? htmlspecialchars((string) ($device->overwrite_ip ?: (\LibreNMS\Util\IP::isValid($device->hostname) ? $device->hostname : $device->ip)))
+                : 'N/A';
+            $hostnameLink = $device
+                ? '<a href="' . route('device', ['device' => $device->device_id]) . '">' . htmlspecialchars((string) ($device->sysName ?: $device->hostname)) . '</a>'
                 : 'N/A';
 
             $portName = $item->port ? $item->port->ifName : ("Index: " . ($item->index ?? 'N/A'));
@@ -138,7 +144,8 @@ class SfpInventoryController extends TableController
             $distanceStr = $item->distance ? "{$item->distance} m" : 'N/A';
 
             return [
-                'device' => $deviceLink,
+                'device_ip' => $deviceIp,
+                'hostname' => $hostnameLink,
                 'port' => htmlspecialchars((string) $portName),
                 'vendor' => htmlspecialchars((string) ($item->vendor ?: 'N/A')),
                 'type' => '<span class="label label-info">' . htmlspecialchars((string) ($item->type ?: 'SFP')) . '</span>',
@@ -152,15 +159,20 @@ class SfpInventoryController extends TableController
         } else {
             // EntPhysical model fallback
             /** @var EntPhysical $item */
-            $deviceLink = $item->device
-                ? '<a href="' . route('device', ['device' => $item->device->device_id]) . '">' . htmlspecialchars((string) $item->device->displayName()) . '</a>'
+            $device = $item->device;
+            $deviceIp = $device
+                ? htmlspecialchars((string) ($device->overwrite_ip ?: (\LibreNMS\Util\IP::isValid($device->hostname) ? $device->hostname : $device->ip)))
+                : 'N/A';
+            $hostnameLink = $device
+                ? '<a href="' . route('device', ['device' => $device->device_id]) . '">' . htmlspecialchars((string) ($device->sysName ?: $device->hostname)) . '</a>'
                 : 'N/A';
 
             $isSfpPlus = str_contains((string) $item->entPhysicalName, 'TGiga') || str_contains((string) $item->entPhysicalDescr, '10G');
             $typeLabel = $isSfpPlus ? '<span class="label label-primary">SFP+ (10G)</span>' : '<span class="label label-info">SFP</span>';
 
             return [
-                'device' => $deviceLink,
+                'device_ip' => $deviceIp,
+                'hostname' => $hostnameLink,
                 'port' => htmlspecialchars((string) ($item->entPhysicalName ?: 'N/A')),
                 'vendor' => htmlspecialchars((string) ($item->entPhysicalMfgName ?: 'Alpha Bridge')),
                 'type' => $typeLabel,
