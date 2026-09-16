@@ -37,7 +37,9 @@ class DeviceController extends SelectController
         return [
             'access' => 'nullable|in:normal,inverted',
             'user' => 'nullable|int',
-            'id' => 'nullable|in:device_id,hostname',
+            // NOTE: intentionally not named 'id' - the base SelectController already
+            // reserves the 'id' query param to preload/filter by a specific record id.
+            'field' => 'nullable|in:device_id,hostname',
         ];
     }
 
@@ -48,7 +50,7 @@ class DeviceController extends SelectController
 
     protected function baseQuery($request)
     {
-        $this->id = $request->get('id', 'device_id');
+        $this->id = $request->get('field', 'device_id');
         $user_id = $request->get('user');
 
         // list devices the user does not have access to
@@ -73,7 +75,7 @@ class DeviceController extends SelectController
         /** @var Device $device */
         return [
             'id' => $device->{$this->id},
-            'text' => $device->displayName(),
+            'text' => $this->id === 'hostname' ? ($device->sysName ?: $device->hostname) : $device->displayName(),
             'icon' => $device->icon,
         ];
     }

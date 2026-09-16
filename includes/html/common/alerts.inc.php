@@ -238,6 +238,7 @@ if (defined('SHOW_SETTINGS')) {
                 <th data-column-id="rule">Rule</th>
                 <th data-column-id="details" data-sortable="false"></th>
                 <th data-column-id="hostname">Hostname</th>
+                <th data-column-id="device_ip" data-sortable="false">Device IP</th>
                 <th data-column-id="location">Location</th>
                 <th data-column-id="ack_ico" data-sortable="false">ACK</th>
                 <th data-column-id="notes" data-sortable="false">Notes</th>
@@ -265,6 +266,12 @@ var alerts_grid = $("#alerts_' . $unique_id . '").bootgrid({
             </label> \
             <select id="alerts_device_id_' . $unique_id . '" class="form-control input-sm" style="min-width: 150px;"></select> \
             </div> \
+            <div class="form-group" style="margin-left: 5px;"> \
+            <label> \
+            <strong>Hostname&nbsp;</strong> \
+            </label> \
+            <select id="alerts_hostname_filter_' . $unique_id . '" class="form-control input-sm" style="min-width: 150px;"></select> \
+            </div> \
             <button type="button" id="alerts_clear_filter_' . $unique_id . '" class="btn btn-default input-sm" style="margin-left: 5px;"><i class="fa fa-refresh"></i> Clear Filter</button> \
             </div></span></div> \
             <div class="col-sm-12 actionBar"><p class="{{css.search}}"></p><p class="{{css.actions}}"></p></div></div></div>\'
@@ -274,6 +281,7 @@ var alerts_grid = $("#alerts_' . $unique_id . '").bootgrid({
         return {
             id: "alerts",
             device_id: $("#alerts_device_id_' . $unique_id . '").val() || \'-1\',
+            hostname: $("#alerts_hostname_filter_' . $unique_id . '").val() || \'\',
 ';
 
     if (is_numeric($rule_id)) {
@@ -358,11 +366,17 @@ $(document).on("change", "#alerts_device_id_' . $unique_id . '", function(e) {
     $("#alerts_' . $unique_id . '").bootgrid("reload");
 });
 
+$(document).on("change", "#alerts_hostname_filter_' . $unique_id . '", function(e) {
+    $("#alerts_' . $unique_id . '").bootgrid("reload");
+});
+
 $(document).on("click", "#alerts_clear_filter_' . $unique_id . '", function(e) {
     e.preventDefault();
+    $("#alerts_hostname_filter_' . $unique_id . '").val(null).trigger("change");
     $("#alerts_device_id_' . $unique_id . '").val(null).trigger("change");
 });
 
 init_select2("#alerts_device_id_' . $unique_id . '", "device", {}, \'\', "All Devices");
+init_select2("#alerts_hostname_filter_' . $unique_id . '", "device", {field: "hostname"}, \'\', "All Hostnames");
 </script>';
 }

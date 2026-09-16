@@ -47,6 +47,12 @@ if (isset($vars['device_group']) && is_numeric($vars['device_group'])) {
     $param[] = $vars['device_group'];
 }
 
+if (! empty($vars['hostname'])) {
+    $where .= ' AND (`D`.`hostname` LIKE ? OR `D`.`sysName` LIKE ?)';
+    $param[] = '%' . $vars['hostname'] . '%';
+    $param[] = '%' . $vars['hostname'] . '%';
+}
+
 if (isset($vars['date_range']) && is_numeric($vars['date_range']) && (int)$vars['date_range'] > 0) {
     $where .= ' AND `E`.`time_logged` >= DATE_SUB(NOW(), INTERVAL ? DAY)';
     $param[] = (int)$vars['date_range'];
@@ -154,12 +160,15 @@ foreach (dbFetchRows($sql, $param) as $alertlog) {
         $status = 'label-warning';
     }//end if
 
+    $device_ip = htmlspecialchars((string) ($dev['overwrite_ip'] ?: (\LibreNMS\Util\IP::isValid($dev['hostname']) ? $dev['hostname'] : $dev['ip'])));
+
     $response[] = [
         'id' => $rulei++,
         'time_logged' => $alertlog['humandate'],
         'details' => '<a class="fa fa-plus incident-toggle" style="display:none" data-toggle="collapse" data-target="#incident' . $rulei . '" data-parent="#alerts"></a>',
         'verbose_details' => "<button type='button' class='btn btn-alert-details verbose-alert-details' style='display:none' aria-label='Details' id='alert-details' data-alert_log_id='{$alert_log_id}'><i class='fa-solid fa-circle-info'></i></button>",
-        'hostname' => '<div class="incident">' . generate_device_link($dev) . '<div id="incident' . $rulei . '" class="collapse">' . $fault_detail . '</div></div>',
+        'hostname' => '<div class="incident">' . generate_device_link($dev, shorthost($dev['sysName'] ?: $dev['hostname'])) . '<div id="incident' . $rulei . '" class="collapse">' . $fault_detail . '</div></div>',
+        'device_ip' => $device_ip,
         'alert' => htmlspecialchars($alertlog['alert']),
         'status' => "<i class='alert-status " . $status . "' title='" . ($alert_state ? 'active' : 'recovered') . "'></i>",
         'severity' => $alertlog['severity'],

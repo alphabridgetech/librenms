@@ -42,6 +42,12 @@ if (isset($vars['device_id']) && is_numeric($vars['device_id']) && $vars['device
     $where .= ' AND `alerts`.`device_id`=' . $vars['device_id'];
 }
 
+if (! empty($vars['hostname'])) {
+    $where .= ' AND (`devices`.`hostname` LIKE ? OR `devices`.`sysName` LIKE ?)';
+    $param[] = '%' . $vars['hostname'] . '%';
+    $param[] = '%' . $vars['hostname'] . '%';
+}
+
 if (isset($vars['acknowledged']) && is_numeric($vars['acknowledged'])) {
     // I assume that if we are searching for acknowledged/not, we aren't interested in recovered
     $where .= ' AND `alerts`.`state`' . ($vars['acknowledged'] ? '=' : '!=') . $alert_states['acknowledged'];
@@ -165,13 +171,16 @@ foreach (dbFetchRows($sql, $param) as $alert) {
         }
     }
 
-    $hostname = '<div class="incident">' . generate_device_link($alert, shorthost(format_hostname($alert))) . '<div id="incident' . $alert['id'] . '"';
+    $hostname = '<div class="incident">' . generate_device_link($alert, shorthost($alert['sysName'] ?: $alert['hostname'])) . '<div id="incident' . $alert['id'] . '"';
     if (isset($vars['uncollapse_key_count']) && is_numeric($vars['uncollapse_key_count'])) {
         $hostname .= $max_row_length < (int) $vars['uncollapse_key_count'] ? '' : ' class="collapse"';
     } else {
         $hostname .= ' class="collapse"';
     }
     $hostname .= '>' . $fault_detail . '</div></div>';
+
+    $alertDeviceModel = DeviceCache::get((int) $alert['device_id']);
+    $device_ip = htmlspecialchars((string) ($alertDeviceModel->overwrite_ip ?: (\LibreNMS\Util\IP::isValid($alertDeviceModel->hostname) ? $alertDeviceModel->hostname : $alertDeviceModel->ip)));
 
     $severity = $alert['severity'];
     $severity_ico = '<span class="alert-status label-' . alert_layout($severity)['background_color'] . '">&nbsp;</span>';
@@ -209,6 +218,7 @@ foreach (dbFetchRows($sql, $param) as $alert) {
         'details' => '<a class="fa-solid fa-plus incident-toggle" style="display:none" data-toggle="collapse" data-target="#incident' . $alert['id'] . '" data-parent="#alerts"></a>',
         'verbose_details' => "<button type='button' class='btn btn-alert-details command-alert-details' aria-label='Details' id='alert-details' data-alert_log_id='{$alert_log_id}'><i class='fa-solid fa-circle-info'></i></button>",
         'hostname' => $hostname,
+        'device_ip' => $device_ip,
         'location' => generate_link(htmlspecialchars($alert['location'] ?? 'N/A'), ['page' => 'devices', 'location' => $alert['location'] ?? '']),
         'timestamp' => ($alert['timestamp_display'] ? $alert['timestamp_display'] : 'N/A'),
         'severity' => $severity_ico,

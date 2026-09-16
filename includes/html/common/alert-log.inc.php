@@ -89,6 +89,7 @@ $common_output[] = '
             <th data-column-id="time_logged" data-order="desc">Timestamp</th>
             <th data-column-id="details" data-sortable="false">&nbsp;</th>
             <th data-column-id="hostname">Device</th>
+            <th data-column-id="device_ip" data-sortable="false">Device IP</th>
             <th data-column-id="alert">Alert</th>
             <th data-column-id="severity">Severity</th>
             ' . $admin_verbose_details . '
@@ -108,7 +109,6 @@ $common_output[] = '
                 <div class="col-sm-12 actionBar" style="margin-bottom: 10px;"><span class="pull-left"> \
                 <form method="post" action="" class="form-inline" role="form" id="result_form"> \
                 ' . csrf_field() . ' \
-            <input type=hidden name="hostname" id="hostname"> \
 ';
 
 if (isset($vars['fromdevice']) && ! $vars['fromdevice']) {
@@ -120,6 +120,14 @@ if (isset($vars['fromdevice']) && ! $vars['fromdevice']) {
                </div> \
                ';
 }
+
+$common_output[] = '<div class="form-group"> \
+               <label> \
+               <strong>&nbsp;Hostname&nbsp;</strong> \
+               </label> \
+               <select name="hostname" id="alertlog_hostname_filter" class="form-control input-sm" style="min-width: 150px;"></select> \
+               </div> \
+               ';
 
 $common_output[] = '<div class="form-group"> \
                <label> \
@@ -187,7 +195,8 @@ $common_output[] = '<div class="form-group"> \
                 min_severity: $(\'#min_severity\').val() || \'' . htmlspecialchars($_POST['min_severity']) . '\',
                 date_range: $(\'#date_range\').val(),
                 date_from: $(\'#date_from\').val(),
-                date_to: $(\'#date_to\').val()
+                date_to: $(\'#date_to\').val(),
+                hostname: $(\'#alertlog_hostname_filter\').val() || \'\'
             };
         },
         url: "ajax_table.php"
@@ -239,6 +248,15 @@ $common_output[] = '<div class="form-group"> \
         });
     });
 
+    $(document).on("submit", "#result_form", function(e) {
+        e.preventDefault();
+        $("#alertlog").bootgrid("reload");
+    });
+
+    $(document).on("change", "#alertlog_hostname_filter", function(e) {
+        $("#alertlog").bootgrid("reload");
+    });
+
     $(document).on("click", "#clear_filters", function(e) {
         e.preventDefault();
         if ($("#device_id").length) {
@@ -249,10 +267,12 @@ $common_output[] = '<div class="form-group"> \
         $("#date_range").val("");
         $("#date_from").val("");
         $("#date_to").val("");
+        $("#alertlog_hostname_filter").val(null).trigger("change");
         $(".search-field").val("");
         $("#alertlog").bootgrid("reload");
     });
 
     init_select2("#device_id", "device", {}, ' . $device_selected . ' , "All Devices");
+    init_select2("#alertlog_hostname_filter", "device", {field: "hostname"}, \'\', "All Hostnames");
 </script>
 ';
