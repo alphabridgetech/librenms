@@ -3,7 +3,9 @@
 namespace App\Console\Commands;
 
 use App\Models\AlarmArchive;
+use App\Models\BackupLog;
 use Illuminate\Console\Command;
+use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\File;
 use Illuminate\Support\Facades\Log;
@@ -15,7 +17,7 @@ class ArchiveAlarmHistory extends Command
      *
      * @var string
      */
-    protected $signature = 'alarm:archive {--lines=} {--force}';
+    protected $signature = 'alarm:archive {--lines=} {--force} {--destination=}';
 
     /**
      * The console command description.
@@ -37,8 +39,27 @@ class ArchiveAlarmHistory extends Command
         $maxSizeMb = (float) (DB::table('config')->where('config_name', 'alarm_archive_max_size_mb')->value('config_value') ?: 10);
         $maxSizeBytes = $maxSizeMb * 1024 * 1024;
         $purgeDays = (int) (DB::table('config')->where('config_name', 'alarm_archive_purge_days')->value('config_value') ?: 90);
+        $intervalDays = max(1, (int) (DB::table('config')->where('config_name', 'alarm_archive_interval_days')->value('config_value') ?: 1));
+        $destination = $this->option('destination') ?: (DB::table('config')->where('config_name', 'alarm_archive_destination')->value('config_value') ?: 'local');
+        $lastRun = DB::table('config')->where('config_name', 'alarm_archive_last_run')->value('config_value');
 
-        $archiveDir = '/tftpboot/alarms';
+        // Check if dynamic day interval requirement is met (manual runs pass --force to bypass this)
+        if (! $this->option('force') && ! empty($lastRun)) {
+            $daysSince = (int) \Carbon\Carbon::parse($lastRun)->startOfDay()->diffInDays(now()->startOfDay());
+            if ($daysSince < $intervalDays) {
+                $daysLeft = $intervalDays - $daysSince;
+                $skipReason = "Alarm history archive skipped: Configured interval is every {$intervalDays} day(s). Last run was {$daysSince} day(s) ago. Next run due in {$daysLeft} day(s).";
+                $this->info($skipReason);
+                $this->logRun('skipped', $destination, $skipReason);
+                return 0;
+            }
+        }
+
+        $archiveDir = match ($destination) {
+            'external' => '/mnt/external/alarms',
+            'network' => '/mnt/network/alarms',
+            default => '/tftpboot/alarms',
+        };
         if (!File::exists($archiveDir)) {
             File::makeDirectory($archiveDir, 0777, true);
         }
@@ -61,6 +82,7 @@ class ArchiveAlarmHistory extends Command
         $totalLogs = $query->count();
         if ($totalLogs === 0) {
             $this->info("No alert history logs found to archive.");
+            $this->logRun('skipped', $destination, 'No alert history logs found to archive.');
             return 0;
         }
 
@@ -107,10 +129,12 @@ class ArchiveAlarmHistory extends Command
             }
         };
 
-        $openNewFile = function($timestampSample) use ($archiveDir, &$fileHandle, &$currentFilename, &$currentFilePath, &$currentLines, &$currentBytes, &$firstTimestamp, &$lastTimestamp, &$chunkCount) {
+        $runType = $this->option('force') ? 'manual' : 'auto';
+
+        $openNewFile = function($timestampSample) use ($archiveDir, $runType, &$fileHandle, &$currentFilename, &$currentFilePath, &$currentLines, &$currentBytes, &$firstTimestamp, &$lastTimestamp, &$chunkCount) {
             $chunkCount++;
             $dateStr = date('Ymd_His');
-            $currentFilename = "alarm_history_{$dateStr}_part{$chunkCount}.csv";
+            $currentFilename = "alarm_history_{$runType}_{$dateStr}_part{$chunkCount}.csv";
             $currentFilePath = "{$archiveDir}/{$currentFilename}";
 
             $fileHandle = fopen($currentFilePath, 'w');
@@ -210,6 +234,27 @@ class ArchiveAlarmHistory extends Command
         );
 
         $this->info("Alarm History Archive process completed successfully.");
+        $this->logRun('success', $destination, "Archived {$totalLogs} alert history entries into {$chunkCount} file(s) (Interval: {$intervalDays} day(s)).");
         return 0;
+    }
+
+    /**
+     * Record this run in the shared backup activity log.
+     */
+    protected function logRun(string $status, string $destination, string $message): void
+    {
+        try {
+            BackupLog::create([
+                'user_id' => Auth::id(),
+                'module' => 'alarm',
+                'action' => 'create',
+                'filename' => 'Alarm History Archive',
+                'destination' => $destination,
+                'status' => $status,
+                'message' => $message,
+            ]);
+        } catch (\Exception $e) {
+            Log::warning("Could not log alarm archive run: " . $e->getMessage());
+        }
     }
 }

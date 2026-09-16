@@ -3,10 +3,13 @@
 namespace App\Http\Controllers;
 
 use App\Models\AlarmArchive;
+use App\Models\BackupLog;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Artisan;
+use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\File;
+use Illuminate\Support\Facades\Log;
 
 class AlarmArchiveController extends Controller
 {
@@ -24,18 +27,18 @@ class AlarmArchiveController extends Controller
 
         $archives = $query->paginate(20);
 
-        $max_lines = DB::table('config')->where('config_name', 'alarm_archive_max_lines')->value('config_value') ?: 5000;
-        $max_size_mb = DB::table('config')->where('config_name', 'alarm_archive_max_size_mb')->value('config_value') ?: 10;
         $purge_days = DB::table('config')->where('config_name', 'alarm_archive_purge_days')->value('config_value') ?: 90;
         $archive_time = DB::table('config')->where('config_name', 'alarm_archive_time')->value('config_value') ?: '03:00';
+        $archive_interval_days = DB::table('config')->where('config_name', 'alarm_archive_interval_days')->value('config_value') ?: 1;
+        $archive_destination = DB::table('config')->where('config_name', 'alarm_archive_destination')->value('config_value') ?: 'local';
         $last_run = DB::table('config')->where('config_name', 'alarm_archive_last_run')->value('config_value') ?: 'Never';
 
         return view('alerts.archive', compact(
             'archives',
-            'max_lines',
-            'max_size_mb',
             'purge_days',
             'archive_time',
+            'archive_interval_days',
+            'archive_destination',
             'last_run'
         ));
     }
@@ -45,10 +48,24 @@ class AlarmArchiveController extends Controller
      */
     public function store(Request $request)
     {
+        $request->validate([
+            'destination' => 'nullable|in:local,external,network',
+        ]);
+
         try {
-            Artisan::call('alarm:archive', ['--force' => true]);
+            $params = ['--force' => true];
+            if ($request->filled('destination')) {
+                $params['--destination'] = $request->input('destination');
+            }
+
+            $exitCode = Artisan::call('alarm:archive', $params);
             $output = Artisan::output();
-            return redirect()->back()->with('success', __('Alarm history archive generated successfully. ') . trim($output));
+
+            if ($exitCode === 0) {
+                return redirect()->back()->with('success', __('Alarm history archive generated successfully. ') . trim($output));
+            }
+
+            return redirect()->back()->with('error', __('Failed to generate alarm history archive: ') . trim($output));
         } catch (\Exception $e) {
             return redirect()->back()->with('error', __('Failed to generate alarm history archive: ') . $e->getMessage());
         }
@@ -103,8 +120,33 @@ class AlarmArchiveController extends Controller
                 'end_date' => now(),
             ]);
 
+            try {
+                BackupLog::create([
+                    'user_id' => Auth::id(),
+                    'module' => 'alarm',
+                    'action' => 'upload',
+                    'filename' => $filename,
+                    'destination' => 'local',
+                    'status' => 'success',
+                ]);
+            } catch (\Exception $e) {
+                Log::warning("Could not log alarm archive upload: " . $e->getMessage());
+            }
+
             return redirect()->back()->with('success', __('Alarm history archive uploaded successfully to /tftpboot/alarms/'));
         } catch (\Exception $e) {
+            try {
+                BackupLog::create([
+                    'user_id' => Auth::id(),
+                    'module' => 'alarm',
+                    'action' => 'upload',
+                    'filename' => $filename,
+                    'destination' => 'local',
+                    'status' => 'error',
+                    'message' => $e->getMessage(),
+                ]);
+            } catch (\Exception $ex) {}
+
             return redirect()->back()->with('error', __('An error occurred while uploading alarm archive: ') . $e->getMessage());
         }
     }
@@ -126,6 +168,18 @@ class AlarmArchiveController extends Controller
             } else {
                 return redirect()->back()->with('error', __('File not found on server at ') . $archive->file_path);
             }
+        }
+
+        try {
+            BackupLog::create([
+                'user_id' => Auth::id(),
+                'module' => 'alarm',
+                'action' => 'download',
+                'filename' => $archive->filename,
+                'status' => 'success',
+            ]);
+        } catch (\Exception $e) {
+            Log::warning("Could not log alarm archive download: " . $e->getMessage());
         }
 
         return response()->download($filePath, $archive->filename, [
@@ -189,6 +243,18 @@ class AlarmArchiveController extends Controller
         $filename = $archive->filename;
         $archive->delete();
 
+        try {
+            BackupLog::create([
+                'user_id' => Auth::id(),
+                'module' => 'alarm',
+                'action' => 'delete',
+                'filename' => $filename,
+                'status' => 'success',
+            ]);
+        } catch (\Exception $e) {
+            Log::warning("Could not log alarm archive deletion: " . $e->getMessage());
+        }
+
         return redirect()->back()->with('success', __("Archive file {$filename} deleted successfully."));
     }
 
@@ -198,30 +264,30 @@ class AlarmArchiveController extends Controller
     public function saveSettings(Request $request)
     {
         $request->validate([
-            'max_lines' => 'required|integer|min:100|max:50000',
-            'max_size_mb' => 'required|numeric|min:1|max:500',
-            'purge_days' => 'required|integer|min:1|max:3650',
             'archive_time' => 'required|regex:/^\d{2}:\d{2}$/',
+            'archive_interval_days' => 'required|integer|min:1',
+            'archive_destination' => 'required|in:local,external,network',
+            'purge_days' => 'required|integer|min:1|max:3650',
         ]);
 
         DB::table('config')->updateOrInsert(
-            ['config_name' => 'alarm_archive_max_lines'],
-            ['config_value' => $request->input('max_lines')]
+            ['config_name' => 'alarm_archive_time'],
+            ['config_value' => $request->input('archive_time')]
         );
 
         DB::table('config')->updateOrInsert(
-            ['config_name' => 'alarm_archive_max_size_mb'],
-            ['config_value' => $request->input('max_size_mb')]
+            ['config_name' => 'alarm_archive_interval_days'],
+            ['config_value' => $request->input('archive_interval_days')]
+        );
+
+        DB::table('config')->updateOrInsert(
+            ['config_name' => 'alarm_archive_destination'],
+            ['config_value' => $request->input('archive_destination')]
         );
 
         DB::table('config')->updateOrInsert(
             ['config_name' => 'alarm_archive_purge_days'],
             ['config_value' => $request->input('purge_days')]
-        );
-
-        DB::table('config')->updateOrInsert(
-            ['config_name' => 'alarm_archive_time'],
-            ['config_value' => $request->input('archive_time')]
         );
 
         return redirect()->back()->with('success', __('Alarm History Archive settings updated successfully.'));

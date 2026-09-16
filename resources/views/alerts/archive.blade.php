@@ -7,14 +7,6 @@
 @section('content')
     <div class="container-fluid" style="padding: 20px;">
         <div class="page-header" style="margin-top: 0;">
-            <div class="pull-right">
-                <form action="{{ route('alerts.archive.store') }}" method="POST" style="display:inline;">
-                    @csrf
-                    <button type="submit" class="btn btn-success">
-                        <i class="fa fa-archive"></i> Archive Now
-                    </button>
-                </form>
-            </div>
             <h1><i class="fa fa-history text-warning"></i> Alarm History Archive <small>Export, Buffer & Manage Historical Alert Logs</small></h1>
         </div>
 
@@ -29,6 +21,33 @@
                 <i class="fa fa-exclamation-circle"></i> {{ session('error') }}
             </div>
         @endif
+
+        <div class="row" style="margin-bottom: 15px;">
+            <div class="col-md-12">
+                <div class="panel panel-default">
+                    <div class="panel-heading">
+                        <h5 class="panel-title"><i class="fa fa-play-circle text-success"></i> Run Manual Alarm Backup</h5>
+                    </div>
+                    <div class="panel-body">
+                        <p>Archive current alert history log entries into a CSV file immediately, independent of the automated schedule below.</p>
+
+                        <form action="{{ route('alerts.archive.store') }}" method="POST" class="form-inline">
+                            @csrf
+                            <div class="form-group" style="margin-right: 10px;">
+                                <label for="manual_archive_destination" style="margin-right: 5px;">Backup Destination:</label>
+                                <select name="destination" id="manual_archive_destination" class="form-control input-sm">
+                                    <option value="local" {{ $archive_destination == 'local' ? 'selected' : '' }}>Primary (/tftpboot/alarms/)</option>
+                                </select>
+                            </div>
+
+                            <button type="submit" class="btn btn-success btn-sm">
+                                <i class="fa fa-archive fa-fw"></i> Start Manual Alarm Backup
+                            </button>
+                        </form>
+                    </div>
+                </div>
+            </div>
+        </div>
 
         <div class="row">
             <!-- Left Column: Archive Files List -->
@@ -115,31 +134,36 @@
             <div class="col-md-3">
                 <div class="panel panel-default">
                     <div class="panel-heading">
-                        <strong><i class="fa fa-cogs"></i> Archival Threshold Settings</strong>
+                        <strong><i class="fa fa-cogs"></i> Automated Archive Schedule</strong>
                     </div>
                     <div class="panel-body">
                         <form action="{{ route('alerts.archive.settings') }}" method="POST">
                             @csrf
                             <div class="form-group">
-                                <label for="max_lines">Max Lines per File</label>
-                                <input type="number" name="max_lines" id="max_lines" class="form-control" value="{{ $max_lines }}" min="100" max="50000" required>
-                                <span class="help-block small">Buffer line limit before splitting into a new file.</span>
+                                <label for="archive_time">Execution Time:</label>
+                                <input type="time" name="archive_time" id="archive_time" class="form-control" value="{{ $archive_time }}" required>
                             </div>
 
                             <div class="form-group">
-                                <label for="max_size_mb">Max File Size (MB)</label>
-                                <input type="number" step="0.5" name="max_size_mb" id="max_size_mb" class="form-control" value="{{ $max_size_mb }}" min="1" max="500" required>
-                                <span class="help-block small">Maximum file size threshold for archive files.</span>
+                                <label for="archive_interval_days">Backup Interval (Days):</label>
+                                <input type="number" name="archive_interval_days" id="archive_interval_days" class="form-control" value="{{ $archive_interval_days }}" min="1" required>
+                                <span class="help-block small">Run every N days (e.g. 1 for daily).</span>
                             </div>
 
                             <div class="form-group">
-                                <label for="purge_days">Purge Archives Older Than (Days)</label>
+                                <label for="archive_destination">Backup Destination:</label>
+                                <select name="archive_destination" id="archive_destination" class="form-control" required>
+                                    <option value="local" {{ $archive_destination == 'local' ? 'selected' : '' }}>Primary (/tftpboot/alarms/)</option>
+                                </select>
+                            </div>
+
+                            <div class="form-group">
+                                <label for="purge_days">Retention Period (Days):</label>
                                 <input type="number" name="purge_days" id="purge_days" class="form-control" value="{{ $purge_days }}" min="1" max="3650" required>
-                                <span class="help-block small">Auto-purge archive files older than specified days.</span>
                             </div>
 
                             <button type="submit" class="btn btn-primary btn-block">
-                                <i class="fa fa-save"></i> Save Settings
+                                <i class="fa fa-save"></i> Save Schedule Settings
                             </button>
                         </form>
                     </div>

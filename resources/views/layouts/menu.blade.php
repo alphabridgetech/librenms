@@ -564,9 +564,9 @@
                             aria-hidden="true"></i> <span class="tw:md:hidden tw:2xl:inline-block">{{ __('Alerts') }}</span></a>
                     <ul class="dropdown-menu">
                         <li><a href="{{ url('eventlog') }}"><i class="fa-solid fa-anchor-circle-exclamation"
-                                                             aria-hidden="true"></i> {{ __('Live Alarm') }}</a></li>
+                                                             aria-hidden="true"></i> {{ __('Event Log') }}</a></li>
                         <li><a href="{{ url('alerts') }}"><i class="fa fa-bell fa-fw fa-lg"
-                                                             aria-hidden="true"></i> {{ __('Notifications') }}</a></li>
+                                                             aria-hidden="true"></i> {{ __('Current Alarm') }}</a></li>
 
                         <li><a href="{{ url('alert-log') }}"><i class="fa fa-file-text fa-fw fa-lg"
                                                                 aria-hidden="true"></i> {{ __('Alert History') }}</a></li>

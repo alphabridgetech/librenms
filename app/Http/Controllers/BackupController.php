@@ -73,9 +73,16 @@ class BackupController extends Controller
 
         // Get recent logs safely
         $logs = collect();
+        $alarmLogs = collect();
         try {
             if (Schema::hasTable('backup_logs')) {
-                $logs = BackupLog::with('user')->latest()->limit(500)->get();
+                $logs = BackupLog::with('user')
+                    ->where(function ($q) {
+                        $q->whereNull('module')->orWhere('module', '!=', 'alarm');
+                    })
+                    ->latest()->limit(500)->get();
+
+                $alarmLogs = BackupLog::with('user')->where('module', 'alarm')->latest()->limit(500)->get();
             }
         } catch (\Exception $e) {
             Log::warning("Could not fetch backup logs: " . $e->getMessage());
@@ -141,21 +148,22 @@ class BackupController extends Controller
 
         // Alarm History Archive Data
         $alarmArchives = \App\Models\AlarmArchive::latest()->paginate(20);
-        $alarm_max_lines = \DB::table('config')->where('config_name', 'alarm_archive_max_lines')->value('config_value') ?: 5000;
-        $alarm_max_size_mb = \DB::table('config')->where('config_name', 'alarm_archive_max_size_mb')->value('config_value') ?: 10;
         $alarm_purge_days = \DB::table('config')->where('config_name', 'alarm_archive_purge_days')->value('config_value') ?: 90;
         $alarm_archive_time = \DB::table('config')->where('config_name', 'alarm_archive_time')->value('config_value') ?: '03:00';
+        $alarm_archive_interval_days = \DB::table('config')->where('config_name', 'alarm_archive_interval_days')->value('config_value') ?: 1;
+        $alarm_archive_destination = \DB::table('config')->where('config_name', 'alarm_archive_destination')->value('config_value') ?: 'local';
         $alarm_last_run = \DB::table('config')->where('config_name', 'alarm_archive_last_run')->value('config_value') ?: 'Never';
 
         return view('backup.index', compact(
-            'backups', 
-            'rrdBackups', 
+            'backups',
+            'rrdBackups',
             'nodeBackups',
             'devices',
-            'logs', 
+            'logs',
+            'alarmLogs',
             'nodeLogs',
-            'db_backup_time', 
-            'db_backup_destination', 
+            'db_backup_time',
+            'db_backup_destination',
             'db_backup_retention_days',
             'db_backup_interval_days',
             'rrd_backup_time',
@@ -167,10 +175,10 @@ class BackupController extends Controller
             'node_backup_retention_days',
             'node_backup_interval_days',
             'alarmArchives',
-            'alarm_max_lines',
-            'alarm_max_size_mb',
             'alarm_purge_days',
             'alarm_archive_time',
+            'alarm_archive_interval_days',
+            'alarm_archive_destination',
             'alarm_last_run'
         ));
     }

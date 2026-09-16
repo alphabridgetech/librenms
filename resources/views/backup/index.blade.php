@@ -7,7 +7,7 @@
 @section('content')
     <div class="container">
         <div class="page-header">
-            <h1><i class="fa fa-database text-primary"></i> Backup Management <small>Database, RRD & Node Startup-Configs</small></h1>
+            <h1><i class="fa fa-database text-primary"></i> Backup Management <small>Database, RRD,Alarm & Node Startup-Configs</small></h1>
         </div>
 
         @if (session('success'))
@@ -639,9 +639,15 @@
                     <div class="col-md-12">
                         <!-- Node Config Backup Logs -->
                         <div class="panel panel-success">
-                            <div class="panel-heading">
-                                <h5 class="panel-title"><i class="fa fa-server"></i> Node Startup-Config Backup Activity Logs</h5>
+                            <div class="panel-heading" role="tab" id="headingNodeLogs">
+                                <h5 class="panel-title">
+                                    <a role="button" data-toggle="collapse" href="#collapseNodeLogs" aria-expanded="false" aria-controls="collapseNodeLogs">
+                                        <i class="fa fa-server"></i> Node Startup-Config Backup Activity Logs
+                                        <i class="fa fa-chevron-down pull-right"></i>
+                                    </a>
+                                </h5>
                             </div>
+                            <div id="collapseNodeLogs" class="panel-collapse collapse" role="tabpanel" aria-labelledby="headingNodeLogs">
                             <div class="panel-body">
                                 @if (isset($nodeLogs) && $nodeLogs->count() > 0)
                                     <!-- Controls Bar -->
@@ -729,13 +735,20 @@
                                     <p class="text-muted">No node config backup activity logs found.</p>
                                 @endif
                             </div>
+                            </div>
                         </div>
 
                         <!-- System DB & RRD Backup Logs -->
                         <div class="panel panel-info" style="margin-top: 20px;">
-                            <div class="panel-heading">
-                                <h5 class="panel-title"><i class="fa fa-database"></i> Database & RRD Backup Activity Logs</h5>
+                            <div class="panel-heading" role="tab" id="headingSysLogs">
+                                <h5 class="panel-title">
+                                    <a role="button" data-toggle="collapse" href="#collapseSysLogs" aria-expanded="false" aria-controls="collapseSysLogs">
+                                        <i class="fa fa-database"></i> Database & RRD Backup Activity Logs
+                                        <i class="fa fa-chevron-down pull-right"></i>
+                                    </a>
+                                </h5>
                             </div>
+                            <div id="collapseSysLogs" class="panel-collapse collapse" role="tabpanel" aria-labelledby="headingSysLogs">
                             <div class="panel-body">
                                 @if ($logs->count() > 0)
                                     <!-- Controls Bar -->
@@ -833,6 +846,118 @@
                                     <p class="text-muted">No system backup activity logs found.</p>
                                 @endif
                             </div>
+                            </div>
+                        </div>
+
+                        <!-- Alarm History Archive Logs -->
+                        <div class="panel panel-warning" style="margin-top: 20px;">
+                            <div class="panel-heading" role="tab" id="headingAlarmLogs">
+                                <h5 class="panel-title">
+                                    <a role="button" data-toggle="collapse" href="#collapseAlarmLogs" aria-expanded="false" aria-controls="collapseAlarmLogs">
+                                        <i class="fa fa-archive"></i> Alarms Activity Logs
+                                        <i class="fa fa-chevron-down pull-right"></i>
+                                    </a>
+                                </h5>
+                            </div>
+                            <div id="collapseAlarmLogs" class="panel-collapse collapse" role="tabpanel" aria-labelledby="headingAlarmLogs">
+                            <div class="panel-body">
+                                @if (isset($alarmLogs) && $alarmLogs->count() > 0)
+                                    <!-- Controls Bar -->
+                                    <div class="row" style="margin-bottom: 12px;">
+                                        <div class="col-sm-5 col-md-4">
+                                            <div class="input-group input-group-sm">
+                                                <span class="input-group-addon"><i class="fa fa-search"></i></span>
+                                                <input type="text" id="alarmLogsSearchInput" class="form-control" placeholder="Search by user, action, filename, reason...">
+                                            </div>
+                                        </div>
+                                        <div class="col-sm-4 col-md-4">
+                                            <select id="alarmLogsStatusSelect" class="form-control input-sm">
+                                                <option value="all">-- All Statuses --</option>
+                                                <option value="success">Success</option>
+                                                <option value="error">Error / Failed</option>
+                                                <option value="skipped">Skipped</option>
+                                            </select>
+                                        </div>
+                                        <div class="col-sm-3 col-md-4 text-right">
+                                            <label style="font-weight: normal; margin-bottom: 0; line-height: 30px;">Show:
+                                                <select id="alarmLogsEntriesSelect" class="form-control input-sm" style="display: inline-block; width: auto; margin-left: 5px;">
+                                                    <option value="10" selected>10</option>
+                                                    <option value="25">25</option>
+                                                    <option value="50">50</option>
+                                                    <option value="100">100</option>
+                                                    <option value="all">All</option>
+                                                </select>
+                                            </label>
+                                        </div>
+                                    </div>
+
+                                    <table class="table table-condensed table-striped table-hover" id="alarmLogsTable">
+                                        <thead>
+                                            <tr>
+                                                <th>User</th>
+                                                <th>Action</th>
+                                                <th>Filename / Subject</th>
+                                                <th>Destination</th>
+                                                <th>Status</th>
+                                                <th>Reason / Message Details</th>
+                                                <th>Time</th>
+                                            </tr>
+                                        </thead>
+                                        <tbody>
+                                            @foreach ($alarmLogs as $alog)
+                                                <tr data-status="{{ strtolower($alog->status) }}">
+                                                    <td>{{ $alog->user->username ?? 'System (Automated)' }}</td>
+                                                    <td>
+                                                        @php
+                                                            $alogLblClass = 'default';
+                                                            if ($alog->action == 'delete') $alogLblClass = 'danger';
+                                                            elseif ($alog->action == 'create') $alogLblClass = 'primary';
+                                                            elseif ($alog->action == 'skipped') $alogLblClass = 'warning';
+                                                            elseif ($alog->action == 'download') $alogLblClass = 'info';
+                                                            elseif ($alog->action == 'upload') $alogLblClass = 'success';
+                                                        @endphp
+                                                        <span class="label label-{{ $alogLblClass }}">{{ strtoupper($alog->action) }}</span>
+                                                    </td>
+                                                    <td><code>{{ $alog->filename }}</code></td>
+                                                    <td>{{ $alog->destination ?? 'N/A' }}</td>
+                                                    <td>
+                                                        @if ($alog->status == 'success')
+                                                            <span class="label label-success"><i class="fa fa-check"></i> SUCCESS</span>
+                                                        @elseif ($alog->status == 'skipped')
+                                                            <span class="label label-warning"><i class="fa fa-clock-o"></i> SKIPPED</span>
+                                                        @else
+                                                            <span class="label label-danger"><i class="fa fa-times"></i> {{ strtoupper($alog->status) }}</span>
+                                                        @endif
+                                                    </td>
+                                                    <td>
+                                                        @if ($alog->message)
+                                                            <span class="{{ $alog->status == 'error' ? 'text-danger' : ($alog->status == 'skipped' ? 'text-warning' : 'text-muted') }}">
+                                                                {{ $alog->message }}
+                                                            </span>
+                                                        @else
+                                                            <span class="text-muted">-</span>
+                                                        @endif
+                                                    </td>
+                                                    <td><small>{{ $alog->created_at ? $alog->created_at->diffForHumans() : 'N/A' }}</small></td>
+                                                </tr>
+                                            @endforeach
+                                        </tbody>
+                                    </table>
+
+                                    <!-- Pagination Footer -->
+                                    <div class="row" style="margin-top: 10px;">
+                                        <div class="col-sm-6" style="line-height: 30px;">
+                                            <span id="alarmLogsPaginationInfo" class="text-muted small"></span>
+                                        </div>
+                                        <div class="col-sm-6 text-right">
+                                            <div id="alarmLogsPaginationBtns"></div>
+                                        </div>
+                                    </div>
+                                @else
+                                    <p class="text-muted">No alarm archive activity logs found.</p>
+                                @endif
+                            </div>
+                            </div>
                         </div>
                     </div>
                 </div>
@@ -841,16 +966,35 @@
             <!-- ================= ALARM HISTORY ARCHIVE TAB ================= -->
             <div class="tab-pane fade" id="alarm-archive">
                 <div class="row" style="margin-bottom: 15px;">
-                    <div class="col-md-8">
+                    <div class="col-md-12">
                         <h4><i class="fa fa-archive text-warning"></i> Alarm History Archive <small>Export, Buffer & Manage Historical Alert Logs</small></h4>
                     </div>
-                    <div class="col-md-4 text-right">
-                        <form action="{{ route('alerts.archive.store') }}" method="POST" style="display:inline;">
-                            @csrf
-                            <button type="submit" class="btn btn-success">
-                                <i class="fa fa-archive"></i> Archive Now
-                            </button>
-                        </form>
+                </div>
+
+                <div class="row" style="margin-bottom: 15px;">
+                    <div class="col-md-12">
+                        <div class="panel panel-default">
+                            <div class="panel-heading">
+                                <h5 class="panel-title"><i class="fa fa-play-circle text-success"></i> Run Manual Alarm Backup</h5>
+                            </div>
+                            <div class="panel-body">
+                                <p>Archive current alert history log entries into a CSV file immediately, independent of the automated schedule.</p>
+
+                                <form action="{{ route('alerts.archive.store') }}" method="POST" class="form-inline">
+                                    @csrf
+                                    <div class="form-group" style="margin-right: 10px;">
+                                        <label for="manual_archive_destination" style="margin-right: 5px;">Backup Destination:</label>
+                                        <select name="destination" id="manual_archive_destination" class="form-control input-sm">
+                                            <option value="local" {{ $alarm_archive_destination == 'local' ? 'selected' : '' }}>Primary (/tftpboot/alarms/)</option>
+                                        </select>
+                                    </div>
+
+                                    <button type="submit" class="btn btn-success btn-sm">
+                                        <i class="fa fa-archive fa-fw"></i> Start Manual Alarm Backup
+                                    </button>
+                                </form>
+                            </div>
+                        </div>
                     </div>
                 </div>
 
@@ -927,37 +1071,36 @@
                     <div class="col-md-4">
                         <div class="panel panel-default">
                             <div class="panel-heading">
-                                <strong><i class="fa fa-cogs"></i> Archival Threshold & Schedule Settings</strong>
+                                <strong><i class="fa fa-cogs"></i> Automated Archive Schedule</strong>
                             </div>
                             <div class="panel-body">
                                 <form action="{{ route('alerts.archive.settings') }}" method="POST">
                                     @csrf
                                     <div class="form-group">
-                                        <label for="max_lines">Max Lines per File</label>
-                                        <input type="number" name="max_lines" id="max_lines" class="form-control" value="{{ $alarm_max_lines }}" min="100" max="50000" required>
-                                        <span class="help-block small">Buffer line limit before splitting into a new file.</span>
-                                    </div>
-
-                                    <div class="form-group">
-                                        <label for="max_size_mb">Max File Size (MB)</label>
-                                        <input type="number" step="0.5" name="max_size_mb" id="max_size_mb" class="form-control" value="{{ $alarm_max_size_mb }}" min="1" max="500" required>
-                                        <span class="help-block small">Maximum file size threshold for archive files.</span>
-                                    </div>
-
-                                    <div class="form-group">
-                                        <label for="purge_days">Purge Archives Older Than (Days)</label>
-                                        <input type="number" name="purge_days" id="purge_days" class="form-control" value="{{ $alarm_purge_days }}" min="1" max="3650" required>
-                                        <span class="help-block small">Auto-purge archive files older than specified days.</span>
-                                    </div>
-
-                                    <div class="form-group">
-                                        <label for="archive_time">Daily Scheduled Archival Time (24h)</label>
+                                        <label for="archive_time">Execution Time:</label>
                                         <input type="time" name="archive_time" id="archive_time" class="form-control" value="{{ $alarm_archive_time }}" required>
-                                        <span class="help-block small">Dynamic schedule time for automated daily alarm log rotation.</span>
+                                    </div>
+
+                                    <div class="form-group">
+                                        <label for="archive_interval_days">Backup Interval (Days):</label>
+                                        <input type="number" name="archive_interval_days" id="archive_interval_days" class="form-control" value="{{ $alarm_archive_interval_days }}" min="1" required>
+                                        <span class="help-block small">Run every N days (e.g. 1 for daily).</span>
+                                    </div>
+
+                                    <div class="form-group">
+                                        <label for="archive_destination">Backup Destination:</label>
+                                        <select name="archive_destination" id="archive_destination" class="form-control" required>
+                                            <option value="local" {{ $alarm_archive_destination == 'local' ? 'selected' : '' }}>Primary (/tftpboot/alarms/)</option>
+                                        </select>
+                                    </div>
+
+                                    <div class="form-group">
+                                        <label for="purge_days">Retention Period (Days):</label>
+                                        <input type="number" name="purge_days" id="purge_days" class="form-control" value="{{ $alarm_purge_days }}" min="1" max="3650" required>
                                     </div>
 
                                     <button type="submit" class="btn btn-primary btn-block">
-                                        <i class="fa fa-save"></i> Save Settings
+                                        <i class="fa fa-save"></i> Save Schedule Settings
                                     </button>
                                 </form>
                             </div>
@@ -1214,6 +1357,15 @@
                 entriesSelectId: 'sysLogsEntriesSelect',
                 paginationInfoId: 'sysLogsPaginationInfo',
                 paginationBtnsId: 'sysLogsPaginationBtns'
+            });
+
+            initTablePaginationAndFilter({
+                tableId: 'alarmLogsTable',
+                searchInputId: 'alarmLogsSearchInput',
+                statusSelectId: 'alarmLogsStatusSelect',
+                entriesSelectId: 'alarmLogsEntriesSelect',
+                paginationInfoId: 'alarmLogsPaginationInfo',
+                paginationBtnsId: 'alarmLogsPaginationBtns'
             });
 
             initTablePaginationAndFilter({

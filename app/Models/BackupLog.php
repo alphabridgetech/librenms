@@ -8,6 +8,7 @@ class BackupLog extends Model
 {
     protected $fillable = [
         'user_id',
+        'module',
         'action',
         'filename',
         'destination',
