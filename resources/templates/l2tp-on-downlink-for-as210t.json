@@ -1,5 +1,5 @@
 {
-    "name": "L2TP on downlink for AS210T",
+    "name": "L2CP on downlink for AS210T",
     "type": "form",
     "hostname": "",
     "interfaces": [],
@@ -7,6 +7,13 @@
         "AS210T mother card"
     ],
     "fields": [
+         {
+            "label": null,
+            "type": "putonlycmd",
+            "options": null,
+            "command": "interface {{interface}}",
+            "required": true
+        },
         {
             "label": "Description",
             "type": "text",
@@ -15,32 +22,56 @@
             "required": false
         },
         {
-            "label": "L2TP - CDP",
+            "label": "L2CP - CDP",
             "type": "checkbox",
             "options": null,
             "command": "l2protocol-tunnel cdp",
-            "required": true
+            "required": false
         },
         {
-            "label": "L2TP - LLDP",
+            "label": "L2CP - LLDP",
             "type": "checkbox",
             "options": null,
             "command": "l2protocol-tunnel lldp",
-            "required": true
+            "required": false
         },
         {
-            "label": "L2TP - STP",
+            "label": "L2CP - STP",
             "type": "checkbox",
             "options": null,
             "command": "l2protocol-tunnel stp",
-            "required": true
+            "required": false
         },
         {
-            "label": "L2TP - LACP",
+            "label": "L2CP - LACP",
             "type": "checkbox",
             "options": null,
             "command": "l2protocol-tunnel lacp",
-            "required": true
+            "required": false
+        },
+        {
+            "label": "Flow Control",
+            "type": "dropdown",
+            "options": "on:flow-control on,off:flow-control off,auto:flow-control auto",
+            "command": null,
+            "required": false,
+            "divisor": null
+        },
+        {
+            "label": "Duplex",
+            "type": "dropdown",
+            "options": "Auto:duplex auto,Half:duplex half,Full:duplex full",
+            "command": null,
+            "required": false,
+            "divisor": null
+        },
+        {
+            "label": "Speed",
+            "type": "dropdown",
+            "options": "10:speed 10,100:speed 100,Auto:speed auto",
+            "command": null,
+            "required": false,
+            "divisor": null
         },
         {
             "label": null,
@@ -68,13 +99,6 @@
             "type": "text",
             "options": null,
             "command": "switchport dot1q-translating-tunnel mode QinQ translate {{value}} 1",
-            "required": true
-        },
-        {
-            "label": null,
-            "type": "putonlycmd",
-            "options": null,
-            "command": "interface {{interface}}",
             "required": true
         },
         {

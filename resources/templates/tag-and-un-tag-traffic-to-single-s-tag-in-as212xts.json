@@ -8,11 +8,70 @@
     ],
     "fields": [
         {
+            "label": null,
+            "type": "putonlycmd",
+            "options": null,
+            "command": "interface {{interface}}",
+            "required": true
+        },
+        {
             "label": "Description",
             "type": "text",
             "options": null,
             "command": "description {{value}}",
             "required": true
+        },
+        {
+            "label": "L2CP - CDP",
+            "type": "checkbox",
+            "options": null,
+            "command": "l2protocol-tunnel cdp",
+            "required": false
+        },
+        {
+            "label": "L2CP - LLDP",
+            "type": "checkbox",
+            "options": null,
+            "command": "l2protocol-tunnel lldp",
+            "required": false
+        },
+        {
+            "label": "L2CP - STP",
+            "type": "checkbox",
+            "options": null,
+            "command": "l2protocol-tunnel stp",
+            "required": false
+        },
+        {
+            "label": "L2CP - LACP",
+            "type": "checkbox",
+            "options": null,
+            "command": "l2protocol-tunnel lacp",
+            "required": false
+        },
+        {
+            "label": "Flow Control",
+            "type": "dropdown",
+            "options": "on:flow-control on,off:flow-control off,auto:flow-control auto",
+            "command": null,
+            "required": false,
+            "divisor": null
+        },
+        {
+            "label": "Duplex",
+            "type": "dropdown",
+            "options": "Auto:duplex auto,Half:duplex half,Full:duplex full",
+            "command": null,
+            "required": false,
+            "divisor": null
+        },
+        {
+            "label": "Speed",
+            "type": "dropdown",
+            "options": "10:speed 10,100:speed 100,Auto:speed auto",
+            "command": null,
+            "required": false,
+            "divisor": null
         },
         {
             "label": null,
@@ -55,14 +114,8 @@
             "options": null,
             "command": "switchport dot1q-tunnel-sub-global",
             "required": true
-        },
-        {
-            "label": null,
-            "type": "putonlycmd",
-            "options": null,
-            "command": "interface {{interface}}",
-            "required": true
         }
+        
     ],
     "created_at": "2026-09-09 15:17:17"
 }

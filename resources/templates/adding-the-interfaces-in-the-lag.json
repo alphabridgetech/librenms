@@ -6,17 +6,17 @@
     "hardware_models": [],
     "fields": [
         {
-            "label": "LAG-ID",
-            "type": "text",
-            "options": null,
-            "command": "aggregator-group {{value}} mode lacp active",
-            "required": true
-        },
-        {
             "label": null,
             "type": "putonlycmd",
             "options": null,
             "command": "interface {{interface}}",
+            "required": true
+        },
+        {
+            "label": "LAG-ID",
+            "type": "text",
+            "options": null,
+            "command": "aggregator-group {{value}} mode lacp active",
             "required": true
         },
         {

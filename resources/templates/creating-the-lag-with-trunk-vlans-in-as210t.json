@@ -8,6 +8,13 @@
     ],
     "fields": [
         {
+            "label": null,
+            "type": "putonlycmd",
+            "options": null,
+            "command": "interface {{interface}}",
+            "required": true
+        },
+        {
             "label": "Description",
             "type": "text",
             "options": null,
@@ -54,13 +61,6 @@
             "type": "text",
             "options": null,
             "command": "switchport trunk vlan-allowed {{value}}",
-            "required": true
-        },
-        {
-            "label": null,
-            "type": "putonlycmd",
-            "options": null,
-            "command": "interface {{interface}}",
             "required": true
         },
         {

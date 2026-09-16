@@ -5,16 +5,16 @@
     "interfaces": [],
     "fields": [
         {
-            "label": "Reset",
-            "type": "dropdown",
-            "options": "Yes:default interface {{interface}}, No:",
-            "command": null
-        },
-        {
             "label": null,
             "type": "putonlycmd",
             "options": null,
             "command": "Interface {{interface}}"
+        },
+        {
+            "label": "Reset",
+            "type": "dropdown",
+            "options": "Yes:default interface {{interface}}, No:",
+            "command": null
         },
         {
             "label": null,
