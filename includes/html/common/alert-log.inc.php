@@ -105,34 +105,28 @@ $common_output[] = '
         ajax: true,
         rowCount: [50, 100, 250, -1],
         templates: {
-            header: \'<div id="{{ctx.id}}" class="{{css.header}}"><div class="row"> \
-                <div class="col-sm-12 actionBar" style="margin-bottom: 10px;"><span class="pull-left"> \
-                <form method="post" action="" class="form-inline" role="form" id="result_form"> \
+            header: \'<div id="{{ctx.id}}" class="{{css.header}}"> \
+                <div class="row" style="margin-bottom: 10px;"> \
+                <div class="col-xs-12"> \
+                <form method="post" action="" role="form" id="result_form"> \
                 ' . csrf_field() . ' \
+                <div class="row"> \
 ';
 
 if (isset($vars['fromdevice']) && ! $vars['fromdevice']) {
-    $common_output[] = '<div class="form-group"> \
-                <label> \
-                <strong>Device&nbsp;</strong> \
-                </label> \
-                <select name="device_id" id="device_id" class="form-control input-sm" style="min-width: 150px;"></select> \
+    $common_output[] = '<div class="col-xs-6 col-sm-3 form-group"> \
+                <label>Device</label> \
+                <select name="device_id" id="device_id" class="form-control input-sm"></select> \
                </div> \
                ';
 }
 
-$common_output[] = '<div class="form-group"> \
-               <label> \
-               <strong>&nbsp;Hostname&nbsp;</strong> \
-               </label> \
-               <select name="hostname" id="alertlog_hostname_filter" class="form-control input-sm" style="min-width: 150px;"></select> \
+$common_output[] = '<div class="col-xs-6 col-sm-3 form-group"> \
+               <label>Hostname</label> \
+               <select name="hostname" id="alertlog_hostname_filter" class="form-control input-sm"></select> \
                </div> \
-               ';
-
-$common_output[] = '<div class="form-group"> \
-               <label> \
-               <strong>&nbsp;State&nbsp;</strong> \
-               </label> \
+               <div class="col-xs-6 col-sm-3 form-group"> \
+               <label>State</label> \
                <select name="state" id="state" class="form-control input-sm"> \
                 $common_output[] = ' . $selected_state . ' \
                <option value="-1">Any</option> \
@@ -143,10 +137,8 @@ $common_output[] = '<div class="form-group"> \
                <option value="5">Changed</option> \
                </select> \
                </div> \
-               <div class="form-group"> \
-               <label> \
-               <strong>&nbsp;Severity&nbsp;</strong> \
-               </label> \
+               <div class="col-xs-6 col-sm-3 form-group"> \
+               <label>Severity</label> \
                <select name="min_severity" id="min_severity" class="form-control input-sm"> \
                 ' . $selected_min_severity . ' \
                <option value>Any</option> \
@@ -157,10 +149,10 @@ $common_output[] = '<div class="form-group"> \
                <option value="1">Ok, warning and critical</option> \
                </select> \
                </div> \
-               <div class="form-group"> \
-               <label> \
-               <strong>&nbsp;Date Range&nbsp;</strong> \
-               </label> \
+               </div> \
+               <div class="row" style="margin-top: 10px;"> \
+               <div class="col-xs-6 col-sm-3 form-group"> \
+               <label>Date Range</label> \
                <select name="date_range" id="date_range" class="form-control input-sm"> \
                <option value="" ' . ($date_range_val == '' ? 'selected' : '') . '>All Time</option> \
                <option value="1" ' . ($date_range_val == '1' ? 'selected' : '') . '>Last 24 Hours (1 Day)</option> \
@@ -170,22 +162,29 @@ $common_output[] = '<div class="form-group"> \
                <option value="90" ' . ($date_range_val == '90' ? 'selected' : '') . '>Last 90 Days</option> \
                </select> \
                </div> \
-               <div class="form-group"> \
-               <label> \
-               <strong>&nbsp;From&nbsp;</strong> \
-               </label> \
-               <input type="date" name="date_from" id="date_from" class="form-control input-sm" style="max-width: 140px;" value="' . $date_from_val . '"> \
+               <div class="col-xs-6 col-sm-3 form-group"> \
+               <label>From</label> \
+               <input type="date" name="date_from" id="date_from" class="form-control input-sm" value="' . $date_from_val . '"> \
                </div> \
-               <div class="form-group"> \
-               <label> \
-               <strong>&nbsp;To&nbsp;</strong> \
-               </label> \
-               <input type="date" name="date_to" id="date_to" class="form-control input-sm" style="max-width: 140px;" value="' . $date_to_val . '"> \
+               <div class="col-xs-6 col-sm-3 form-group"> \
+               <label>To</label> \
+               <input type="date" name="date_to" id="date_to" class="form-control input-sm" value="' . $date_to_val . '"> \
                </div> \
+               <div class="col-xs-6 col-sm-3 form-group"> \
+               <label>&nbsp;</label> \
+               <div> \
                <button type="submit" class="btn btn-primary input-sm">Filter</button> \
                <button type="button" id="clear_filters" class="btn btn-default input-sm" style="margin-left: 5px;"><i class="fa fa-refresh"></i> Clear Filter</button> \
-               </form></span></div> \
-               <div class="col-sm-12 actionBar"><p class="{{css.search}}"></p><p class="{{css.actions}}"></p></div></div></div>\'
+               </div> \
+               </div> \
+               </div> \
+               </form> \
+               </div> \
+               </div> \
+               <div class="row"> \
+               <div class="col-sm-12 actionBar"><p class="{{css.search}}"></p><p class="{{css.actions}}"></p></div> \
+               </div> \
+               </div>\'
         },
         post: function () {
             return {
