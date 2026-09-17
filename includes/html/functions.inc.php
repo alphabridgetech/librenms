@@ -744,10 +744,14 @@ function alert_log_port_transition($current_details, $previous_details, $time_lo
         return '';
     }
 
-    $render = function ($items, $time_word) use ($time_logged) {
+    // Same "Port Up"/"Port Down" badge already used per-entry in
+    // format_alert_details(), so each line here is tagged the same way
+    // instead of relying solely on the section heading above it.
+    $render = function ($items, $time_word, $badge_label, $badge_class) use ($time_logged) {
         $lines = [];
         foreach ($items as $item) {
-            $line = generate_port_link(cleanPort($item));
+            $line = '<span class="label ' . $badge_class . '" style="margin-right: 5px;">' . $badge_label . '</span> ';
+            $line .= generate_port_link(cleanPort($item));
             if ($time_logged) {
                 $line .= ' <span class="text-muted">(' . $time_word . ' ' . htmlspecialchars($time_logged) . ')</span>';
             }
@@ -761,12 +765,14 @@ function alert_log_port_transition($current_details, $previous_details, $time_lo
             : $lines[0];
     };
 
+    // No separate "Went down:"/"Came back up:" heading above these - the
+    // per-line "Port Down"/"Port Up" badge already says which is which.
     $sections = [];
     if (! empty($went_down)) {
-        $sections[] = '<b class="text-danger">' . __('Went down') . ':</b><br>' . $render($went_down, __('down since'));
+        $sections[] = $render($went_down, __('down since'), __('Port Down'), 'label-danger');
     }
     if (! empty($came_up)) {
-        $sections[] = '<b class="text-success">' . __('Came back up') . ':</b><br>' . $render($came_up, __('up since'));
+        $sections[] = $render($came_up, __('up since'), __('Port Up'), 'label-success');
     }
 
     return implode('<br><br>', $sections) . '<br><br>';

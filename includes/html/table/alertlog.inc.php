@@ -148,19 +148,28 @@ foreach (dbFetchRows($sql, $param) as $alertlog) {
 
     if ($alert_state == '0') {
         $status = 'label-success';
+        $status_text = 'OK (Recovered)';
     } elseif ($alert_state == '1') {
         $status = 'label-danger';
+        $status_text = 'Alert';
     } elseif ($alert_state == '2') {
         $status = 'label-info';
+        $status_text = 'Acknowledged';
     } elseif ($alert_state == '3') {
         $status = 'label-warning';
+        $status_text = 'Worse';
     } elseif ($alert_state == '4') {
         $status = 'label-primary';
+        $status_text = 'Better';
     } elseif ($alert_state == '5') {
         $status = 'label-warning';
+        $status_text = 'Changed';
+    } else {
+        $status = 'label-default';
+        $status_text = 'Unknown';
     }//end if
 
-    $device_ip = htmlspecialchars((string) ($dev['overwrite_ip'] ?: (\LibreNMS\Util\IP::isValid($dev['hostname']) ? $dev['hostname'] : $dev['ip'])));
+    $device_ip = '<span class="label label-default">' . htmlspecialchars((string) ($dev['overwrite_ip'] ?: (\LibreNMS\Util\IP::isValid($dev['hostname']) ? $dev['hostname'] : $dev['ip']))) . '</span>';
 
     $response[] = [
         'id' => $rulei++,
@@ -170,7 +179,7 @@ foreach (dbFetchRows($sql, $param) as $alertlog) {
         'hostname' => '<div class="incident">' . generate_device_link($dev, shorthost($dev['sysName'] ?: $dev['hostname'])) . '<div id="incident' . $rulei . '" class="collapse">' . $fault_detail . '</div></div>',
         'device_ip' => $device_ip,
         'alert' => htmlspecialchars($alertlog['alert']),
-        'status' => "<i class='alert-status " . $status . "' title='" . ($alert_state ? 'active' : 'recovered') . "'></i>",
+        'status' => "<span class='label $status'>$status_text</span>",
         'severity' => $alertlog['severity'],
     ];
 }//end foreach

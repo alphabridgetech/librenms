@@ -180,7 +180,7 @@ foreach (dbFetchRows($sql, $param) as $alert) {
     $hostname .= '>' . $fault_detail . '</div></div>';
 
     $alertDeviceModel = DeviceCache::get((int) $alert['device_id']);
-    $device_ip = htmlspecialchars((string) ($alertDeviceModel->overwrite_ip ?: (\LibreNMS\Util\IP::isValid($alertDeviceModel->hostname) ? $alertDeviceModel->hostname : $alertDeviceModel->ip)));
+    $device_ip = '<span class="label label-default">' . htmlspecialchars((string) ($alertDeviceModel->overwrite_ip ?: (\LibreNMS\Util\IP::isValid($alertDeviceModel->hostname) ? $alertDeviceModel->hostname : $alertDeviceModel->ip))) . '</span>';
 
     $severity = $alert['severity'];
     $severity_ico = '<span class="alert-status label-' . alert_layout($severity)['background_color'] . '">&nbsp;</span>';
