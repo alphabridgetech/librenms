@@ -642,7 +642,10 @@ function alert_live_port_status($details)
         }
 
         $port_array = cleanPort($port->toArray());
-        $line = generate_port_link($port_array);
+        // Same per-line "Port Down" badge used on /alert-log's port
+        // transition summary, instead of a single heading above the list.
+        $line = '<span class="label label-danger" style="margin-right: 5px;">' . __('Port Down') . '</span> ';
+        $line .= generate_port_link($port_array);
 
         // Track how long this port has been down (in seconds) so the list
         // can be sorted newest-down-first below - defaults to "forever"
@@ -680,7 +683,7 @@ function alert_live_port_status($details)
     $group_window = 300; // seconds
     $newly_down = array_filter($entries, fn ($e) => $e['seconds_down'] - $newest_seconds_down <= $group_window);
 
-    return '<b class="text-danger">' . __('Went down') . ':</b><br>' . implode('<br>', array_column($newly_down, 'line')) . '<br><br>';
+    return implode('<br>', array_column($newly_down, 'line')) . '<br><br>';
 }//end alert_live_port_status()
 
 /**
