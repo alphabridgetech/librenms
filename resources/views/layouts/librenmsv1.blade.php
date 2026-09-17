@@ -380,6 +380,44 @@
             });
 
         }, 5000);
+
+        /* --------------------------------
+           Fetch Port Down Alerts
+           Separate from the alerts-api poll above: that one is keyed by
+           the bundled per-device alert_rules alert id, so it never fires
+           again once a device already has an open alert, even if another
+           port on that same device also goes down. This is keyed by each
+           individual port_status_alerts row instead, so every newly-down
+           port gets its own notification.
+        -------------------------------- */
+
+        let shownPortAlerts = new Set();
+
+        setInterval(function() {
+
+            $.get(window.location.origin + "/ajax/port-status-alerts-api", function(data) {
+
+                if (!data.alerts) return;
+
+                data.alerts.forEach(function(alert) {
+
+                    if (shownPortAlerts.has(alert.id)) {
+                        return;
+                    }
+
+                    shownPortAlerts.add(alert.id);
+
+                    let message = alert.hostname + " : Port Down - " + alert.ifname;
+
+                    let url = "/alerts";
+
+                    showAlertNotification("critical", message, url);
+
+                });
+
+            });
+
+        }, 5000);
         @endauth
     </script>
 

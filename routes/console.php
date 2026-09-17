@@ -849,5 +849,9 @@ Schedule::command('alarm:archive')
     ->onOneServer()
     ->appendOutputTo(config('log_dir', storage_path('logs')) . '/alarm_archive.log');
 
-
+Schedule::command('port:check-status-alerts')
+    ->everyFiveMinutes()
+    ->onOneServer()
+    ->withoutOverlapping()
+    ->appendOutputTo(config('log_dir', storage_path('logs')) . '/port_status_alerts.log');
 

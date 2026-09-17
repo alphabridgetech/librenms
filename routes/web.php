@@ -293,6 +293,7 @@ Route::middleware(['auth', 'license'])->group(function () {
     Route::delete('/alerts/archive/delete/{id}', [\App\Http\Controllers\AlarmArchiveController::class, 'destroy'])->name('alerts.archive.destroy')->middleware('can:admin');
     Route::post('/alerts/archive/settings', [\App\Http\Controllers\AlarmArchiveController::class, 'saveSettings'])->name('alerts.archive.settings')->middleware('can:admin');
 
+
     Route::get('about', [AboutController::class, 'index'])->name('about');
     Route::delete('reporting', [AboutController::class, 'clearReportingData'])->name('reporting.clear');
     Route::get('authlog', [UserController::class, 'authlog']);
@@ -415,6 +416,7 @@ Route::middleware(['auth', 'license'])->group(function () {
     Route::prefix('ajax')->group(function () {
         //alert
         Route::get('/alerts-api', [AlertController::class, 'getAlerts']);
+        Route::get('/port-status-alerts-api', [\App\Http\Controllers\PortStatusAlertController::class, 'apiOpen']);
         // page ajax controllers
         Route::resource('location', LocationController::class)->only('update', 'destroy');
         Route::resource('pollergroup', PollerGroupController::class)->only('destroy');

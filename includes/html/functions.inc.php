@@ -670,16 +670,17 @@ function alert_live_port_status($details)
     // among ports that have been down for a while.
     usort($entries, fn ($a, $b) => $a['seconds_down'] <=> $b['seconds_down']);
 
-    $lines = array_column($entries, 'line');
+    // Only show what just went down (same ~1 poll cycle as the newest
+    // entry), not every other port still down on the device - those are
+    // separate, already-notified events and belong on the dedicated
+    // /port-status-alerts page instead of being re-listed here every time
+    // a sibling port changes. Matches how /alert-log's port transition
+    // summary only ever describes what changed in that one history row.
+    $newest_seconds_down = $entries[0]['seconds_down'];
+    $group_window = 300; // seconds
+    $newly_down = array_filter($entries, fn ($e) => $e['seconds_down'] - $newest_seconds_down <= $group_window);
 
-    // A visual gap after the newest entry separates "what just went wrong"
-    // from "what's already been down for a while", so it doesn't blend
-    // into the rest of the list.
-    $list_html = count($lines) > 1
-        ? $lines[0] . '<br><br>' . implode('<br>', array_slice($lines, 1))
-        : $lines[0];
-
-    return '<b>' . __('Currently down') . ':</b><br>' . $list_html . '<br><br>';
+    return '<b class="text-danger">' . __('Went down') . ':</b><br>' . implode('<br>', array_column($newly_down, 'line')) . '<br><br>';
 }//end alert_live_port_status()
 
 /**

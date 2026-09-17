@@ -148,7 +148,21 @@ class RunAlerts
                 $obj['title'] .= ' changed';
             }
 
-            foreach ($extra['rule'] as $incident) {
+            // On a Worse/Better/Changed transition, only the newly added or
+            // newly resolved entries belong in THIS notification - the
+            // already-known ones were already notified about when they
+            // first appeared, so re-listing them every time a sibling port
+            // changes would bundle unrelated events into one message. Only
+            // fall back to the full current list on the very first ACTIVE
+            // alert, where there is no previous state to diff against.
+            $incidents = $extra['rule'] ?? [];
+            if (! empty($extra['diff']['added'])) {
+                $incidents = $extra['diff']['added'];
+            } elseif (! empty($extra['diff']['resolved'])) {
+                $incidents = $extra['diff']['resolved'];
+            }
+
+            foreach ($incidents as $incident) {
                 $i++;
                 $obj['faults'][$i] = $incident;
                 $obj['faults'][$i]['string'] = null;
@@ -158,6 +172,16 @@ class RunAlerts
                     }
                 }
             }
+
+            // Full "everything currently down" list, for templates that
+            // deliberately want the complete picture rather than just what
+            // changed in this notification.
+            $j = 0;
+            foreach ($extra['rule'] ?? [] as $incident) {
+                $j++;
+                $obj['faults_all'][$j] = $incident;
+            }
+
             $obj['elapsed'] = Time::formatInterval(time() - strtotime($alert['time_logged']), true) ?: 'none';
             if (! empty($extra['diff'])) {
                 $obj['diff'] = $extra['diff'];
