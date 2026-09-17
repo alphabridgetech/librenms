@@ -764,6 +764,28 @@ function alert_log_port_transition($current_details, $previous_details, $time_lo
         return '';
     }
 
+    // A rule like "Interface Down (Physical or Admin)" typically also
+    // requires devices.status = 1, so it stops matching ANY port on a
+    // device the instant that device itself goes unreachable - not
+    // because the ports recovered, but because the whole device dropped
+    // out of the query. That shows up here as every previously-down port
+    // vanishing from the result at once, which would otherwise get
+    // rendered as a mass "came back up" - actively misleading, since we
+    // have no real information about those ports while the device can't
+    // be reached at all. Detect that case and relabel it "Unknown"
+    // instead of claiming a recovery we can't actually confirm.
+    $came_up_unreachable = false;
+    if (! empty($came_up) && empty($current_ports)) {
+        $sample = reset($came_up);
+        $device_id = $sample['device_id'] ?? null;
+        if ($device_id) {
+            $device = DeviceCache::get((int) $device_id);
+            if ($device->exists && ! $device->status) {
+                $came_up_unreachable = true;
+            }
+        }
+    }
+
     // Same "Port Up"/"Port Down" badge already used per-entry in
     // format_alert_details(), so each line here is tagged the same way
     // instead of relying solely on the section heading above it.
@@ -792,7 +814,9 @@ function alert_log_port_transition($current_details, $previous_details, $time_lo
         $sections[] = $render($went_down, __('down since'), __('Port Down'), 'label-danger', '#d9534f');
     }
     if (! empty($came_up)) {
-        $sections[] = $render($came_up, __('up since'), __('Port Up'), 'label-success', '#337ab7');
+        $sections[] = $came_up_unreachable
+            ? $render($came_up, __('device unreachable since'), __('Unknown'), 'label-warning', '#8a6d3b')
+            : $render($came_up, __('up since'), __('Port Up'), 'label-success', '#337ab7');
     }
 
     return implode('<br><br>', $sections) . '<br><br>';
