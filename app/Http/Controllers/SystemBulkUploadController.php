@@ -48,24 +48,19 @@ class SystemBulkUploadController extends Controller
         $this->authorize('create', CustomMib::class);
         $devices = Device::orderBy('hostname')->get(['device_id', 'hostname', 'overwrite_ip']);
         
+        // This page's own simple command-list templates, saved via
+        // saveIpTemplate() below - deliberately a separate library from
+        // TemplatePushController's form-based templates (resource_path
+        // ('templates')), which need field-input UI this page doesn't have.
         $templates = [];
         try {
             if (Storage::disk('local')->exists('templates')) {
-                $files = Storage::disk('local')->allFiles('templates');
+                $files = Storage::disk('local')->files('templates');
                 foreach ($files as $file) {
                     if (pathinfo($file, PATHINFO_EXTENSION) === 'json') {
-                        $content = Storage::disk('local')->get($file);
-                        $data = json_decode($content, true);
+                        $data = json_decode(Storage::disk('local')->get($file), true);
                         if ($data) {
-                            if (isset($data['type']) && $data['type'] === 'form') {
-                                continue;
-                            }
-                            $parts = explode('/', $file);
-                            if (count($parts) > 2) {
-                                $data['template_folder'] = $parts[count($parts) - 2];
-                            } else {
-                                $data['template_folder'] = '';
-                            }
+                            $data['template_folder'] = '';
                             $templates[] = $data;
                         }
                     }
@@ -109,6 +104,53 @@ class SystemBulkUploadController extends Controller
         ]);
 
         return $this->processPush($request);
+    }
+
+    /**
+     * Save the current Config Content as a simple, reusable template
+     * scoped to this page (storage/app/templates) - separate from
+     * TemplatePushController's form-based templates, which need dynamic
+     * field-input UI this page doesn't have.
+     */
+    public function saveIpTemplate(Request $request)
+    {
+        $this->authorize('create', CustomMib::class);
+
+        $request->validate([
+            'template_name' => 'required|string|max:255',
+            'commands' => 'required|string',
+        ]);
+
+        $commands = array_values(array_filter(
+            array_map('trim', explode("\n", $request->input('commands'))),
+            fn ($line) => $line !== '' && ! str_starts_with($line, '#')
+        ));
+
+        if (empty($commands)) {
+            return response()->json(['success' => false, 'message' => 'No commands to save'], 400);
+        }
+
+        $slug = Str::slug($request->input('template_name'));
+        if ($slug === '') {
+            return response()->json(['success' => false, 'message' => 'Invalid template name'], 400);
+        }
+
+        $data = [
+            'name' => $request->input('template_name'),
+            'commands' => $commands,
+            'hostname' => '',
+            'created_at' => now()->toDateTimeString(),
+        ];
+
+        $written = Storage::disk('local')->put('templates/' . $slug . '.json', json_encode($data, JSON_PRETTY_PRINT));
+
+        if (! $written) {
+            Log::error("Failed to write template file templates/{$slug}.json - check storage/app/templates ownership/permissions.");
+
+            return response()->json(['success' => false, 'message' => 'Could not save template to disk (permission error) - check server logs'], 500);
+        }
+
+        return response()->json(['success' => true, 'message' => 'Template saved', 'template' => $data]);
     }
 
     public function index(Request $request)

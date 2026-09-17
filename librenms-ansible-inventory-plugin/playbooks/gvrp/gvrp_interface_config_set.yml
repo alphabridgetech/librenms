@@ -1,0 +1,955 @@
+# ==========================================
+# gvrp_interface_config_set.yml
+# Created on Sep 16, 2026 by Vikash Kumar (vikash.kumar@alphabrige.tech).
+#
+# Copyright (c), ALPHA BRIDGE, Inc.
+# 357D, Udyog Vihar Industrial Area Phase VI, Sector 37, Gurugram, Haryana.
+#
+# All rights reserved.
+#
+# This software is the confidential and proprietary information of
+# ALPHA BRIDGE, Inc. ("Confidential Information").  You shall not
+# disclose such Confidential Information and shall use it only in
+# accordance with the terms of the license agreement you entered into
+# with ALPHA BRIDGE.
+#
+# =============================================================================
+# Playbook Name : Set GVRP Interface Configuration
+# =============================================================================
+#
+# Description:
+# This playbook enables or disables per-interface GVRP (GARP VLAN Registration
+# Protocol) on an AlphaBridge switch. It uses SSH/Paramiko to enter the switch
+# configuration mode and applies the requested GVRP command to each interface.
+#
+# The playbook follows the same overall pattern as the existing SHOW playbook:
+# - Validate the input mode and GVRP status.
+# - Create and execute a Python SSH helper script.
+# - Convert the helper's JSON result into an Ansible fact.
+# - Display the result; save a YAML report on success; fail on an error.
+#
+# =============================================================================
+# GVRP Command Mapping
+# =============================================================================
+#
+#   gvrp_status=Enable   -> gvrp
+#   gvrp_status=Disable  -> no gvrp
+#
+# Existing SHOW logic treats GVRP as enabled by default and interprets an
+# explicit "no gvrp" line in running-config as Disable. This SET playbook uses
+# the corresponding "gvrp" command to request Enable. Confirm that this
+# command is supported by the target switch firmware before a production run.
+#
+# =============================================================================
+# Mandatory Switch CLI Flow
+# =============================================================================
+#
+# After SSH login, enter privileged mode and THEN global configuration mode:
+#
+#   enable
+#   config
+#   interface <user-supplied-interface>
+#   gvrp                    # if Enable was requested
+#     OR
+#   no gvrp                 # if Disable was requested
+#   exit                    # return from interface to global config
+#
+# For multiple interfaces, "enable" and "config" are run ONCE. A comma-separated
+# value is split into separate port requests BEFORE issuing CLI commands:
+#
+#   interface=g0/1,g0/2,g0/3
+#
+#   enable
+#   config
+#   interface g0/1
+#   no gvrp
+#   exit
+#   interface g0/2
+#   no gvrp
+#   exit
+#   interface g0/3
+#   no gvrp
+#   exit
+#   exit
+#
+# The same splitting applies to interfaces= and per-item gvrp_requests input.
+#
+# After every interface command, the switch prompt must change from global
+# config to interface config. This prevents accidentally applying "no gvrp"
+# in global config if an interface command is rejected.
+#
+# A final "exit" leaves global configuration mode.
+#
+# No interface names or port counts are validated or converted.
+#
+# The command is sent as "interface g0/1", NOT rewritten as a full name.
+#
+# This playbook does not issue a separate "write memory" or
+# "copy running-config startup-config" command, nor does it perform
+# an independent SHOW readback.
+#
+# =============================================================================
+# Supported Input Formats
+# =============================================================================
+#
+# 1. Single interface:
+#
+#    interface=g0/1
+#    gvrp_status=Enable
+#
+# 2. Multiple interfaces using interface:
+#
+#    interface=g0/1,g0/2,g0/3
+#    gvrp_status=Disable
+#
+# 3. Multiple interfaces using interfaces:
+#
+#    interfaces=g0/1,tg0/1,TGigaEthernet0/2
+#    gvrp_status=Enable
+#
+# 4. Multiple interfaces with individual statuses:
+#
+#    gvrp_requests:
+#      - interface: g0/1
+#        gvrp_status: Enable
+#
+#      - interface: tg0/1
+#        gvrp_status: Disable
+#
+# =============================================================================
+# Execution Examples
+# =============================================================================
+#
+# 1) Enable GVRP on one interface:
+#
+#   ansible-playbook -i inventory/192.168.2.245.yml \
+#     playbooks/port_config/gvrp_interface_config_set.yml \
+#     -e 'interface=g0/1 gvrp_status=Enable'
+#
+# 2) Disable GVRP on one interface:
+#
+#   ansible-playbook -i inventory/192.168.2.245.yml \
+#     playbooks/port_config/gvrp_interface_config_set.yml \
+#     -e 'interface=TGigaEthernet0/1 gvrp_status=Disable'
+#
+# 3) Disable GVRP on multiple interfaces:
+#
+#   ansible-playbook -i inventory/192.168.2.245.yml \
+#     playbooks/port_config/gvrp_interface_config_set.yml \
+#     -e 'interface=g0/1,g0/2,g0/3 gvrp_status=Disable'
+#
+# 4) Multiple interfaces using interfaces:
+#
+#   ansible-playbook -i inventory/192.168.2.245.yml \
+#     playbooks/port_config/gvrp_interface_config_set.yml \
+#     -e 'interfaces=g0/1,g0/2,tg0/1 gvrp_status=Disable'
+#
+# 5) Different statuses for different interfaces:
+#
+#   ansible-playbook -i inventory/192.168.2.245.yml \
+#     playbooks/port_config/gvrp_interface_config_set.yml \
+#     -e '{"gvrp_requests":[{"interface":"g0/1","gvrp_status":"Enable"},
+#                          {"interface":"tg0/1","gvrp_status":"Disable"}]}'
+#
+# =============================================================================
+# Success Output
+# =============================================================================
+#
+# ip: <switch_ip>
+# status: success
+#
+# Per-interface details are deliberately omitted from the success result.
+#
+# Output file:
+#
+#   output/<switch_ip>_gvrp_interface_config_set.yml
+#
+# =============================================================================
+
+
+- name: Set GVRP interface configuration
+  hosts: alphabridge_devices
+  gather_facts: false
+
+  tasks:
+
+    # ==========================================
+    # 1. Validate Input Mode
+    # ==========================================
+    #
+    # This checks the input format only.
+    #
+    # Interface names and port numbers are NOT validated.
+    #
+    # Supported input variables:
+    #
+    #   interface
+    #   interfaces
+    #   gvrp_requests
+    #
+    # Only one input format is allowed at a time.
+    # ==========================================
+
+    - name: Check GVRP input mode
+      ansible.builtin.assert:
+        that:
+          - interface is defined or interfaces is defined or gvrp_requests is defined
+          - not (interface is defined and interfaces is defined)
+          - not (interface is defined and gvrp_requests is defined)
+          - not (interfaces is defined and gvrp_requests is defined)
+
+        fail_msg: >-
+          Provide exactly one of interface, interfaces, or gvrp_requests.
+          Examples: -e 'interface=g0/1 gvrp_status=Enable' or
+          -e 'interfaces=g0/1,tg0/1 gvrp_status=Disable'.
+
+
+    # ==========================================
+    # 2. Build GVRP Request List
+    # ==========================================
+    #
+    # Convert all supported input formats into
+    # the same internal request structure.
+    #
+    # Do not modify interface names.
+    # ==========================================
+
+    - name: Initialize GVRP request list
+      ansible.builtin.set_fact:
+        gvrp_request_list: []
+      when: gvrp_requests is not defined
+
+
+    # ==========================================
+    # Single Interface Input
+    # ==========================================
+    #
+    # Example:
+    #
+    # interface=g0/1
+    # gvrp_status=Disable
+    #
+    # Also accepts comma-separated values:
+    #
+    # interface=g0/1,g0/2,g0/3
+    #
+    # Splitting happens later in Python.
+    # ==========================================
+
+    - name: Build request for one interface
+      ansible.builtin.set_fact:
+        gvrp_request_list:
+          - interface: "{{ interface }}"
+            gvrp_status: "{{ gvrp_status | default('') }}"
+      when: interface is defined
+
+
+    # ==========================================
+    # Multiple Interface Input
+    # ==========================================
+    #
+    # Example:
+    #
+    # interfaces=g0/1,g0/2,tg0/1
+    #
+    # Here each interface is stored as an
+    # individual request.
+    # ==========================================
+
+    - name: Build requests for comma-separated interfaces
+      ansible.builtin.set_fact:
+        gvrp_request_list: >-
+          {{ gvrp_request_list + [
+               {'interface': item, 'gvrp_status': gvrp_status | default('')}
+             ] }}
+
+      loop: "{{ interfaces.split(',') if interfaces is defined else [] }}"
+
+      when: interfaces is defined
+
+
+    # ==========================================
+    # Individual Status Input
+    # ==========================================
+    #
+    # Example:
+    #
+    # gvrp_requests:
+    #   - interface: g0/1
+    #     gvrp_status: Enable
+    #
+    #   - interface: tg0/1
+    #     gvrp_status: Disable
+    #
+    # ==========================================
+
+    - name: Use individually configured interface requests
+      ansible.builtin.set_fact:
+        gvrp_request_list: "{{ gvrp_requests }}"
+      when: gvrp_requests is defined
+
+
+    # ==========================================
+    # 3. Create Python SSH Script
+    # ==========================================
+    # Generate the Python helper script.
+    # ==========================================
+
+    - name: Create Python SSH Script for GVRP interface set
+      ansible.builtin.copy:
+
+        dest: "//opt/librenms/librenms-ansible-inventory-plugin/tmp/gvrp_interface_config_set_exec.py"
+
+        mode: '0700'
+
+        content: |
+          #!/usr/bin/env python3
+
+          import json
+          import paramiko
+          import re
+          import time
+
+
+          # ==========================================
+          # Switch Connection Information
+          # ==========================================
+
+          HOST = {{ ansible_host | to_json }}
+
+          PORT = int({{ ansible_port | default(22) | to_json }})
+
+          USER = {{ ansible_user | to_json }}
+
+          PASSWORD = {{ ansible_password | to_json }}
+
+
+          # ==========================================
+          # Input Request List
+          # ==========================================
+          #
+          # Serialize requests as JSON to safely
+          # pass the Ansible input into Python.
+          # ==========================================
+
+          REQUESTS_JSON = {{ (gvrp_request_list | to_json) | to_json }}
+
+
+          # ==========================================
+          # ANSI Cleanup
+          # ==========================================
+
+          ansi_re = re.compile(
+              r'\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])'
+          )
+
+
+          # ==========================================
+          # Switch Prompt
+          # ==========================================
+
+          prompt_re = re.compile(
+              r'[>#]\s*\Z'
+          )
+
+
+          # ==========================================
+          # CLI Error Detection
+          # ==========================================
+          #
+          # Detect common switch CLI errors.
+          #
+          # Also verify interface prompt transitions
+          # separately before applying GVRP commands.
+          # ==========================================
+
+          cli_error_re = re.compile(
+              r'(?im)(?:^|\n)\s*%\s*(?:Invalid|Error|Incomplete|'
+              r'Ambiguous|Unknown|Unrecognized)\b|'
+              r'\b(?:invalid input|command rejected|unknown command|'
+              r'fail with ret)\b'
+          )
+
+
+          # ==========================================
+          # Read Until Switch Prompt
+          # ==========================================
+          #
+          # Read the command response until the
+          # switch prompt returns.
+          #
+          # Raise TimeoutError if no prompt is received.
+          # ==========================================
+
+          def read_until_prompt(shell, stage, timeout=15):
+
+              buf = ""
+
+              end_time = time.monotonic() + timeout
+
+              while time.monotonic() < end_time:
+
+                  if shell.recv_ready():
+
+                      buf += shell.recv(
+                          65535
+                      ).decode(
+                          errors="ignore"
+                      )
+
+                      clean = ansi_re.sub(
+                          "",
+                          buf
+                      ).rstrip()
+
+                      if prompt_re.search(clean):
+                          return clean
+
+                  else:
+                      time.sleep(0.1)
+
+              raise TimeoutError(
+                  f"Timed out waiting for prompt during {stage}"
+              )
+
+
+          # ==========================================
+          # Execute Switch Command
+          # ==========================================
+          #
+          # Send one command at a time.
+          #
+          # Wait for the CLI prompt before sending
+          # the next command.
+          #
+          # Stop if the switch reports an error.
+          # ==========================================
+
+          def run_command(shell, command, stage):
+
+              shell.send(
+                  command + "\n"
+              )
+
+              output = read_until_prompt(
+                  shell,
+                  stage
+              )
+
+              if cli_error_re.search(output):
+
+                  raise RuntimeError(
+                      f"Switch rejected command {command!r}: {output}"
+                  )
+
+              return output
+
+
+          # ==========================================
+          # Prepare GVRP Requests
+          # ==========================================
+          #
+          # This function:
+          #
+          #   1. Reads the input requests.
+          #   2. Splits comma-separated interfaces.
+          #   3. Checks only Enable/Disable status.
+          #   4. Creates one request per interface.
+          #
+          # Example input:
+          #
+          #   g0/1,g0/2,g0/3
+          #
+          # Output request list:
+          #
+          #   g0/1
+          #   g0/2
+          #   g0/3
+          #
+          # No interface-type or port validation.
+          # ==========================================
+
+          def prepare_requests(raw_requests):
+
+              if not isinstance(raw_requests, list) or not raw_requests:
+
+                  raise ValueError(
+                      "gvrp_requests must be a non-empty list"
+                  )
+
+              prepared = []
+
+              for index, item in enumerate(raw_requests):
+
+                  if not isinstance(item, dict):
+
+                      raise ValueError(
+                          f"gvrp_requests[{index}] must be a dictionary"
+                      )
+
+                  # --------------------------------------
+                  # Read interface input directly.
+                  # --------------------------------------
+
+                  interface_input = str(
+                      item.get("interface") or ""
+                  )
+
+                  # --------------------------------------
+                  # Split multiple interfaces.
+                  #
+                  # g0/1,g0/2,g0/3
+                  #
+                  # becomes:
+                  #
+                  # g0/1
+                  # g0/2
+                  # g0/3
+                  # --------------------------------------
+
+                  names = [
+                      part.strip()
+                      for part in interface_input.split(",")
+                  ]
+
+                  # Check only that interface input
+                  # is not empty.
+                  #
+                  # No prefix, slot or port validation.
+                  if not names or any(not name for name in names):
+
+                      raise ValueError(
+                          f"interface is required in request {index + 1}"
+                      )
+
+                  # --------------------------------------
+                  # Validate GVRP status.
+                  # --------------------------------------
+
+                  status = str(
+                      item.get("gvrp_status") or ""
+                  ).strip().lower()
+
+                  if status not in ("enable", "disable"):
+
+                      raise ValueError(
+                          f"gvrp_status for {interface_input} must be "
+                          "Enable or Disable"
+                      )
+
+                  # --------------------------------------
+                  # Build one request per interface.
+                  # --------------------------------------
+
+                  for name in names:
+
+                      prepared.append({
+
+                          "interface": name,
+
+                          "gvrp_status": status.capitalize(),
+
+                          "command": (
+                              "gvrp"
+                              if status == "enable"
+                              else "no gvrp"
+                          )
+                      })
+
+              return prepared
+
+
+          # ==========================================
+          # Read Last CLI Prompt
+          # ==========================================
+          #
+          # Used to confirm that the CLI entered
+          # interface configuration mode.
+          # ==========================================
+
+          def last_prompt(output):
+
+              return output.rstrip().splitlines()[-1].strip()
+
+
+          # ==========================================
+          # Initialize Variables
+          # ==========================================
+
+          ssh = None
+
+          shell = None
+
+          stage = "input validation"
+
+          results = []
+
+
+          try:
+
+              # ==========================================
+              # 4. Validate and Prepare Requests
+              # ==========================================
+              #
+              # Validate ALL statuses before making
+              # any configuration changes.
+              # ==========================================
+
+              requests = prepare_requests(
+                  json.loads(REQUESTS_JSON)
+              )
+
+
+              # ==========================================
+              # 5. SSH Connection
+              # ==========================================
+
+              stage = "SSH connection"
+
+              ssh = paramiko.SSHClient()
+
+              ssh.set_missing_host_key_policy(
+                  paramiko.AutoAddPolicy()
+              )
+
+              ssh.connect(
+                  HOST,
+                  port=PORT,
+                  username=USER,
+                  password=PASSWORD,
+                  look_for_keys=False,
+                  allow_agent=False,
+                  timeout=20,
+                  banner_timeout=20,
+                  auth_timeout=20
+              )
+
+              shell = ssh.invoke_shell()
+
+              read_until_prompt(
+                  shell,
+                  "initial SSH prompt"
+              )
+
+
+              # ==========================================
+              # 6. Enter Enable Mode
+              # ==========================================
+
+              stage = "enable mode"
+
+              run_command(
+                  shell,
+                  "enable",
+                  stage
+              )
+
+
+              # ==========================================
+              # 7. Enter Global Configuration Mode
+              # ==========================================
+              #
+              # The config command runs ONCE.
+              # ==========================================
+
+              stage = "global configuration mode"
+
+              config_output = run_command(
+                  shell,
+                  "config",
+                  stage
+              )
+
+              config_prompt = last_prompt(
+                  config_output
+              )
+
+
+              # ==========================================
+              # 8. Configure Interfaces One by One
+              # ==========================================
+              #
+              # For each interface:
+              #
+              #   interface <name>
+              #   gvrp / no gvrp
+              #   exit
+              #
+              # Do not combine interface names into
+              # a single switch command.
+              # ==========================================
+
+              for request in requests:
+
+                  name = request["interface"]
+
+                  status = request["gvrp_status"]
+
+                  command = request["command"]
+
+
+                  # --------------------------------------
+                  # Step 1: Enter interface mode.
+                  # --------------------------------------
+                  #
+                  # The user input is sent directly.
+                  #
+                  # Example:
+                  #
+                  #   interface g0/1
+                  #
+                  # --------------------------------------
+
+                  stage = f"interface {name}"
+
+                  interface_output = run_command(
+                      shell,
+                      f"interface {name}",
+                      stage
+                  )
+
+
+                  # --------------------------------------
+                  # Confirm interface mode.
+                  # --------------------------------------
+                  #
+                  # If the prompt is unchanged, the
+                  # switch did not enter interface mode.
+                  #
+                  # Stop BEFORE sending gvrp/no gvrp.
+                  # --------------------------------------
+
+                  if last_prompt(interface_output) == config_prompt:
+
+                      raise RuntimeError(
+                          f"Switch did not enter interface mode for {name}: "
+                          f"{interface_output}"
+                      )
+
+
+                  # --------------------------------------
+                  # Step 2: Apply GVRP command.
+                  # --------------------------------------
+
+                  stage = f"{command} on {name}"
+
+                  run_command(
+                      shell,
+                      command,
+                      stage
+                  )
+
+
+                  # --------------------------------------
+                  # Step 3: Exit interface mode.
+                  # --------------------------------------
+
+                  stage = f"exit interface {name}"
+
+                  exit_output = run_command(
+                      shell,
+                      "exit",
+                      stage
+                  )
+
+
+                  # --------------------------------------
+                  # Confirm global config prompt.
+                  # --------------------------------------
+
+                  if last_prompt(exit_output) != config_prompt:
+
+                      raise RuntimeError(
+                          f"Switch did not return to global config after {name}: "
+                          f"{exit_output}"
+                      )
+
+
+                  # --------------------------------------
+                  # Record completed interface.
+                  # --------------------------------------
+
+                  results.append({
+
+                      "interface": name,
+
+                      "gvrp_status": status,
+
+                      "status": "success"
+                  })
+
+
+              # ==========================================
+              # 9. Exit Global Configuration Mode
+              # ==========================================
+
+              stage = "exit global configuration mode"
+
+              run_command(
+                  shell,
+                  "exit",
+                  stage
+              )
+
+
+              # ==========================================
+              # 10. Return Success JSON
+              # ==========================================
+              #
+              # Only ip and status are returned.
+              # ==========================================
+
+              print(
+                  json.dumps(
+                      {
+                          "ip": HOST,
+                          "status": "success"
+                      },
+                      indent=4
+                  )
+              )
+
+
+          except Exception as exc:
+
+              # ==========================================
+              # Return Failure JSON
+              # ==========================================
+              #
+              # Earlier interfaces may already have
+              # been changed before an error occurs.
+              #
+              # No automatic rollback is performed.
+              # ==========================================
+
+              print(
+                  json.dumps(
+                      {
+                          "ip": HOST,
+
+                          "status": "failed",
+
+                          "stage": stage,
+
+                          "error": str(exc),
+
+                          "completed_count": len(results)
+                      },
+                      indent=4
+                  )
+              )
+
+
+          finally:
+
+              # ==========================================
+              # Close SSH Connection
+              # ==========================================
+
+              if shell is not None:
+                  shell.close()
+
+              if ssh is not None:
+                  ssh.close()
+
+      no_log: true
+
+
+    # ==========================================
+    # 11. Execute Python SSH Script
+    # ==========================================
+
+    - name: Execute GVRP interface set script
+      ansible.builtin.command:
+        cmd: >
+          //opt/librenms/librenms-ansible-inventory-plugin/bin/python3
+          //opt/librenms/librenms-ansible-inventory-plugin/tmp/gvrp_interface_config_set_exec.py
+
+      register: gvrp_raw
+
+      changed_when: false
+
+      failed_when: false
+
+
+    # ==========================================
+    # 12. Convert JSON Result
+    # ==========================================
+
+    - name: Convert GVRP interface set result to JSON
+      ansible.builtin.set_fact:
+        gvrp_result: "{{ gvrp_raw.stdout | from_json }}"
+
+
+    # ==========================================
+    # 13. Display Success Result
+    # ==========================================
+
+    - name: Display GVRP interface set result
+      ansible.builtin.debug:
+        msg: |
+          ip: {{ gvrp_result.ip }}
+          status: {{ gvrp_result.status }}
+
+      when:
+        - gvrp_result.status == 'success'
+
+
+    # ==========================================
+    # 14. Display Error
+    # ==========================================
+
+    - name: Display GVRP interface set error
+      ansible.builtin.debug:
+        msg: >-
+          Error during {{ gvrp_result.stage }}: {{ gvrp_result.error }}.
+          Completed interfaces: {{ gvrp_result.completed_count }}.
+
+      when:
+        - gvrp_result.status == 'failed'
+
+
+    # ==========================================
+    # 15. Save Success Result
+    # ==========================================
+
+    - name: Save GVRP interface set result
+      ansible.builtin.copy:
+
+        dest: "//opt/librenms/librenms-ansible-inventory-plugin/output/{{ ansible_host }}_gvrp_interface_config_set.yml"
+
+        content: |
+          ip: {{ gvrp_result.ip }}
+          status: {{ gvrp_result.status }}
+
+      when:
+        - gvrp_result.status == 'success'
+
+
+    # ==========================================
+    # 16. Fail If SET Failed
+    # ==========================================
+
+    - name: Fail if GVRP interface set failed
+      ansible.builtin.fail:
+        msg: >-
+          GVRP SET failed during {{ gvrp_result.stage }}:
+          {{ gvrp_result.error }}.
+          Completed interfaces: {{ gvrp_result.completed_count }}.
+
+      when:
+        - gvrp_result.status == 'failed'
+
+
+    # ==========================================
+    # 17. Display Result File
+    # ==========================================
+
+    - name: Display result file
+      ansible.builtin.debug:
+        msg: >-
+          GVRP interface configuration applied successfully.
+          Result saved to output/{{ ansible_host }}_gvrp_interface_config_set.yml
+
+      when:
+        - gvrp_result.status == 'success'

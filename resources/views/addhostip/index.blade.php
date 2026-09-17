@@ -31,29 +31,30 @@
                 @csrf
 
                 <div class="row">
-                    @if(!empty($templates))
-                    <div class="col-md-6">
+                    <div class="col-xs-12 col-sm-6" style="margin-bottom: 10px;">
                         <!-- Load Template Dropdown -->
-                        <div class="form-group">
-                            <label for="load_template" class="col-sm-4 control-label">{{ __('Load Template') }}</label>
-                            <div class="col-sm-8">
-                                <select id="load_template" class="form-control">
-                                    <option value="">{{ __('-- Select Template --') }}</option>
+                        <div class="form-group" style="margin-bottom: 0;">
+                            <label for="load_template" class="col-xs-12 col-sm-4 control-label">{{ __('Load Template') }}</label>
+                            <div class="col-xs-12 col-sm-8">
+                                <select id="load_template" class="form-control" @if(empty($templates)) disabled @endif>
+                                    <option value="">{{ empty($templates) ? __('-- No simple templates available --') : __('-- Select Template --') }}</option>
                                     @foreach($templates as $template)
                                         <option value="{{ json_encode($template) }}">{{ $template['name'] }}</option>
                                     @endforeach
                                 </select>
+                                <span class="help-block" id="noTemplatesHelp" @if(!empty($templates)) style="display: none;" @endif>
+                                    {{ __('No saved templates yet. Fill in Config Content below, give it a name, and click "Save as Template".') }}
+                                </span>
                             </div>
                         </div>
                     </div>
-                    @endif
 
                     @if(!empty($uploadedFiles))
-                    <div class="col-md-6">
+                    <div class="col-xs-12 col-sm-6" style="margin-bottom: 10px;">
                         <!-- Previously Uploaded Files Dropdown -->
-                        <div class="form-group">
-                            <label for="load_file" class="col-sm-4 control-label">{{ __('Uploaded Files') }}</label>
-                            <div class="col-sm-8">
+                        <div class="form-group" style="margin-bottom: 0;">
+                            <label for="load_file" class="col-xs-12 col-sm-4 control-label">{{ __('Uploaded Files') }}</label>
+                            <div class="col-xs-12 col-sm-8">
                                 <select id="load_file" class="form-control">
                                     <option value="">{{ __('-- Select File --') }}</option>
                                     @foreach($uploadedFiles as $file)
@@ -132,17 +133,19 @@
 
                 <!-- Real-time IP Validation Preview -->
                 <div class="form-group" id="ipValidationPreview" style="display: none;">
-                    <label class="col-sm-3 control-label">{{ __('IP Validation') }}</label>
-                    <div class="col-sm-9">
+                    <label class="col-xs-12 col-sm-3 control-label">{{ __('IP Validation') }}</label>
+                    <div class="col-xs-12 col-sm-9">
                         <div class="panel panel-default">
                             <div class="panel-heading">
                                 <strong>{{ __('IP Address Validation Results') }}</strong>
-                                <span id="validCount" class="badge bg-success" style="background-color: #5cb85c;">0</span>
-                                <span id="invalidCount" class="badge bg-danger" style="background-color: #d9534f;">0</span>
-                                <span id="commentCount" class="badge bg-info" style="background-color: #5bc0de;">0</span>
+                                <span style="white-space: nowrap;">
+                                    <span id="validCount" class="badge bg-success" style="background-color: #5cb85c;">0</span>
+                                    <span id="invalidCount" class="badge bg-danger" style="background-color: #d9534f;">0</span>
+                                    <span id="commentCount" class="badge bg-info" style="background-color: #5bc0de;">0</span>
+                                </span>
                             </div>
-                            <div class="panel-body" style="max-height: 250px; overflow-y: auto;">
-                                <div id="validationResults"></div>
+                            <div class="panel-body" style="max-height: 250px; overflow-y: auto; padding: 0;">
+                                <div class="table-responsive" id="validationResults"></div>
                             </div>
                         </div>
                     </div>
@@ -156,16 +159,23 @@
                     </div>
                 </div>
 
-                <!-- Config File Preview -->
-                <div class="form-group" id="configPreview" style="display: none;">
-                    <label class="col-sm-3 control-label">{{ __('Config Preview') }}</label>
+                <!-- Config Content: editable before push, and can be typed from scratch to save as a new template -->
+                <div class="form-group" id="configPreview">
+                    <label class="col-sm-3 control-label">{{ __('Config Content') }}</label>
                     <div class="col-sm-9">
                         <div class="panel panel-default">
                             <div class="panel-heading">
                                 <strong id="configFileName"></strong>
+                                <span class="help-block" style="margin: 0; display: inline;">&mdash; {{ __('type/edit commands here; this is what gets pushed - or save it as a reusable template') }}</span>
                             </div>
-                            <div class="panel-body">
-                                <pre id="configFileContent" style="max-height: 200px; overflow-y: auto; background: #f5f5f5; padding: 10px; font-size: 11px;"></pre>
+                            <div class="panel-body" style="padding: 0;">
+                                <textarea id="configFileContent" name="direct_commands" class="form-control" style="max-height: 300px; height: 200px; background: #f5f5f5; padding: 10px; font-size: 11px; font-family: monospace; border: 0; border-radius: 0; resize: vertical;"></textarea>
+                            </div>
+                            <div class="panel-footer">
+                                <button type="button" id="saveTemplateBtn" class="btn btn-info btn-sm">
+                                    <i class="fa fa-floppy-o"></i> {{ __('Save as Template') }}
+                                </button>
+                                <span class="help-block" style="display: inline; margin-left: 10px;">{{ __('Uses the Template Name above') }}</span>
                             </div>
                         </div>
                     </div>
@@ -174,14 +184,14 @@
                 <hr>
 
                 <div class="form-group">
-                    <div class="col-sm-offset-3 col-sm-9">
+                    <div class="col-xs-12 col-sm-offset-3 col-sm-9">
                         <button type="submit" class="btn btn-success" id="submitBtn" disabled>
                             <i class="fa fa-plus"></i> {{ __('Process Devices') }}
                         </button>
                         <button type="reset" class="btn btn-default" id="resetBtn">{{ __('Reset') }}</button>
-                        <div id="loadingSpinner" style="display: none; margin-left: 10px;" class="pull-right">
-                            <i class="fa fa-spinner fa-spin"></i> Processing...
-                        </div>
+                        <span id="loadingSpinner" style="display: none; margin-left: 10px;">
+                            <i class="fa fa-spinner fa-spin"></i> {{ __('Processing...') }}
+                        </span>
                     </div>
                 </div>
             </form>
@@ -254,8 +264,9 @@
             function updateSubmitButton(validation) {
                 const hasFile = $('#config_file').val() !== '';
                 const useTemplateCommands = $('#use_template_commands').val() === '1';
+                const hasEditedContent = $('#configFileContent').val().trim() !== '';
                 validIPs = validation.valid;
-                $('#submitBtn').prop('disabled', !(validation.validCount > 0 && (hasFile || useTemplateCommands)));
+                $('#submitBtn').prop('disabled', !(validation.validCount > 0 && (hasFile || useTemplateCommands) && hasEditedContent));
             }
 
             function updateUI() {
@@ -276,7 +287,7 @@
                     
                     if (template.commands && template.commands.length > 0) {
                         $('#configFileName').text(template.original_filename || 'Template Commands');
-                        $('#configFileContent').text(template.commands.join('\n'));
+                        $('#configFileContent').val(template.commands.join('\n'));
                         $('#configPreview').slideDown();
                         
                         if ($('#use_template_commands').length === 0) {
@@ -296,7 +307,8 @@
                 } else {
                     $('#hostname').val('').trigger('input');
                     $('#template_name').val('');
-                    $('#configPreview').slideUp();
+                    $('#configFileName').text('');
+                    $('#configFileContent').val('').trigger('input');
                     $('#use_template_commands').remove();
                     $('#loaded_template_name').remove();
                     $('#template_folder_hidden').remove();
@@ -316,7 +328,7 @@
                         success: function(response) {
                             if (response.success) {
                                 $('#configFileName').text(response.filename);
-                                $('#configFileContent').text(response.content);
+                                $('#configFileContent').val(response.content);
                                 $('#configPreview').slideDown();
                                 
                                 if ($('#use_template_commands').length === 0) {
@@ -333,7 +345,8 @@
                         }
                     });
                 } else {
-                    $('#configPreview').slideUp();
+                    $('#configFileName').text('');
+                    $('#configFileContent').val('');
                     $('#use_template_commands').remove();
                     $('#loaded_filename').remove();
                     $('#config_file').prop('required', true);
@@ -347,15 +360,64 @@
                     $('#configFileName').text(file.name);
                     const reader = new FileReader();
                     reader.onload = function(e) {
-                        $('#configFileContent').text(e.target.result.substring(0, 2000));
-                        $('#configPreview').slideDown();
+                        $('#configFileContent').val(e.target.result);
                         updateUI();
                     };
                     reader.readAsText(file);
                 } else {
-                    $('#configPreview').slideUp();
+                    $('#configFileContent').val('');
                     updateUI();
                 }
+            });
+
+            // Edits to the loaded content are what actually gets submitted
+            // (direct_commands takes priority server-side over the file/
+            // template it came from), so re-validate as the user types.
+            $('#configFileContent').on('input', updateUI);
+
+            // Save the current Config Content as a new simple template,
+            // scoped to this page - separate from the form-based templates
+            // on Push Configuration by Template.
+            $('#saveTemplateBtn').on('click', function() {
+                const name = $('#template_name').val().trim();
+                const commands = $('#configFileContent').val();
+
+                if (!name) { alert('Enter a Template Name first'); $('#template_name').focus(); return; }
+                if (!commands.trim()) { alert('Config Content is empty - nothing to save'); return; }
+
+                const $btn = $(this);
+                $btn.prop('disabled', true);
+
+                $.ajax({
+                    url: "{{ route('addhost.ip.template.save') }}",
+                    type: 'POST',
+                    data: {
+                        _token: '{{ csrf_token() }}',
+                        template_name: name,
+                        commands: commands
+                    },
+                    success: function(response) {
+                        if (response.success) {
+                            const $select = $('#load_template');
+                            $select.prop('disabled', false);
+                            $('#noTemplatesHelp').hide();
+                            $select.append($('<option>', {
+                                value: JSON.stringify(response.template),
+                                text: response.template.name
+                            }));
+                            $select.val(JSON.stringify(response.template));
+                            alert('Template "' + response.template.name + '" saved.');
+                        } else {
+                            alert(response.message || 'Failed to save template');
+                        }
+                    },
+                    error: function(xhr) {
+                        alert(xhr.responseJSON?.message || 'Failed to save template');
+                    },
+                    complete: function() {
+                        $btn.prop('disabled', false);
+                    }
+                });
             });
 
             $('#ipUploadForm').on('submit', function(e) {
@@ -366,7 +428,8 @@
                 
                 const useTemplateCommands = $('#use_template_commands').val() === '1';
                 if (!$('#config_file').val() && !useTemplateCommands) { alert('Please select a config file'); return false; }
-                
+                if ($('#configFileContent').val().trim() === '') { alert('Config content is empty'); return false; }
+
                 if (!confirm(`Process ${validation.validCount} device(s)?`)) return false;
                 
                 $('#submitBtn').prop('disabled', true);
@@ -390,14 +453,15 @@
                             <div class="alert alert-${type} alert-dismissible" role="alert">
                                 <button type="button" class="close" data-dismiss="alert">&times;</button>
                                 <strong>${type === 'success' ? 'Success!' : 'Warning!'}</strong> ${response.message}
-                                <pre class="mt-2" style="max-height: 200px; overflow-y: auto;">${JSON.stringify(response.results, null, 2)}</pre>
+                                <pre class="mt-2" style="max-height: 200px; overflow-y: auto; white-space: pre-wrap; word-break: break-word;">${JSON.stringify(response.results, null, 2)}</pre>
                             </div>
                         `;
                         $('.panel:first').before(alertHtml);
                         if (response.success) {
                             $('#hostname').val('').trigger('input');
                             $('#config_file').val('');
-                            $('#configPreview').hide();
+                            $('#configFileName').text('');
+                            $('#configFileContent').val('');
                         }
                     },
                     error: function() { $('#processingAlert').remove(); alert('An error occurred'); },
@@ -407,7 +471,6 @@
 
             $('#resetBtn').on('click', function() {
                 $('.alert-success, .alert-warning, .alert-info').remove();
-                $('#configPreview').hide();
                 $('#ipValidationPreview').hide();
             });
         });

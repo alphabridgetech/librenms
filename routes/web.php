@@ -238,6 +238,7 @@ Route::middleware(['auth', 'license'])->group(function () {
     Route::resource('syssoftbulk', SystemBulkUploadController::class);
     Route::get('addhost/ip', [SystemBulkUploadController::class, 'addHostIp'])->name('addhost.ip');
     Route::post('addhost/ip/save', [SystemBulkUploadController::class, 'addHostIpsave'])->name('addhost.ip.save');
+    Route::post('addhost/ip/template/save', [SystemBulkUploadController::class, 'saveIpTemplate'])->name('addhost.ip.template.save');
     Route::get('addhost/template', [TemplatePushController::class, 'addHostTemplate'])->name('addhost.template');
     Route::post('addhost/template/save', [TemplatePushController::class, 'addHostTemplateSave'])->name('addhost.template.save');
     Route::post('addhost/template/store', [TemplatePushController::class, 'storeTemplate'])->name('addhost.template.store');

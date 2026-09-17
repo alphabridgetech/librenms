@@ -1,0 +1,390 @@
+# ==========================================
+# gvrp_global_config.yml
+# Created on Aug 31, 2026 by Vikash Kumar (vikash.kumar@alphabrige.tech).
+#
+# Copyright (c), ALPHA BRIDGE, Inc.
+# 357D, Udyog Vihar Industrial Area Phase VI, Sector 37, Gurugram, Haryana.
+# 
+# All rights reserved.
+#
+# This software is the confidential and proprietary information of
+# ALPHA BRIDGE, Inc. ("Confidential Information").  You shall not
+# disclose such Confidential Information and shall use it only in
+# accordance with the terms of the license agreement you entered into
+# with ALPHA BRIDGE.
+#
+# =============================================================================
+# Playbook Name : GVRP Global Configuration
+# =============================================================================
+#
+# Description:
+# This playbook configures Global GVRP (GARP VLAN Registration Protocol)
+# settings on AlphaBridge switches through SSH using a Python helper script.
+#
+# Features:
+# - Enable or Disable Global GVRP
+# - Enable or Disable Dynamic VLAN Pruning
+# - Validate user input
+# - Apply configuration on the switch
+# - Verify configuration using running-config
+# - Save switch configuration
+# - Generate JSON output
+# - Save execution result in YAML format
+#
+# Inputs:
+# gvrp_global:
+#     enable | disable
+#
+# dynamic_vlan:
+#     enable | disable
+#
+# Example:
+# ansible-playbook -i inventory/192.168.2.245.yml \
+# playbooks/gvrp_global_config.yml \
+# -e "gvrp_global=enable dynamic_vlan=enable"
+#
+# Output:
+# output/<switch_ip>_gvrp_global_config.yml
+# =============================================================================
+
+- name: GVRP global config
+  hosts: alphabridge_devices
+  gather_facts: no
+
+  tasks:
+
+    # ==========================================
+    # Validate GVRP Global setting
+    # ==========================================
+
+    - name: Validate gvrp_global
+      ansible.builtin.assert:
+        that:
+          - gvrp_global is defined
+          - gvrp_global | length > 0
+          - gvrp_global in ['enable', 'disable']
+        fail_msg: "gvrp_global must be explicitly set to
+          'enable' or 'disable' (e.g. -e \"gvrp_global=enable\").
+          Check for a missing '=' in your -e argument if you did pass a value."
+
+    # ==========================================
+    # Validate Dynamic VLAN Pruning setting
+    # ==========================================
+
+    - name: Validate dynamic_vlan
+      ansible.builtin.assert:
+        that:
+          - dynamic_vlan is defined
+          - dynamic_vlan | length > 0
+          - dynamic_vlan in ['enable', 'disable']
+        fail_msg: "dynamic_vlan must be explicitly set to
+          'enable' or 'disable' (e.g. -e \"dynamic_vlan=enable\").
+          Check for a missing '=' in your -e argument if you did pass a value."
+
+    # ==========================================
+    # Create Python SSH Script
+    # ==========================================
+
+    - name: Create Python SSH Script for GVRP global config
+      ansible.builtin.copy:
+        dest: "//opt/librenms/librenms-ansible-inventory-plugin/tmp/gvrp_global_config_exec.py"
+        mode: '0755'
+        content: |
+          #!/usr/bin/env python3
+
+          import paramiko
+          import time
+          import re
+          import json
+
+          HOST = "{{ ansible_host }}"
+          USER = "{{ ansible_user }}"
+          PASSWORD = "{{ ansible_password }}"
+
+          GVRP_GLOBAL = "{{ gvrp_global | default('disable') }}"
+          DYNAMIC_VLAN = "{{ dynamic_vlan | default('disable') }}"
+
+
+          def read_until_prompt(shell, prompt_regex, timeout=10):
+              buf = ""
+              end_time = time.time() + timeout
+
+              while time.time() < end_time:
+                  if shell.recv_ready():
+                      chunk = shell.recv(65535).decode(errors="ignore")
+                      buf += chunk
+
+                      if re.search(prompt_regex, buf):
+                          return buf
+                  else:
+                      time.sleep(0.1)
+
+              return buf
+
+
+          ansi_re = re.compile(
+              r'\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])'
+          )
+
+          shell = None
+          ssh = None
+
+          try:
+              # ==========================================
+              # SSH CONNECTION
+              # ==========================================
+
+              ssh = paramiko.SSHClient()
+              ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+
+              ssh.connect(
+                  HOST,
+                  username=USER,
+                  password=PASSWORD,
+                  look_for_keys=False,
+                  allow_agent=False,
+                  timeout=10
+              )
+
+              shell = ssh.invoke_shell()
+              time.sleep(0.5)
+
+              # ==========================================
+              # INITIAL PROMPT
+              # Example:
+              # AS212XTS>
+              # ==========================================
+
+              initial_output = read_until_prompt(
+                  shell,
+                  r'[>#]\s*$',
+                  timeout=5
+              )
+
+              # ==========================================
+              # ENABLE
+              # Example:
+              # AS212XTS#
+              # ==========================================
+
+              shell.send("enable\n")
+
+              enable_output = read_until_prompt(
+                  shell,
+                  r'[>#]\s*$',
+                  timeout=5
+              )
+
+              # ==========================================
+              # CONFIG
+              # Example:
+              # AS212XTS_config#
+              # ==========================================
+
+              shell.send("config\n")
+
+              config_output = read_until_prompt(
+                  shell,
+                  r'_config#\s*$',
+                  timeout=5
+              )
+
+              # ==========================================
+              # DISABLE PAGING
+              # ==========================================
+
+              shell.send("terminal length 0\n")
+
+              terminal_output = read_until_prompt(
+                  shell,
+                  r'_config#\s*$',
+                  timeout=5
+              )
+
+              # ==========================================
+              # GVRP GLOBAL
+              #
+              # Command:
+              # gvrp
+              # no gvrp
+              # ==========================================
+
+              if GVRP_GLOBAL == "enable":
+                  shell.send("gvrp\n")
+              else:
+                  shell.send("no gvrp\n")
+
+              gvrp_output = read_until_prompt(
+                  shell,
+                  r'_config#\s*$',
+                  timeout=5
+              )
+
+              if re.search(r'%err|parameter invalid|error', gvrp_output, re.IGNORECASE):
+                  raise Exception(
+                      f"GVRP global command rejected by switch: "
+                      f"{gvrp_output.strip()}"
+                  )
+
+              # ==========================================
+              # DYNAMIC VLAN PRUNING
+              #
+              # Command:
+              # gvrp dynamic-vlan-pruning
+              # no gvrp dynamic-vlan-pruning
+              # ==========================================
+
+              if DYNAMIC_VLAN == "enable":
+                  shell.send("gvrp dynamic-vlan-pruning\n")
+              else:
+                  shell.send("no gvrp dynamic-vlan-pruning\n")
+
+              dynamic_vlan_output = read_until_prompt(
+                  shell,
+                  r'_config#\s*$',
+                  timeout=5
+              )
+
+              if re.search(r'%err|parameter invalid|error', dynamic_vlan_output, re.IGNORECASE):
+                  raise Exception(
+                      f"GVRP dynamic-vlan-pruning command rejected by switch: "
+                      f"{dynamic_vlan_output.strip()}"
+                  )
+
+              # ==========================================
+              # SHOW RUNNING CONFIG
+              # ==========================================
+
+              shell.send("show running-config non-interface\n")
+
+              running_config_output = read_until_prompt(
+                  shell,
+                  r'_config#\s*$',
+                  timeout=5
+              )
+
+              # ==========================================
+              # WRITE CONFIGURATION
+              # ==========================================
+
+              shell.send("write\n")
+
+              write_output = read_until_prompt(
+                  shell,
+                  r'[>#]\s*$',
+                  timeout=10
+              )
+
+              # ==========================================
+              # EXIT
+              # ==========================================
+
+              shell.send("exit\n")
+
+              exit_output = read_until_prompt(
+                  shell,
+                  r'[>#]\s*$',
+                  timeout=5
+              )
+
+              # ==========================================
+              # CLEAN ANSI CHARACTERS
+              # ==========================================
+
+              enable_output = ansi_re.sub("", enable_output)
+              config_output = ansi_re.sub("", config_output)
+              gvrp_output = ansi_re.sub("", gvrp_output)
+              dynamic_vlan_output = ansi_re.sub("", dynamic_vlan_output)
+              running_config_output = ansi_re.sub("", running_config_output)
+              write_output = ansi_re.sub("", write_output)
+              exit_output = ansi_re.sub("", exit_output)
+
+              # ==========================================
+              # CLOSE SSH
+              # ==========================================
+
+              shell.close()
+              ssh.close()
+
+              # ==========================================
+              # RETURN JSON
+              # ==========================================
+
+              print(json.dumps({
+                  "ip": HOST,
+                  "status": "success"
+              }))
+
+          except Exception as e:
+              try:
+                  if shell:
+                      shell.close()
+
+                  if ssh:
+                      ssh.close()
+              except:
+                  pass
+
+              print(json.dumps({
+                  "ip": HOST,
+                  "status": "failed",
+                  "error": str(e)
+              }))
+
+    # ==========================================
+    # EXECUTE PYTHON SCRIPT
+    # ==========================================
+
+    - name: Execute GVRP global config script
+      ansible.builtin.command:
+        cmd: >
+          //opt/librenms/librenms-ansible-inventory-plugin/bin/python3
+          //opt/librenms/librenms-ansible-inventory-plugin/tmp/gvrp_global_config_exec.py
+      register: gvrp_raw
+      changed_when: false
+      failed_when: false
+
+    # ==========================================
+    # CONVERT JSON RESULT
+    # ==========================================
+
+    - name: Convert GVRP result to JSON
+      ansible.builtin.set_fact:
+        gvrp_result: "{{ gvrp_raw.stdout | from_json }}"
+
+    # ==========================================
+    # DISPLAY RESULT
+    # ==========================================
+
+    - name: Display GVRP config result
+      ansible.builtin.debug:
+        var: gvrp_result
+
+    # ==========================================
+    # SAVE RESULT
+    # ==========================================
+
+    - name: Save GVRP config result
+      ansible.builtin.copy:
+        dest: "//opt/librenms/librenms-ansible-inventory-plugin/output/{{ ansible_host }}_gvrp_global_config.yml"
+        content: |
+          {{ gvrp_result | to_nice_yaml }}
+
+    # ==========================================
+    # FAIL IF GVRP CONFIG FAILED
+    # ==========================================
+
+    - name: Fail if GVRP config failed
+      ansible.builtin.fail:
+        msg: "{{ gvrp_result.error }}"
+      when: gvrp_result.status == "failed"
+
+    # ==========================================
+    # FINAL MESSAGE
+    # ==========================================
+
+    - name: Display result file
+      ansible.builtin.debug:
+        msg: "GVRP global config (gvrp={{ gvrp_global | default('disable') }},
+        dynamic_vlan={{ dynamic_vlan | default('disable') }}) applied on
+        {{ ansible_host }}. Result saved to output/{{ ansible_host }}_gvrp_global_config.yml"

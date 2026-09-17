@@ -165,9 +165,27 @@ trait HandlesPushConfiguration
             return response()->json(['success' => false, 'message' => 'No valid IP addresses found'], 400);
         }
 
+        // Persist a freshly uploaded file to temp/configs/ (so it shows up
+        // under "Uploaded Files" next time) regardless of whether its
+        // content ends up being used below - direct_commands may hold an
+        // edited version of it and take priority, but the original upload
+        // should still be saved either way.
+        $uploadedFilePath = null;
+        if ($request->hasFile('config_file')) {
+            $configFile = $request->file('config_file');
+            $dateFolder = now()->format('Y-m-d');
+            $filename = time() . '_' . $configFile->getClientOriginalName();
+            $storedPath = $configFile->storeAs('temp/configs/' . $dateFolder, $filename);
+            $uploadedFilePath = storage_path('app/' . $storedPath);
+
+            if (!file_exists($uploadedFilePath)) {
+                return response()->json(['success' => false, 'message' => 'Config file upload failed'], 500);
+            }
+        }
+
         $commands = [];
         $selectedInterfaces = $request->input('selected_interfaces', []);
-        
+
         if ($request->filled('direct_commands')) {
             $commands = explode("\n", trim($request->direct_commands));
             $commands = array_filter(array_map('trim', $commands), function ($cmd) {
@@ -196,18 +214,8 @@ trait HandlesPushConfiguration
             }
         }
 
-        if (empty($commands) && $request->hasFile('config_file')) {
-            $configFile = $request->file('config_file');
-            $dateFolder = now()->format('Y-m-d');
-            $filename = time() . '_' . $configFile->getClientOriginalName();
-            $storedPath = $configFile->storeAs('temp/configs/' . $dateFolder, $filename);
-            $fullPath = storage_path('app/' . $storedPath);
-
-            if (!file_exists($fullPath)) {
-                return response()->json(['success' => false, 'message' => 'Config file upload failed'], 500);
-            }
-
-            $fileContent = file($fullPath, FILE_IGNORE_NEW_LINES | FILE_SKIP_EMPTY_LINES);
+        if (empty($commands) && $uploadedFilePath) {
+            $fileContent = file($uploadedFilePath, FILE_IGNORE_NEW_LINES | FILE_SKIP_EMPTY_LINES);
             foreach ($fileContent as $line) {
                 $line = trim($line);
                 if ($line === '' || str_starts_with($line, '#')) continue;
