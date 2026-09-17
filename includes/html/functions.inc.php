@@ -591,6 +591,23 @@ function alert_details($details)
 }//end alert_details()
 
 /**
+ * generate_port_link() returns an <a> tag whose own CSS class
+ * (interface-updown/interface-upup, set by ifclass()) already carries a
+ * `color` rule applied directly to that element - wrapping it in a colored
+ * <span> has no effect, since an element's own explicit color always wins
+ * over an inherited one regardless of the ancestor's specificity. Putting
+ * the color inline on the <a> itself (inserted right after the opening
+ * tag) is the only way to actually override it, so callers that want a
+ * specific down/up color for the port name itself go through this.
+ */
+function colored_port_link($port, $color)
+{
+    $link = generate_port_link($port);
+
+    return preg_replace('/^<a /', '<a style="color: ' . $color . ' !important;" ', $link, 1);
+}
+
+/**
  * Build a "which port(s) are down right now, and since when?" section to
  * prepend to the existing (hidden-by-default, "+"-toggle) incident detail
  * block on the alerts list - NOT a new column, just makes that same
@@ -645,7 +662,7 @@ function alert_live_port_status($details)
         // Same per-line "Port Down" badge used on /alert-log's port
         // transition summary, instead of a single heading above the list.
         $line = '<span class="label label-danger" style="margin-right: 5px;">' . __('Port Down') . '</span> ';
-        $line .= generate_port_link($port_array);
+        $line .= colored_port_link($port_array, '#d9534f');
 
         // Track how long this port has been down (in seconds) so the list
         // can be sorted newest-down-first below - defaults to "forever"
@@ -750,11 +767,11 @@ function alert_log_port_transition($current_details, $previous_details, $time_lo
     // Same "Port Up"/"Port Down" badge already used per-entry in
     // format_alert_details(), so each line here is tagged the same way
     // instead of relying solely on the section heading above it.
-    $render = function ($items, $time_word, $badge_label, $badge_class) use ($time_logged) {
+    $render = function ($items, $time_word, $badge_label, $badge_class, $text_color) use ($time_logged) {
         $lines = [];
         foreach ($items as $item) {
             $line = '<span class="label ' . $badge_class . '" style="margin-right: 5px;">' . $badge_label . '</span> ';
-            $line .= generate_port_link(cleanPort($item));
+            $line .= colored_port_link(cleanPort($item), $text_color);
             if ($time_logged) {
                 $line .= ' <span class="text-muted">(' . $time_word . ' ' . htmlspecialchars($time_logged) . ')</span>';
             }
@@ -772,10 +789,10 @@ function alert_log_port_transition($current_details, $previous_details, $time_lo
     // per-line "Port Down"/"Port Up" badge already says which is which.
     $sections = [];
     if (! empty($went_down)) {
-        $sections[] = $render($went_down, __('down since'), __('Port Down'), 'label-danger');
+        $sections[] = $render($went_down, __('down since'), __('Port Down'), 'label-danger', '#d9534f');
     }
     if (! empty($came_up)) {
-        $sections[] = $render($came_up, __('up since'), __('Port Up'), 'label-success');
+        $sections[] = $render($came_up, __('up since'), __('Port Up'), 'label-success', '#337ab7');
     }
 
     return implode('<br><br>', $sections) . '<br><br>';
