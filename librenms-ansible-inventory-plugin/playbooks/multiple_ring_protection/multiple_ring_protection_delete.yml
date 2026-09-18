@@ -1,0 +1,415 @@
+# ==========================================
+# multiple_ring_protection_delete.yml
+# Created on Sept 3, 2026 by Vikash Kumar (vikash.kumar@alphabrige.tech).
+#
+# Copyright (c), ALPHA BRIDGE, Inc.357D, Udyog Vihar Industrial Area Phase VI,
+# Sector 37, Gurugram, Haryana.
+#
+# All rights reserved.
+#
+# This software is the confidential and proprietary information of ALPHA BRIDGE,
+# Inc. ("Confidential Information"). You shall not disclose such Confidential
+# Information and shall use it only in accordance with the terms of the license
+# agreement you entered into with ALPHA BRIDGE.
+#
+# =============================================================================
+# Playbook Name : Multiple Ring Protection Delete (MEAPS)
+# =============================================================================
+#
+# Description:
+# Deletes a MEAPS ring on AlphaBridge switches over SSH using:
+#   no mether-ring <ring_id> domain <domain_id>
+#
+# Input vars:
+#   domain_id - 0 to 3
+#   ring_id   - 0 to 7
+#
+# Command sequence sent:
+#   config
+#   no mether-ring <ring_id> domain <domain_id>
+#   exit
+#   show meaps-dict   (verification - confirms the ring is
+#                       no longer present)
+#   write
+#
+# Example:
+# ansible-playbook -i inventory/192.168.2.245.yml \
+#   playbooks/multiple_ring_protection_delete.yml \
+#   -e "domain_id=3 ring_id=4"
+#
+# Output:
+# output/<switch_ip>_multiple_ring_protection_delete.yml
+# =============================================================================
+
+- name: Multiple ring protection delete (MEAPS)
+  hosts: alphabridge_devices
+  gather_facts: no
+
+  vars:
+    # Resolve paths from this checkout, including the Jenkins workspace.
+    project_root: "/opt/librenms/librenms-ansible-inventory-plugin/../.."
+
+  pre_tasks:
+    - name: Ensure script and report directories exist
+      ansible.builtin.file:
+        path: "/opt/librenms/librenms-ansible-inventory-plugin/{{ item }}"
+        state: directory
+        mode: '0755'
+      loop:
+        - tmp
+        - output
+
+  tasks:
+
+    # ==========================================
+    # Validate required input variables are present
+    # ==========================================
+
+    - name: Validate required input variables are provided
+      ansible.builtin.assert:
+        that:
+          - domain_id is defined
+          - ring_id is defined
+        fail_msg: >
+          You must pass domain_id and ring_id, e.g.
+          -e domain_id=3 -e ring_id=4
+
+    # ==========================================
+    # Validate domain_id (0-3)
+    # ==========================================
+
+    - name: Validate domain_id is numeric
+      ansible.builtin.assert:
+        that:
+          - domain_id | string is match('^[0-9]+$')
+        fail_msg: >
+          domain_id must be a whole number
+          (got: {{ domain_id }})
+
+    - name: Validate domain_id is in range 0-3
+      ansible.builtin.assert:
+        that:
+          - (domain_id | int) >= 0
+          - (domain_id | int) <= 3
+        fail_msg: >
+          domain_id must be between 0 and 3
+          (got: {{ domain_id }})
+
+    # ==========================================
+    # Validate ring_id (0-7)
+    # ==========================================
+
+    - name: Validate ring_id is numeric
+      ansible.builtin.assert:
+        that:
+          - ring_id | string is match('^[0-9]+$')
+        fail_msg: >
+          ring_id must be a whole number (got: {{ ring_id }})
+
+    - name: Validate ring_id is in range 0-7
+      ansible.builtin.assert:
+        that:
+          - (ring_id | int) >= 0
+          - (ring_id | int) <= 7
+        fail_msg: >
+          ring_id must be between 0 and 7 (got: {{ ring_id }})
+
+    # ==========================================
+    # Create Python SSH Script
+    # ==========================================
+
+    - name: >-
+        Create Python SSH Script for MEAPS ring delete
+      ansible.builtin.copy:
+        dest: "/opt/librenms/librenms-ansible-inventory-plugin/tmp/multiple_ring_protection_delete_exec.py"
+        mode: '0755'
+        content: |
+          #!/usr/bin/env python3
+
+          import paramiko
+          import time
+          import re
+          import json
+
+          HOST = "{{ ansible_host }}"
+          USER = "{{ ansible_user }}"
+          PASSWORD = "{{ ansible_password }}"
+          DOMAIN_ID = "{{ domain_id }}"
+          RING_ID = "{{ ring_id }}"
+
+          PROMPT_RE = r'[>#]\s*$'
+
+
+          def read_until_prompt(shell, prompt_re, timeout=10):
+              buf = ""
+              end_time = time.time() + timeout
+
+              while time.time() < end_time:
+                  if shell.recv_ready():
+                      chunk = shell.recv(65535).decode(
+                          errors="ignore"
+                      )
+                      buf += chunk
+
+                      if re.search(prompt_re, buf):
+                          return buf
+                  else:
+                      time.sleep(0.1)
+
+              return buf
+
+
+          def send_cmd(
+              shell, cmd, timeout=10, check_errors=True
+          ):
+              """Send a CLI command, wait for the prompt,
+              optionally raise on switch-reported errors.
+              Returns the raw output."""
+              shell.send(
+                  cmd if cmd.endswith("\n") else cmd + "\n"
+              )
+              output = read_until_prompt(
+                  shell, PROMPT_RE, timeout=timeout
+              )
+
+              if check_errors and re.search(
+                  r'%err|invalid|error', output, re.IGNORECASE
+              ):
+                  raise Exception(
+                      f"'{cmd.strip()}' rejected by switch: "
+                      f"{output.strip()}"
+                  )
+
+              return output
+
+
+          ansi_re = re.compile(
+              r'\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])'
+          )
+
+          shell = None
+          ssh = None
+
+          try:
+              # ==================================
+              # RE-VALIDATE INPUTS (defense in
+              # depth, in case this script is ever
+              # invoked outside the playbook)
+              # ==================================
+
+              if not re.match(r'^[0-3]$', DOMAIN_ID):
+                  raise Exception(
+                      f"Invalid domain_id '{DOMAIN_ID}': "
+                      f"must be 0-3"
+                  )
+
+              if not (
+                  RING_ID.isdigit()
+                  and 0 <= int(RING_ID) <= 7
+              ):
+                  raise Exception(
+                      f"Invalid ring_id '{RING_ID}': "
+                      f"must be 0-7"
+                  )
+
+              # ==================================
+              # SSH CONNECTION
+              # ==================================
+
+              ssh = paramiko.SSHClient()
+              ssh.set_missing_host_key_policy(
+                  paramiko.AutoAddPolicy()
+              )
+
+              ssh.connect(
+                  HOST,
+                  username=USER,
+                  password=PASSWORD,
+                  look_for_keys=False,
+                  allow_agent=False,
+                  timeout=10
+              )
+
+              shell = ssh.invoke_shell()
+              time.sleep(0.5)
+
+              # ==================================
+              # LOGIN BANNER / INITIAL PROMPT
+              # ==================================
+
+              read_until_prompt(shell, PROMPT_RE, timeout=5)
+
+              # ==================================
+              # ENABLE, DISABLE PAGING, ENTER CONFIG
+              # ==================================
+
+              send_cmd(
+                  shell, "enable",
+                  timeout=5, check_errors=False
+              )
+              send_cmd(
+                  shell, "terminal length 0",
+                  timeout=5, check_errors=False
+              )
+              send_cmd(shell, "config", timeout=10)
+
+              # ==================================
+              # DELETE THE RING
+              # ==================================
+
+              send_cmd(
+                  shell,
+                  f"no mether-ring {RING_ID} "
+                  f"domain {DOMAIN_ID}",
+                  timeout=10
+              )
+
+              # ==================================
+              # EXIT CONFIG MODE
+              # ==================================
+
+              send_cmd(
+                  shell, "exit",
+                  timeout=5, check_errors=False
+              )
+
+              # ==================================
+              # VERIFY WITH show meaps-dict
+              # ==================================
+
+              meaps_dict_output = send_cmd(
+                  shell, "show meaps-dict",
+                  timeout=10, check_errors=False
+              )
+              meaps_dict_output = ansi_re.sub(
+                  "", meaps_dict_output
+              )
+
+              still_present = bool(re.search(
+                  r'Ether-Ring\s+Domain\s+' + re.escape(DOMAIN_ID)
+                  + r'\s*\n\s*Ether-Ring\s+Node\s+'
+                  + re.escape(RING_ID) + r'\b',
+                  meaps_dict_output
+              ))
+
+              # ==================================
+              # SAVE CONFIG (persist running-config)
+              # NOTE: "write" was not part of what
+              # you confirmed for this command;
+              # included for consistency with other
+              # config playbooks. Remove if not
+              # applicable here.
+              # ==================================
+
+              write_output = send_cmd(
+                  shell, "write",
+                  timeout=15, check_errors=False
+              )
+              if re.search(
+                  r'%err|invalid|error|fail',
+                  write_output, re.IGNORECASE
+              ):
+                  raise Exception(
+                      "'write' (save config) rejected "
+                      f"by switch: {write_output.strip()}"
+                  )
+
+              # ==================================
+              # CLOSE SSH / RETURN JSON
+              # ==================================
+
+              shell.close()
+              ssh.close()
+
+              print(json.dumps({
+                  "ip": HOST,
+                  "status": "success",
+              }))
+
+          except Exception as e:
+              try:
+                  if shell:
+                      shell.close()
+                  if ssh:
+                      ssh.close()
+              except:
+                  pass
+
+              print(json.dumps({
+                  "ip": HOST,
+                  "status": "failed",
+                  "error": str(e)
+              }))
+
+    # ==========================================
+    # EXECUTE PYTHON SCRIPT
+    # ==========================================
+
+    - name: Execute MEAPS ring delete script
+      ansible.builtin.command:
+        argv:
+          - /opt/librenms/librenms-ansible-inventory-plugin/bin/python3
+          - "/opt/librenms/librenms-ansible-inventory-plugin/tmp/multiple_ring_protection_delete_exec.py"
+      register: meaps_raw
+      changed_when: false
+      failed_when: false
+
+    # ==========================================
+    # CONVERT JSON RESULT
+    # ==========================================
+
+    - name: Convert MEAPS delete result to JSON
+      ansible.builtin.set_fact:
+        meaps_result: "{{ meaps_raw.stdout | from_json }}"
+
+    # ==========================================
+    # DISPLAY RESULT
+    # ==========================================
+
+    - name: Display MEAPS delete result
+      ansible.builtin.debug:
+        var: meaps_result
+
+    # ==========================================
+    # SAVE RESULT
+    # ==========================================
+
+    - name: Save MEAPS delete result
+      ansible.builtin.copy:
+        dest: "/opt/librenms/librenms-ansible-inventory-plugin/output/{{ ansible_host }}_multiple_ring_protection_delete.yml"
+        content: |
+          {{ meaps_result | to_nice_yaml }}
+
+    # ==========================================
+    # FAIL IF COMMAND FAILED
+    # ==========================================
+
+    - name: Fail if MEAPS ring delete failed
+      ansible.builtin.fail:
+        msg: "{{ meaps_result.error }}"
+      when: meaps_result.status == "failed"
+
+    # ==========================================
+    # WARN IF RING STILL APPEARS AFTER DELETE
+    # ==========================================
+
+    - name: Warn if ring still present after delete
+      ansible.builtin.debug:
+        msg: >
+          WARNING: ring {{ ring_id }} domain
+          {{ domain_id }} still appears in
+          'show meaps-dict' after the delete command.
+      when: >
+        meaps_result.status == "success" and
+        meaps_result.get('still_present', False)
+    # ==========================================
+    # FINAL MESSAGE
+    # ==========================================
+
+    - name: Display result file
+      ansible.builtin.debug:
+        msg: >
+          MEAPS ring {{ ring_id }} (domain {{ domain_id }})
+          delete requested on {{ ansible_host }}. Result
+          saved to
+          output/{{ ansible_host }}_multiple_ring_protection_delete.yml

@@ -1,0 +1,844 @@
+# ==========================================
+# multiple_ring_protection_edit.yml
+# Created on Sept 3, 2026 by Vikash Kumar(vikash.kumar@alphabrige.tech).
+#
+# Copyright (c), ALPHA BRIDGE, Inc. 357D, Udyog Vihar Industrial Area Phase VI,
+# Sector 37, Gurugram, Haryana.
+#
+# All rights reserved.
+#
+# This software is the confidential and proprietary information of ALPHA BRIDGE,
+# Inc. ("Confidential Information"). You shall not disclose such Confidential
+# Information and shall use it only in accordance with the terms of the 
+# license agreement you entered into with ALPHA BRIDGE.
+#
+# =============================================================================
+# Playbook Name : Multiple Ring Protection Edit (MEAPS)
+# =============================================================================
+#
+# Description:
+# Edits an EXISTING MEAPS ring on AlphaBridge switches over SSH.
+#
+# To enforce this (not just document it), the playbook:
+#   1. Runs "show meaps-dict" FIRST and finds the ring
+#      matching domain_id/ring_id.
+#   2. Fails if no such ring exists (use
+#      multiple_ring_protection.yml to create one).
+#   3. Compares the ring_type/node_type you passed in
+#      against what's actually configured on the switch.
+#      If they don't match, it fails WITHOUT sending any
+#      config - it will not silently ignore a mismatch or
+#      try to change a locked field.
+#   4. Only then applies the editable fields.
+#
+# Input vars:
+#   domain_id        - 0 to 3   (identifies the ring - must already exist)
+#   ring_id          - 0 to 7   (identifies the ring - must already exist)
+#   ring_type        - "major ring" or "sub ring" (must match the existing ring
+#                       not changed by this playbook)
+#   node_type        - "master node", "transit node", "edge node", or "assistant node"
+#                       (must match the existing ring - not changed by this playbook)
+#   control_vlan     - 1 to 4094           (editable)
+#   hello_time       - 1 to 10 (seconds)   (editable)
+#   fail_time        - 3 to 30 (seconds)   (editable)
+#   pre_forward_time - 3 to 30 (seconds)   (editable)
+#   primary_port     - "none" or g0/1-g0/10  (editable)
+#   secondary_port   - "none" or g0/1-g0/10  (editable,
+#                       must differ from primary_port when
+#                       both are real ports)
+# Example:
+# ansible-playbook -i inventory/192.168.2.245.yml \
+#   playbooks/multiple_ring_protection_edit.yml \
+#   -e domain_id=3 -e ring_id=4 \
+#   -e ring_type="sub ring" -e node_type="master node" \
+#   -e control_vlan=4 -e hello_time=2 -e fail_time=10 \
+#   -e pre_forward_time=4 \
+#   -e primary_port=none -e secondary_port=none
+#
+# Output:
+# output/<switch_ip>_multiple_ring_protection_edit.yml
+# =============================================================================
+
+- name: Multiple ring protection edit (MEAPS)
+  hosts: alphabridge_devices
+  gather_facts: no
+
+  vars:
+    # Resolve paths from this checkout, including the Jenkins workspace.
+    project_root: "/opt/librenms/librenms-ansible-inventory-plugin/../.."
+
+  pre_tasks:
+    - name: Ensure script and report directories exist
+      ansible.builtin.file:
+        path: "/opt/librenms/librenms-ansible-inventory-plugin/{{ item }}"
+        state: directory
+        mode: '0755'
+      loop:
+        - tmp
+        - output
+
+  tasks:
+
+    # ==========================================
+    # Validate required input variables are present
+    # ==========================================
+
+    - name: Validate required input variables are provided
+      ansible.builtin.assert:
+        that:
+          - domain_id is defined
+          - ring_id is defined
+          - ring_type is defined
+          - node_type is defined
+          - control_vlan is defined
+          - hello_time is defined
+          - fail_time is defined
+          - pre_forward_time is defined
+          - primary_port is defined
+          - secondary_port is defined
+        fail_msg: >
+          You must pass domain_id, ring_id, ring_type,
+          node_type, control_vlan, hello_time, fail_time,
+          pre_forward_time, primary_port and
+          secondary_port.
+
+    # ==========================================
+    # Validate domain_id (0-3)
+    # ==========================================
+
+    - name: Validate domain_id is numeric
+      ansible.builtin.assert:
+        that:
+          - domain_id | string is match('^[0-9]+$')
+        fail_msg: >
+          domain_id must be a whole number
+          (got: {{ domain_id }})
+
+    - name: Validate domain_id is in range 0-3
+      ansible.builtin.assert:
+        that:
+          - (domain_id | int) >= 0
+          - (domain_id | int) <= 3
+        fail_msg: >
+          domain_id must be between 0 and 3
+          (got: {{ domain_id }})
+
+    # ==========================================
+    # Validate ring_id (0-7)
+    # ==========================================
+
+    - name: Validate ring_id is numeric
+      ansible.builtin.assert:
+        that:
+          - ring_id | string is match('^[0-9]+$')
+        fail_msg: >
+          ring_id must be a whole number (got: {{ ring_id }})
+
+    - name: Validate ring_id is in range 0-7
+      ansible.builtin.assert:
+        that:
+          - (ring_id | int) >= 0
+          - (ring_id | int) <= 7
+        fail_msg: >
+          ring_id must be between 0 and 7 (got: {{ ring_id }})
+
+    # ==========================================
+    # Validate ring_type (locked field - must match
+    # the existing ring; checked again on-device below)
+    # ==========================================
+
+    - name: Normalize ring_type
+      ansible.builtin.set_fact:
+        ring_type_normalized: "{{ ring_type | lower | trim }}"
+
+    - name: Validate ring_type is major ring or sub ring
+      ansible.builtin.assert:
+        that:
+          - ring_type_normalized in ['major ring', 'sub ring']
+        fail_msg: >
+          ring_type must be 'major ring' or 'sub ring'
+          (got: {{ ring_type }})
+
+    # ==========================================
+    # Validate node_type (locked field - must match
+    # the existing ring; checked again on-device below)
+    # ==========================================
+
+    - name: Normalize node_type
+      ansible.builtin.set_fact:
+        node_type_normalized: "{{ node_type | lower | trim }}"
+
+    - name: Validate node_type is a recognized value
+      ansible.builtin.assert:
+        that:
+          - >-
+            node_type_normalized in [
+            'master node', 'transit node',
+            'edge node', 'assistant node']
+        fail_msg: >
+          node_type must be 'master node', 'transit node',
+          'edge node' or 'assistant node'
+          (got: {{ node_type }})
+
+    # ==========================================
+    # Validate control_vlan (1-4094)
+    # ==========================================
+
+    - name: Validate control_vlan is numeric
+      ansible.builtin.assert:
+        that:
+          - control_vlan | string is match('^[0-9]+$')
+        fail_msg: >
+          control_vlan must be a whole number
+          (got: {{ control_vlan }})
+
+    - name: Validate control_vlan is in range 1-4094
+      ansible.builtin.assert:
+        that:
+          - (control_vlan | int) >= 1
+          - (control_vlan | int) <= 4094
+        fail_msg: >
+          control_vlan must be between 1 and 4094
+          (got: {{ control_vlan }})
+
+    # ==========================================
+    # Validate hello_time (1-10)
+    # ==========================================
+
+    - name: Validate hello_time is numeric
+      ansible.builtin.assert:
+        that:
+          - hello_time | string is match('^[0-9]+$')
+        fail_msg: >
+          hello_time must be a whole number
+          (got: {{ hello_time }})
+
+    - name: Validate hello_time is in range 1-10
+      ansible.builtin.assert:
+        that:
+          - (hello_time | int) >= 1
+          - (hello_time | int) <= 10
+        fail_msg: >
+          hello_time must be between 1 and 10
+          (got: {{ hello_time }})
+
+    # ==========================================
+    # Validate fail_time (3-30)
+    # ==========================================
+
+    - name: Validate fail_time is numeric
+      ansible.builtin.assert:
+        that:
+          - fail_time | string is match('^[0-9]+$')
+        fail_msg: >
+          fail_time must be a whole number
+          (got: {{ fail_time }})
+
+    - name: Validate fail_time is in range 3-30
+      ansible.builtin.assert:
+        that:
+          - (fail_time | int) >= 3
+          - (fail_time | int) <= 30
+        fail_msg: >
+          fail_time must be between 3 and 30
+          (got: {{ fail_time }})
+
+    # ==========================================
+    # Validate pre_forward_time (3-30)
+    # ==========================================
+
+    - name: Validate pre_forward_time is numeric
+      ansible.builtin.assert:
+        that:
+          - pre_forward_time | string is match('^[0-9]+$')
+        fail_msg: >
+          pre_forward_time must be a whole number
+          (got: {{ pre_forward_time }})
+
+    - name: Validate pre_forward_time is in range 3-30
+      ansible.builtin.assert:
+        that:
+          - (pre_forward_time | int) >= 3
+          - (pre_forward_time | int) <= 30
+        fail_msg: >
+          pre_forward_time must be between 3 and 30
+          (got: {{ pre_forward_time }})
+
+    # ==========================================
+    # Validate primary_port / secondary_port
+    # ==========================================
+
+    - name: Validate primary_port is none or g0/1-g0/10
+      ansible.builtin.assert:
+        that:
+          - >-
+            primary_port in [
+            'none', 'g0/1', 'g0/2', 'g0/3', 'g0/4', 'g0/5',
+            'g0/6', 'g0/7', 'g0/8', 'g0/9', 'g0/10']
+        fail_msg: >
+          primary_port must be 'none' or g0/1 through g0/10
+          (got: {{ primary_port }})
+
+    - name: Validate secondary_port is none or g0/1-g0/10
+      ansible.builtin.assert:
+        that:
+          - >-
+            secondary_port in [
+            'none', 'g0/1', 'g0/2', 'g0/3', 'g0/4', 'g0/5',
+            'g0/6', 'g0/7', 'g0/8', 'g0/9', 'g0/10']
+        fail_msg: >
+          secondary_port must be 'none' or g0/1 through
+          g0/10 (got: {{ secondary_port }})
+
+    - name: >-
+        Validate primary_port and secondary_port are not
+        the same port
+      ansible.builtin.assert:
+        that:
+          - >-
+            not (primary_port != 'none' and
+            primary_port == secondary_port)
+        fail_msg: >
+          primary_port and secondary_port cannot both be
+          {{ primary_port }}
+
+    # ==========================================
+    # Create Python SSH Script
+    # ==========================================
+
+    - name: >-
+        Create Python SSH Script for MEAPS ring edit
+      ansible.builtin.copy:
+        dest: "/opt/librenms/librenms-ansible-inventory-plugin/tmp/multiple_ring_protection_edit_exec.py"
+        mode: '0755'
+        content: |
+          #!/usr/bin/env python3
+
+          import paramiko
+          import time
+          import re
+          import json
+
+          HOST = "{{ ansible_host }}"
+          USER = "{{ ansible_user }}"
+          PASSWORD = "{{ ansible_password }}"
+
+          DOMAIN_ID = "{{ domain_id }}"
+          RING_ID = "{{ ring_id }}"
+          RING_TYPE = "{{ ring_type_normalized }}"
+          NODE_TYPE = "{{ node_type_normalized }}"
+          CONTROL_VLAN = "{{ control_vlan }}"
+          HELLO_TIME = "{{ hello_time }}"
+          FAIL_TIME = "{{ fail_time }}"
+          PRE_FORWARD_TIME = "{{ pre_forward_time }}"
+          PRIMARY_PORT = "{{ primary_port }}"
+          SECONDARY_PORT = "{{ secondary_port }}"
+
+          PROMPT_RE = r'[>#]\s*$'
+
+          # Maps the raw "show meaps-dict" key token to the
+          # field name used below (same mapping as the
+          # details/show playbook).
+          KEY_MAP = {
+              "NodeRingLevel": "node_ring_level",
+              "NodeType": "node_type",
+              "ControlVlan": "control_vlan",
+              "RingState": "ring_state",
+              "HelloTime": "hello_time",
+              "FailTime": "fail_time",
+              "PreforwardTime": "pre_forward_time",
+              "PrimaryPort": "primary_port",
+              "PrimaryPortState": "primary_port_state",
+              "PrimaryPortStatus": "primary_port_status",
+              "SecondaryPort": "secondary_port",
+              "SecondaryPortState": "secondary_port_state",
+              "SecondaryPortStatus": "secondary_port_status",
+          }
+
+
+          def read_until_prompt(shell, prompt_re, timeout=10):
+              buf = ""
+              end_time = time.time() + timeout
+
+              while time.time() < end_time:
+                  if shell.recv_ready():
+                      chunk = shell.recv(65535).decode(
+                          errors="ignore"
+                      )
+                      buf += chunk
+
+                      if re.search(prompt_re, buf):
+                          return buf
+                  else:
+                      time.sleep(0.1)
+
+              return buf
+
+
+          def send_cmd(
+              shell, cmd, timeout=10, check_errors=True
+          ):
+              """Send a CLI command, wait for the prompt,
+              optionally raise on switch-reported errors.
+              Returns the raw output."""
+              shell.send(
+                  cmd if cmd.endswith("\n") else cmd + "\n"
+              )
+              output = read_until_prompt(
+                  shell, PROMPT_RE, timeout=timeout
+              )
+
+              if check_errors and re.search(
+                  r'%err|invalid|error', output, re.IGNORECASE
+              ):
+                  raise Exception(
+                      f"'{cmd.strip()}' rejected by switch: "
+                      f"{output.strip()}"
+                  )
+
+              return output
+
+
+          def parse_meaps_dict(raw_output):
+              """Parses raw 'show meaps-dict' text into a
+              list of ring dicts, same logic as the
+              details/show playbook."""
+              rings = []
+              current = None
+
+              for raw_line in raw_output.splitlines():
+                  line = raw_line.strip()
+
+                  if not line:
+                      continue
+
+                  if line.lower().startswith(
+                      "show meaps-dict"
+                  ):
+                      continue
+
+                  domain_match = re.match(
+                      r'^Ether-Ring\s+Domain\s+(\S+)\s*$',
+                      line, re.IGNORECASE
+                  )
+                  if domain_match:
+                      if current is not None:
+                          rings.append(current)
+                      current = {
+                          "domain_id": domain_match.group(1)
+                      }
+                      continue
+
+                  node_match = re.match(
+                      r'^Ether-Ring\s+Node\s+(\S+)\s*$',
+                      line, re.IGNORECASE
+                  )
+                  if node_match and current is not None:
+                      current["ring_id"] = node_match.group(1)
+                      continue
+
+                  field_match = re.match(
+                      r'^(\S+)\s+(.+?)\s*$', line
+                  )
+                  if field_match and current is not None:
+                      key_token, value = field_match.groups()
+                      out_key = KEY_MAP.get(key_token)
+                      if out_key:
+                          current[out_key] = value
+
+              if current is not None:
+                  rings.append(current)
+
+              return rings
+
+
+          def normalize_locked_value(value):
+              """Normalizes device-reported values like
+              'Master-node' / 'Sub-Ring' into the same
+              'lower, space-separated' form used for
+              NODE_TYPE / RING_TYPE inputs, so they can be
+              compared directly."""
+              return value.replace("-", " ").strip().lower()
+
+
+          ansi_re = re.compile(
+              r'\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])'
+          )
+
+          shell = None
+          ssh = None
+
+          try:
+              # ==================================
+              # RE-VALIDATE INPUTS (defense in
+              # depth, in case this script is ever
+              # invoked outside the playbook)
+              # ==================================
+
+              if not re.match(r'^[0-3]$', DOMAIN_ID):
+                  raise Exception(
+                      f"Invalid domain_id '{DOMAIN_ID}': "
+                      f"must be 0-3"
+                  )
+
+              if not (
+                  RING_ID.isdigit()
+                  and 0 <= int(RING_ID) <= 7
+              ):
+                  raise Exception(
+                      f"Invalid ring_id '{RING_ID}': "
+                      f"must be 0-7"
+                  )
+
+              if RING_TYPE not in ("major ring", "sub ring"):
+                  raise Exception(
+                      f"Invalid ring_type '{RING_TYPE}'"
+                  )
+
+              valid_node_types = {
+                  "master node", "transit node",
+                  "edge node", "assistant node",
+              }
+              if NODE_TYPE not in valid_node_types:
+                  raise Exception(
+                      f"Invalid node_type '{NODE_TYPE}'"
+                  )
+
+              if not (
+                  CONTROL_VLAN.isdigit()
+                  and 1 <= int(CONTROL_VLAN) <= 4094
+              ):
+                  raise Exception(
+                      f"Invalid control_vlan "
+                      f"'{CONTROL_VLAN}': must be 1-4094"
+                  )
+
+              if not (
+                  HELLO_TIME.isdigit()
+                  and 1 <= int(HELLO_TIME) <= 10
+              ):
+                  raise Exception(
+                      f"Invalid hello_time '{HELLO_TIME}': "
+                      f"must be 1-10"
+                  )
+
+              if not (
+                  FAIL_TIME.isdigit()
+                  and 3 <= int(FAIL_TIME) <= 30
+              ):
+                  raise Exception(
+                      f"Invalid fail_time '{FAIL_TIME}': "
+                      f"must be 3-30"
+                  )
+
+              if not (
+                  PRE_FORWARD_TIME.isdigit()
+                  and 3 <= int(PRE_FORWARD_TIME) <= 30
+              ):
+                  raise Exception(
+                      f"Invalid pre_forward_time "
+                      f"'{PRE_FORWARD_TIME}': must be 3-30"
+                  )
+
+              valid_ports = {"none"} | {
+                  f"g0/{n}" for n in range(1, 11)
+              }
+
+              if PRIMARY_PORT not in valid_ports:
+                  raise Exception(
+                      f"Invalid primary_port "
+                      f"'{PRIMARY_PORT}'"
+                  )
+
+              if SECONDARY_PORT not in valid_ports:
+                  raise Exception(
+                      f"Invalid secondary_port "
+                      f"'{SECONDARY_PORT}'"
+                  )
+
+              if (
+                  PRIMARY_PORT != "none"
+                  and PRIMARY_PORT == SECONDARY_PORT
+              ):
+                  raise Exception(
+                      "primary_port and secondary_port "
+                      "cannot be the same port"
+                  )
+
+              # ==================================
+              # SSH CONNECTION
+              # ==================================
+
+              ssh = paramiko.SSHClient()
+              ssh.set_missing_host_key_policy(
+                  paramiko.AutoAddPolicy()
+              )
+
+              ssh.connect(
+                  HOST,
+                  username=USER,
+                  password=PASSWORD,
+                  look_for_keys=False,
+                  allow_agent=False,
+                  timeout=10
+              )
+
+              shell = ssh.invoke_shell()
+              time.sleep(0.5)
+
+              # ==================================
+              # LOGIN BANNER / INITIAL PROMPT
+              # ==================================
+
+              read_until_prompt(shell, PROMPT_RE, timeout=5)
+
+              # ==================================
+              # ENABLE, DISABLE PAGING
+              # ==================================
+
+              send_cmd(
+                  shell, "enable",
+                  timeout=5, check_errors=False
+              )
+              send_cmd(
+                  shell, "terminal length 0",
+                  timeout=5, check_errors=False
+              )
+
+              # ==================================
+              # FETCH CURRENT STATE AND ENFORCE
+              # IMMUTABLE FIELDS BEFORE CHANGING
+              # ANYTHING
+              # ==================================
+
+              pre_check_output = send_cmd(
+                  shell, "show meaps-dict",
+                  timeout=10, check_errors=False
+              )
+              pre_check_output = ansi_re.sub(
+                  "", pre_check_output
+              )
+
+              existing_rings = parse_meaps_dict(
+                  pre_check_output
+              )
+
+              existing_ring = None
+              for r in existing_rings:
+                  if (
+                      r.get("domain_id") == DOMAIN_ID
+                      and r.get("ring_id") == RING_ID
+                  ):
+                      existing_ring = r
+                      break
+
+              if existing_ring is None:
+                  raise Exception(
+                      f"No existing ring found for domain "
+                      f"{DOMAIN_ID}, ring {RING_ID}. This "
+                      f"playbook only edits an existing "
+                      f"ring - use "
+                      f"multiple_ring_protection.yml to "
+                      f"create it first."
+                  )
+
+              existing_node_type = normalize_locked_value(
+                  existing_ring.get("node_type", "")
+              )
+              existing_ring_level = normalize_locked_value(
+                  existing_ring.get("node_ring_level", "")
+              )
+
+              if existing_node_type != NODE_TYPE:
+                  raise Exception(
+                      f"node_type mismatch: switch has "
+                      f"'{existing_node_type}' but "
+                      f"'{NODE_TYPE}' was supplied. "
+                      f"node_type cannot be changed by "
+                      f"this playbook - delete and "
+                      f"recreate the ring to change it."
+                  )
+
+              if existing_ring_level != RING_TYPE:
+                  raise Exception(
+                      f"ring_type mismatch: switch has "
+                      f"'{existing_ring_level}' but "
+                      f"'{RING_TYPE}' was supplied. "
+                      f"ring_type cannot be changed by "
+                      f"this playbook - delete and "
+                      f"recreate the ring to change it."
+                  )
+
+              # ==================================
+              # ENTER CONFIG / RING CONTEXT
+              # ==================================
+
+              send_cmd(shell, "config", timeout=10)
+              send_cmd(
+                  shell,
+                  f"mether-ring {RING_ID} "
+                  f"domain {DOMAIN_ID}",
+                  timeout=10
+              )
+
+              # ==================================
+              # APPLY EDITABLE FIELDS ONLY
+              # (node-type / ring-type are NOT
+              # re-sent - they're locked)
+              # ==================================
+
+              send_cmd(
+                  shell, f"control-vlan {CONTROL_VLAN}",
+                  timeout=10
+              )
+              send_cmd(
+                  shell, f"hello-time {HELLO_TIME}",
+                  timeout=10
+              )
+              send_cmd(
+                  shell, f"fail-time {FAIL_TIME}",
+                  timeout=10
+              )
+              send_cmd(
+                  shell,
+                  f"pre-forward-time {PRE_FORWARD_TIME}",
+                  timeout=10
+              )
+
+              if PRIMARY_PORT != "none":
+                  send_cmd(
+                      shell,
+                      f"primary-port {PRIMARY_PORT}",
+                      timeout=10
+                  )
+
+              if SECONDARY_PORT != "none":
+                  send_cmd(
+                      shell,
+                      f"secondary-port {SECONDARY_PORT}",
+                      timeout=10
+                  )
+
+              # ==================================
+              # EXIT RING CONFIG CONTEXT
+              # ==================================
+
+              send_cmd(
+                  shell, "exit",
+                  timeout=5, check_errors=False
+              )
+
+              # ==================================
+              # VERIFY WITH show meaps-dict
+              # ==================================
+
+              meaps_dict_output = send_cmd(
+                  shell, "show meaps-dict",
+                  timeout=10, check_errors=False
+              )
+              meaps_dict_output = ansi_re.sub(
+                  "", meaps_dict_output
+              )
+
+              # ==================================
+              # SAVE CONFIG (persist running-config)
+              # ==================================
+
+              write_output = send_cmd(
+                  shell, "write",
+                  timeout=15, check_errors=False
+              )
+              if re.search(
+                  r'%err|invalid|error|fail',
+                  write_output, re.IGNORECASE
+              ):
+                  raise Exception(
+                      "'write' (save config) rejected "
+                      f"by switch: {write_output.strip()}"
+                  )
+
+              # ==================================
+              # CLOSE SSH / RETURN JSON
+              # ==================================
+
+              shell.close()
+              ssh.close()
+
+              print(json.dumps({
+                  "ip": HOST,
+                  "status": "success",
+              }))
+
+          except Exception as e:
+              try:
+                  if shell:
+                      shell.close()
+                  if ssh:
+                      ssh.close()
+              except:
+                  pass
+
+              print(json.dumps({
+                  "ip": HOST,
+                  "status": "failed",
+                  "error": str(e)
+              }))
+
+    # ==========================================
+    # EXECUTE PYTHON SCRIPT
+    # ==========================================
+
+    - name: Execute MEAPS ring edit script
+      ansible.builtin.command:
+        argv:
+          - /opt/librenms/librenms-ansible-inventory-plugin/bin/python3
+          - "/opt/librenms/librenms-ansible-inventory-plugin/tmp/multiple_ring_protection_edit_exec.py"
+      register: meaps_raw
+      changed_when: false
+      failed_when: false
+
+    # ==========================================
+    # CONVERT JSON RESULT
+    # ==========================================
+
+    - name: Convert MEAPS edit result to JSON
+      ansible.builtin.set_fact:
+        meaps_result: "{{ meaps_raw.stdout | from_json }}"
+
+    # ==========================================
+    # DISPLAY RESULT
+    # ==========================================
+
+    - name: Display MEAPS edit result
+      ansible.builtin.debug:
+        var: meaps_result
+
+    # ==========================================
+    # SAVE RESULT
+    # ==========================================
+
+    - name: Save MEAPS edit result
+      ansible.builtin.copy:
+        dest: "/opt/librenms/librenms-ansible-inventory-plugin/output/{{ ansible_host }}_multiple_ring_protection_edit.yml"
+        content: |
+          {{ meaps_result | to_nice_yaml }}
+
+    # ==========================================
+    # FAIL IF COMMAND FAILED
+    # ==========================================
+
+    - name: Fail if MEAPS ring edit failed
+      ansible.builtin.fail:
+        msg: "{{ meaps_result.error }}"
+      when: meaps_result.status == "failed"
+
+    # ==========================================
+    # FINAL MESSAGE
+    # ==========================================
+
+    - name: Display result file
+      ansible.builtin.debug:
+        msg: >
+          MEAPS ring {{ ring_id }} (domain {{ domain_id }})
+          edited on {{ ansible_host }}. Result saved to
+          output/{{ ansible_host }}_multiple_ring_protection_edit.yml

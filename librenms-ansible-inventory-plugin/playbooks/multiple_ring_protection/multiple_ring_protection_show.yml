@@ -1,0 +1,402 @@
+# ==========================================
+# multiple_ring_protection_details.yml
+# Created on Sept 3, 2026 by Vikash Kumar (vikash.kumar@alphabrige.tech).
+#
+# Copyright (c), ALPHA BRIDGE, Inc.
+# 357D, Udyog Vihar Industrial Area Phase VI, Sector 37, Gurugram, Haryana.
+#
+# All rights reserved.
+#
+# This software is the confidential and proprietary  information of 
+# ALPHA BRIDGE, Inc. ("Confidential Information"). You shall not disclose
+# such Confidential Information and shall use it only in accordance with the
+# terms of the license agreement you entered into with
+# ALPHA BRIDGE.
+#
+# =============================================================================
+# Playbook Name : Multiple Ring Protection Details (Show)
+# =============================================================================
+#
+# Description:
+# This playbook only READS MEAPS ring protection details from
+# an AlphaBridge switch over SSH by running:
+#   show meaps-dict
+#
+# The parser is written to also handle multiple rings
+# appearing back-to-back in one show output: a new record
+# starts every time an "Ether-Ring Domain <n>" line is seen.
+#
+# Input vars (all optional):
+#   domain_id (optional) - filter results to this domain only
+#   ring_id   (optional) - filter results to this ring only
+#
+# Example:
+# ansible-playbook -i inventory/192.168.2.245.yml \
+#   playbooks/multiple_ring_protection_details.yml
+#
+# Output:
+# output/<switch_ip>_multiple_ring_protection_details.yml
+# =============================================================================
+
+- name: Multiple ring protection details (show)
+  hosts: alphabridge_devices
+  gather_facts: no
+
+  vars:
+    # Resolve paths from this checkout, including the Jenkins workspace.
+    project_root: "/opt/librenms/librenms-ansible-inventory-plugin/../.."
+
+  pre_tasks:
+    - name: Ensure script and report directories exist
+      ansible.builtin.file:
+        path: "/opt/librenms/librenms-ansible-inventory-plugin/{{ item }}"
+        state: directory
+        mode: '0755'
+      loop:
+        - tmp
+        - output
+
+  tasks:
+
+    # ==========================================
+    # Validate optional filters if provided
+    # ==========================================
+
+    - name: Validate domain_id is numeric (when provided)
+      ansible.builtin.assert:
+        that:
+          - domain_id | string is match('^[0-9]+$')
+        fail_msg: >
+          domain_id must be a whole number
+          (got: {{ domain_id }})
+      when: domain_id is defined
+
+    - name: Validate domain_id is in range 0-3 (when provided)
+      ansible.builtin.assert:
+        that:
+          - (domain_id | int) >= 0
+          - (domain_id | int) <= 3
+        fail_msg: >
+          domain_id must be between 0 and 3
+          (got: {{ domain_id }})
+      when: domain_id is defined
+
+    - name: Validate ring_id is numeric (when provided)
+      ansible.builtin.assert:
+        that:
+          - ring_id | string is match('^[0-9]+$')
+        fail_msg: >
+          ring_id must be a whole number (got: {{ ring_id }})
+      when: ring_id is defined
+
+    - name: Validate ring_id is in range 0-7 (when provided)
+      ansible.builtin.assert:
+        that:
+          - (ring_id | int) >= 0
+          - (ring_id | int) <= 7
+        fail_msg: >
+          ring_id must be between 0 and 7 (got: {{ ring_id }})
+      when: ring_id is defined
+
+    # ==========================================
+    # Create Python SSH Script
+    # ==========================================
+
+    - name: >-
+        Create Python SSH Script for MEAPS ring details show
+      ansible.builtin.copy:
+        dest: "/opt/librenms/librenms-ansible-inventory-plugin/tmp/meaps_dict_show_exec.py"
+        mode: '0755'
+        content: |
+          #!/usr/bin/env python3
+
+          import paramiko
+          import time
+          import re
+          import json
+
+          HOST = "{{ ansible_host }}"
+          USER = "{{ ansible_user }}"
+          PASSWORD = "{{ ansible_password }}"
+          DOMAIN_FILTER = "{{ domain_id | default('') }}"
+          RING_FILTER = "{{ ring_id | default('') }}"
+
+          PROMPT_RE = r'[>#]\s*$'
+
+          # Maps the raw device key token to the output field
+          # name. "Ether-Ring Domain" / "Ether-Ring Node" are
+          # handled separately since they're two-word keys.
+          KEY_MAP = {
+              "NodeRingLevel": "node_ring_level",
+              "NodeType": "node_type",
+              "ControlVlan": "control_vlan",
+              "RingState": "ring_state",
+              "HelloTime": "hello_time",
+              "FailTime": "fail_time",
+              "PreforwardTime": "pre_forward_time",
+              "PrimaryPort": "primary_port",
+              "PrimaryPortState": "primary_port_state",
+              "PrimaryPortStatus": "primary_port_status",
+              "SecondaryPort": "secondary_port",
+              "SecondaryPortState": "secondary_port_state",
+              "SecondaryPortStatus": "secondary_port_status",
+          }
+
+
+          def read_until_prompt(shell, prompt_re, timeout=10):
+              buf = ""
+              end_time = time.time() + timeout
+
+              while time.time() < end_time:
+                  if shell.recv_ready():
+                      chunk = shell.recv(65535).decode(
+                          errors="ignore"
+                      )
+                      buf += chunk
+
+                      if re.search(prompt_re, buf):
+                          return buf
+                  else:
+                      time.sleep(0.1)
+
+              return buf
+
+
+          def send_cmd(
+              shell, cmd, timeout=10, check_errors=True
+          ):
+              """Send a CLI command, wait for the prompt,
+              optionally raise on switch-reported errors.
+              Returns the raw output."""
+              shell.send(
+                  cmd if cmd.endswith("\n") else cmd + "\n"
+              )
+              output = read_until_prompt(
+                  shell, PROMPT_RE, timeout=timeout
+              )
+
+              if check_errors and re.search(
+                  r'%err|invalid|error', output, re.IGNORECASE
+              ):
+                  raise Exception(
+                      f"'{cmd.strip()}' rejected by switch: "
+                      f"{output.strip()}"
+                  )
+
+              return output
+
+
+          ansi_re = re.compile(
+              r'\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])'
+          )
+
+          shell = None
+          ssh = None
+
+          try:
+              # ==================================
+              # SSH CONNECTION
+              # ==================================
+
+              ssh = paramiko.SSHClient()
+              ssh.set_missing_host_key_policy(
+                  paramiko.AutoAddPolicy()
+              )
+
+              ssh.connect(
+                  HOST,
+                  username=USER,
+                  password=PASSWORD,
+                  look_for_keys=False,
+                  allow_agent=False,
+                  timeout=10
+              )
+
+              shell = ssh.invoke_shell()
+              time.sleep(0.5)
+
+              # ==================================
+              # LOGIN BANNER / INITIAL PROMPT
+              # ==================================
+
+              read_until_prompt(shell, PROMPT_RE, timeout=5)
+
+              # ==================================
+              # ENABLE, DISABLE PAGING, RUN SHOW
+              # ==================================
+
+              send_cmd(
+                  shell, "enable",
+                  timeout=5, check_errors=False
+              )
+              send_cmd(
+                  shell, "terminal length 0",
+                  timeout=5, check_errors=False
+              )
+
+              show_output = send_cmd(
+                  shell, "show meaps-dict",
+                  timeout=10, check_errors=False
+              )
+
+              # ==================================
+              # CLEAN ANSI CHARACTERS
+              # ==================================
+
+              show_output = ansi_re.sub("", show_output)
+
+              # ==================================
+              # PARSE OUTPUT INTO RING RECORDS
+              #
+              # A new record starts every time a line
+              # "Ether-Ring Domain <n>" is seen. Every
+              # other recognized line updates a field on
+              # the record currently being built.
+              # ==================================
+
+              rings = []
+              current = None
+
+              for raw_line in show_output.splitlines():
+                  line = raw_line.strip()
+
+                  if not line:
+                      continue
+
+                  if line.lower().startswith(
+                      "show meaps-dict"
+                  ):
+                      continue
+
+                  domain_match = re.match(
+                      r'^Ether-Ring\s+Domain\s+(\S+)\s*$',
+                      line, re.IGNORECASE
+                  )
+                  if domain_match:
+                      if current is not None:
+                          rings.append(current)
+                      current = {"domain_id": domain_match.group(1)}
+                      continue
+
+                  node_match = re.match(
+                      r'^Ether-Ring\s+Node\s+(\S+)\s*$',
+                      line, re.IGNORECASE
+                  )
+                  if node_match and current is not None:
+                      current["ring_id"] = node_match.group(1)
+                      continue
+
+                  field_match = re.match(
+                      r'^(\S+)\s+(.+?)\s*$', line
+                  )
+                  if field_match and current is not None:
+                      key_token, value = field_match.groups()
+                      out_key = KEY_MAP.get(key_token)
+                      if out_key:
+                          current[out_key] = value
+
+              if current is not None:
+                  rings.append(current)
+
+              # ==================================
+              # APPLY OPTIONAL FILTERS
+              # ==================================
+
+              if DOMAIN_FILTER.strip():
+                  rings = [
+                      r for r in rings
+                      if r.get("domain_id") == DOMAIN_FILTER.strip()
+                  ]
+
+              if RING_FILTER.strip():
+                  rings = [
+                      r for r in rings
+                      if r.get("ring_id") == RING_FILTER.strip()
+                  ]
+
+              # ==================================
+              # CLOSE SSH / RETURN JSON
+              # ==================================
+
+              shell.close()
+              ssh.close()
+
+              print(json.dumps({
+                  "ip": HOST,
+                  "rings": rings,
+                  "status": "success"
+              }))
+
+          except Exception as e:
+              try:
+                  if shell:
+                      shell.close()
+                  if ssh:
+                      ssh.close()
+              except:
+                  pass
+
+              print(json.dumps({
+                  "ip": HOST,
+                  "status": "failed",
+                  "error": str(e)
+              }))
+
+    # ==========================================
+    # EXECUTE PYTHON SCRIPT
+    # ==========================================
+
+    - name: Execute MEAPS ring details show script
+      ansible.builtin.command:
+        argv:
+          - /opt/librenms/librenms-ansible-inventory-plugin/bin/python3
+          - "/opt/librenms/librenms-ansible-inventory-plugin/tmp/meaps_dict_show_exec.py"
+      register: meaps_raw
+      changed_when: false
+      failed_when: false
+
+    # ==========================================
+    # CONVERT JSON RESULT
+    # ==========================================
+
+    - name: Convert MEAPS ring details result to JSON
+      ansible.builtin.set_fact:
+        meaps_result: "{{ meaps_raw.stdout | from_json }}"
+
+    # ==========================================
+    # DISPLAY RESULT
+    # ==========================================
+
+    - name: Display MEAPS ring details result
+      ansible.builtin.debug:
+        var: meaps_result
+
+    # ==========================================
+    # SAVE RESULT
+    # ==========================================
+
+    - name: Save MEAPS ring details result
+      ansible.builtin.copy:
+        dest: "/opt/librenms/librenms-ansible-inventory-plugin/output/{{ ansible_host }}_multiple_ring_protection_details.yml"
+        content: |
+          {{ meaps_result | to_nice_yaml (sort_keys=False) }}
+
+    # ==========================================
+    # FAIL IF SHOW COMMAND FAILED
+    # ==========================================
+
+    - name: Fail if MEAPS ring details show failed
+      ansible.builtin.fail:
+        msg: "{{ meaps_result.error }}"
+      when: meaps_result.status == "failed"
+
+    # ==========================================
+    # FINAL MESSAGE
+    # ==========================================
+
+    - name: Display result file
+      ansible.builtin.debug:
+        msg: >
+          MEAPS ring details retrieved from
+          {{ ansible_host }}. Result saved to
+          output/{{ ansible_host }}_multiple_ring_protection_details.yml

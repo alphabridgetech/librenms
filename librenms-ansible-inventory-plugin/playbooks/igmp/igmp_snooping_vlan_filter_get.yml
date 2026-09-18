@@ -1,0 +1,290 @@
+# ==========================================
+# igmp_snooping_vlan_filter_get.yml
+# Created on Sept 18, 2026 by Vikash Kumar (vikash.kumar@alphabrige.tech).
+#
+# Copyright (c), ALPHA BRIDGE, Inc.
+# 357D, Udyog Vihar Industrial Area Phase VI, Sector 37, Gurugram, Haryana.
+#
+# All rights reserved.
+#
+# This software is the confidential and proprietary information of
+# ALPHA BRIDGE, Inc. ("Confidential Information").  You shall not
+# disclose such Confidential Information and shall use it only in
+# accordance with the terms of the license agreement you entered into
+# with ALPHA BRIDGE.
+#
+# =============================================================================
+# Playbook Name : IGMP Snooping VLAN Filter
+# =============================================================================
+#
+# Description:
+# This playbook configures an IGMP snooping multicast filter on a VLAN
+# on AlphaBridge switches over SSH, using the command:
+#   ip igmp-snooping vlan <vlan_id> filter <ip_address>
+#
+# Input vars:
+#   vlan_id     - VLAN number, 1-4094
+#   ip_address  - IPv4 multicast address, 224.0.0.0 - 239.255.255.255
+#                 (e.g. 239.1.1.1)
+#
+# Both inputs are validated in Ansible BEFORE any SSH connection is
+# attempted, and re-checked inside the Python helper as a second layer
+# of defense.
+#
+# Example:
+# ansible-playbook -i inventory/192.168.2.245.yml \
+#   playbooks/igmp_snooping_vlan_filter_get.yml
+#
+# Output:
+# output/<switch_ip>_igmp_snooping_vlan_filter_get.yml
+# =============================================================================
+# GET PLAYBOOK NOTES (the header above is the requested SET reference):
+# Actual file: igmp_snooping_vlan_filter_get.yml. This playbook is READ-ONLY.
+# It takes NO vlan_id or ip_address inputs: it retrieves ALL existing filters.
+# CLI: show running non-interface
+# Exact configuration line: ip igmp-snooping vlan <vlanid> filter <ip_address>
+# No matching lines means an empty vlan_filters list, not an SSH failure.
+# Output: output/<switch_ip>_igmp_snooping_vlan_filter_get.yml
+# Example output:
+#   ip: 192.168.2.245
+#   vlan_filters:
+#     - vlanid: 200
+#       ip_address: 239.1.1.1
+#   status: success
+# =============================================================================
+
+- name: Get IGMP snooping VLAN multicast filters
+  hosts: alphabridge_devices
+  gather_facts: false
+
+  vars:
+    # The playbook is expected in playbooks/port_config/.
+    project_root: "/opt/librenms/librenms-ansible-inventory-plugin/../.."
+
+  pre_tasks:
+    - name: Ensure temporary and output directories exist
+      ansible.builtin.file:
+        path: "/opt/librenms/librenms-ansible-inventory-plugin/{{ item }}"
+        state: directory
+        mode: '0755'
+      loop:
+        - tmp
+        - output
+
+  tasks:
+    # ==========================================
+    # 1. Write the Python/Paramiko SSH helper
+    # ==========================================
+    - name: Create Python SSH script for IGMP snooping VLAN filter GET
+      ansible.builtin.copy:
+        dest: "/opt/librenms/librenms-ansible-inventory-plugin/tmp/igmp_snooping_vlan_filter_get_exec.py"
+        mode: '0700'
+        content: |
+          #!/usr/bin/env python3
+
+          import ipaddress
+          import json
+          import re
+          import time
+          import paramiko
+
+          HOST = {{ ansible_host | to_json }}
+          PORT = int({{ ansible_port | default(22) | to_json }})
+          USER = {{ ansible_user | to_json }}
+          PASSWORD = {{ ansible_password | to_json }}
+
+          ansi_re = re.compile(r'\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])')
+          prompt_re = re.compile(r'[>#]\s*\Z')
+          cli_error_re = re.compile(
+              r'(?im)^\s*%\s*(?:invalid|error|incomplete|ambiguous|'
+              r'unknown|unrecognized)\b|'
+              r'\b(?:invalid input|unknown command|incomplete command|'
+              r'command rejected|fail with ret\s*-?\d+)\b'
+          )
+
+          def read_until_prompt(shell, stage, timeout=30):
+              """Wait for a switch prompt; never parse a timed-out response."""
+              buffer = ""
+              deadline = time.monotonic() + timeout
+
+              while time.monotonic() < deadline:
+                  if shell.recv_ready():
+                      buffer += shell.recv(65535).decode(errors="ignore")
+                      clean = ansi_re.sub("", buffer).replace("\r", "")
+                      if prompt_re.search(clean.rstrip()):
+                          return clean
+                  else:
+                      time.sleep(0.1)
+
+              raise TimeoutError(
+                  f"Timed out waiting for switch prompt during {stage}"
+              )
+
+          def run_command(shell, command, timeout=30):
+              shell.send(command + "\n")
+              output = read_until_prompt(shell, command, timeout)
+              if cli_error_re.search(output):
+                  raise RuntimeError(f"Switch rejected {command!r}: {output}")
+              return output
+
+          def parse_vlan_filters(output):
+              """Extract all configured VLAN/multicast-IP pairs."""
+              lines = output.splitlines()
+
+              # Without a config header, an error/empty response must not
+              # incorrectly look like a switch with zero configured filters.
+              has_config_header = any(
+                  line.strip().lower().startswith("!version ")
+                  or line.strip().lower() == "current configuration:"
+                  for line in lines
+              )
+              if not has_config_header:
+                  raise ValueError("SHOW output does not contain a running-config header")
+
+              filters = []
+              seen = set()
+
+              for raw_line in lines:
+                  words = raw_line.strip().split()
+                  lower = [word.lower() for word in words]
+
+                  # Match the complete command, not a substring. For example,
+                  # 'no ip igmp-snooping ...' is not an enabled filter.
+                  if not (
+                      len(lower) >= 5
+                      and lower[:3] == ["ip", "igmp-snooping", "vlan"]
+                      and lower[4] == "filter"
+                  ):
+                      continue
+
+                  if len(words) != 6:
+                      raise ValueError(f"Unexpected IGMP filter configuration: {raw_line}")
+
+                  try:
+                      vlanid = int(words[3])
+                      multicast_ip = ipaddress.IPv4Address(words[5])
+                  except (ValueError, ipaddress.AddressValueError) as exc:
+                      raise ValueError(f"Invalid IGMP filter line: {raw_line}") from exc
+
+                  if not 1 <= vlanid <= 4094 or not multicast_ip.is_multicast:
+                      raise ValueError(f"Invalid VLAN or multicast IP: {raw_line}")
+
+                  entry_key = (vlanid, str(multicast_ip))
+                  if entry_key not in seen:
+                      filters.append({
+                          "vlanid": vlanid,
+                          "ip_address": str(multicast_ip),
+                      })
+                      seen.add(entry_key)
+
+              return filters
+
+          ssh = None
+          shell = None
+          stage = "SSH connection"
+
+          try:
+              # 2. Open a switch CLI session.
+              ssh = paramiko.SSHClient()
+              ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+              ssh.connect(
+                  HOST,
+                  port=PORT,
+                  username=USER,
+                  password=PASSWORD,
+                  look_for_keys=False,
+                  allow_agent=False,
+                  timeout=20,
+                  auth_timeout=20,
+                  banner_timeout=20,
+              )
+              shell = ssh.invoke_shell()
+              read_until_prompt(shell, "initial prompt", timeout=10)
+
+              # 3. Enter privileged mode and disable paging.
+              stage = "enable mode"
+              run_command(shell, "enable", timeout=10)
+
+              stage = "disable paging"
+              run_command(shell, "terminal length 0", timeout=10)
+
+              # 4. Fetch exactly the requested non-interface configuration.
+              stage = "show running non-interface"
+              running_config = run_command(
+                  shell, "show running non-interface", timeout=60
+              )
+
+              # 5. Extract every VLAN and multicast IP from matching lines.
+              stage = "parse IGMP snooping VLAN filters"
+              vlan_filters = parse_vlan_filters(running_config)
+
+              # stdout must contain JSON only: Ansible uses from_json.
+              print(json.dumps({
+                  "ip": HOST,
+                  "vlan_filters": vlan_filters,
+                  "status": "success",
+              }))
+
+          except Exception as exc:
+              print(json.dumps({
+                  "ip": HOST,
+                  "status": "failed",
+                  "stage": stage,
+                  "error": str(exc),
+              }))
+
+          finally:
+              if shell is not None:
+                  shell.close()
+              if ssh is not None:
+                  ssh.close()
+      no_log: true
+
+    # ==========================================
+    # 6. Execute the helper and parse its JSON
+    # ==========================================
+    - name: Execute IGMP snooping VLAN filter GET script
+      ansible.builtin.command:
+        argv:
+          - /opt/librenms/librenms-ansible-inventory-plugin/bin/python3
+          - "/opt/librenms/librenms-ansible-inventory-plugin/tmp/igmp_snooping_vlan_filter_get_exec.py"
+      register: igmp_filter_raw
+      changed_when: false
+      failed_when: false
+
+    - name: Fail if script returned no JSON
+      ansible.builtin.fail:
+        msg: >-
+          IGMP filter GET script returned no JSON.
+          rc={{ igmp_filter_raw.rc }}; stderr={{ igmp_filter_raw.stderr }}
+      when: igmp_filter_raw.stdout | trim | length == 0
+
+    - name: Parse IGMP snooping VLAN filter result
+      ansible.builtin.set_fact:
+        igmp_filter_result: "{{ igmp_filter_raw.stdout | from_json }}"
+
+    - name: Fail if IGMP filter retrieval failed
+      ansible.builtin.fail:
+        msg: >-
+          IGMP filter GET failed during
+          {{ igmp_filter_result.stage | default('execution') }}:
+          {{ igmp_filter_result.error | default(igmp_filter_raw.stderr) }}
+      when: igmp_filter_result.status != 'success' or igmp_filter_raw.rc != 0
+
+    # ==========================================
+    # 7. Display and save all filter entries
+    # ==========================================
+    - name: Display IGMP snooping VLAN filters
+      ansible.builtin.debug:
+        msg: "{{ igmp_filter_result | to_nice_yaml(indent=2, sort_keys=False) }}"
+
+    - name: Save IGMP snooping VLAN filters to YAML
+      ansible.builtin.copy:
+        dest: "/opt/librenms/librenms-ansible-inventory-plugin/output/{{ ansible_host }}_igmp_snooping_vlan_filter_get.yml"
+        content: "{{ igmp_filter_result | to_nice_yaml(indent=2, sort_keys=False) }}"
+
+    - name: Display report path
+      ansible.builtin.debug:
+        msg: >-
+          IGMP snooping VLAN filters collected successfully.
+          Saved to output/{{ ansible_host }}_igmp_snooping_vlan_filter_get.yml

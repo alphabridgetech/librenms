@@ -51,6 +51,20 @@
   hosts: alphabridge_devices
   gather_facts: no
 
+  vars:
+    # Resolve paths from this checkout, including the Jenkins workspace.
+    project_root: "/opt/librenms/librenms-ansible-inventory-plugin/../.."
+
+  pre_tasks:
+    - name: Ensure script and report directories exist
+      ansible.builtin.file:
+        path: "/opt/librenms/librenms-ansible-inventory-plugin/{{ item }}"
+        state: directory
+        mode: '0755'
+      loop:
+        - tmp
+        - output
+
   tasks:
 
     # ==========================================
@@ -59,8 +73,7 @@
 
     - name: Create Python SSH Script for IGMP snooping vlan show
       ansible.builtin.copy:
-        dest: "/opt/librenms/librenms-ansible-inventory-plugin/tmp/\
-               igmp_snooping_vlan_show_exec.py"
+        dest: "/opt/librenms/librenms-ansible-inventory-plugin/tmp/igmp_snooping_vlan_show_exec.py"
         mode: '0755'
         content: |
           #!/usr/bin/env python3
@@ -199,6 +212,41 @@
                   re.IGNORECASE
               )
 
+              # ==========================================
+              # CLEAN ROUTER PORTS
+              #
+              # Raw Router Ports column includes the switch itself
+              # ("SWITCH(querier);") alongside any real router ports
+              # ("g0/7(static);") - drop the SWITCH(querier) entry
+              # entirely, strip the (static)/(dynamic) tag from whatever
+              # real ports remain, and drop the ";" separators too, e.g.:
+              #   "SWITCH(querier); g0/7(static);" -> "g0/7"
+              #   "SWITCH(querier);"                -> ""
+              # ==========================================
+
+              def clean_router_ports(raw):
+
+                  if not raw:
+                      return ""
+
+                  cleaned = re.sub(
+                      r'(?i)SWITCH\s*\(\s*querier\s*\)\s*;?',
+                      '',
+                      raw
+                  )
+
+                  cleaned = re.sub(
+                      r'(?i)\s*\((?:static|dynamic)\)',
+                      '',
+                      cleaned
+                  )
+
+                  cleaned = cleaned.replace(';', '')
+
+                  cleaned = re.sub(r'\s+', ' ', cleaned).strip()
+
+                  return cleaned
+
               vlans = []
 
               for line in show_output.splitlines():
@@ -227,8 +275,7 @@
                   vlans.append({
                       "vlan_id": vlan_num,
                       "immediate_leave": immediate_leave.capitalize(),
-                      "querier_ip": querier_ip,
-                      "router_ports": router_ports.strip()
+                      "router_ports": clean_router_ports(router_ports.strip())
                   })
 
               # ==========================================
@@ -270,9 +317,9 @@
 
     - name: Execute IGMP snooping show script
       ansible.builtin.command:
-        cmd: >
-          /opt/librenms/librenms-ansible-inventory-plugin/bin/python3
-          /opt/librenms/librenms-ansible-inventory-plugin/tmp/igmp_snooping_vlan_show_exec.py
+        argv:
+          - /opt/librenms/librenms-ansible-inventory-plugin/bin/python3
+          - "/opt/librenms/librenms-ansible-inventory-plugin/tmp/igmp_snooping_vlan_show_exec.py"
       register: igmp_raw
       changed_when: false
       failed_when: false
@@ -299,8 +346,7 @@
 
     - name: Save IGMP snooping result
       ansible.builtin.copy:
-        dest: "/opt/librenms/librenms-ansible-inventory-plugin/output/\
-               {{ ansible_host }}_igmp_snooping_vlan_show.yml"
+        dest: "/opt/librenms/librenms-ansible-inventory-plugin/output/{{ ansible_host }}_igmp_snooping_vlan_show.yml"
         content: |
           {{ igmp_result | to_nice_yaml (sort_keys=False) }}
 

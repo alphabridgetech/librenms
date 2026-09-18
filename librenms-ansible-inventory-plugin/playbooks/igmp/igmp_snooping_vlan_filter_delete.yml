@@ -1,0 +1,598 @@
+# ==========================================
+# igmp_snooping_vlan_filter_delete.yml
+# Created on Sept 18, 2026 by Vikash Kumar (vikash.kumar@alphabrige.tech).
+#
+# Copyright (c), ALPHA BRIDGE, Inc.
+# 357D, Udyog Vihar Industrial Area Phase VI, Sector 37, Gurugram, Haryana.
+#
+# All rights reserved.
+#
+# This software is the confidential and proprietary information of
+# ALPHA BRIDGE, Inc. ("Confidential Information").  You shall not
+# disclose such Confidential Information and shall use it only in
+# accordance with the terms of the license agreement you entered into
+# with ALPHA BRIDGE.
+#
+# =============================================================================
+# Playbook Name : Delete IGMP Snooping VLAN Filter
+# =============================================================================
+# Description:
+# Remove one specified IGMP snooping multicast filter on a VLAN over SSH.
+# The global configuration command is:
+#   no ip igmp-snooping vlan <vlan_id> filter <ip_address>
+#
+# Input vars (both required):
+#   vlan_id     - Decimal VLAN number from 1 through 4094.
+#   ip_address  - IPv4 multicast address, 224.0.0.0 through 239.255.255.255.
+#
+# Both values are validated by Ansible BEFORE connecting to the switch,
+# then validated again by the Python helper BEFORE opening SSH.
+# The IP must use four decimal octets (each 0-255) without leading zeros.
+#
+# CLI sequence:
+#   enable
+#   config
+#   no ip igmp-snooping vlan <vlan_id> filter <ip_address>
+#   exit
+#
+# Run from the Ansible project root:
+#   ansible-playbook -i inventory/192.168.2.245.yml \
+#     playbooks/port_config/igmp_snooping_vlan_filter_delete.yml \
+#     -e 'vlan_id=200 ip_address=239.1.1.1'
+#
+# Successful report:
+#   ip: 192.168.2.245
+#   status: success
+#
+# Report: output/<switch_ip>_igmp_snooping_vlan_filter_delete.yml
+# This playbook does not save startup-config or independently read back the
+# running configuration. "success" means no SSH/CLI error was detected.
+# =============================================================================
+
+- name: Delete IGMP snooping VLAN filter
+  hosts: alphabridge_devices
+  gather_facts: false
+  connection: local
+  serial: 1
+
+  vars:
+    # The playbook is stored under playbooks/port_config/.
+    project_root: "/opt/librenms/librenms-ansible-inventory-plugin/../.."
+    vlan_input: "{{ vlan_id | default('') | string | trim }}"
+    multicast_input: "{{ ip_address | default('') | string | trim }}"
+
+  pre_tasks:
+
+    # ==========================================
+    # 1. Validate VLAN and multicast IP before SSH
+    # ==========================================
+
+    - name: Validate VLAN ID and multicast IPv4 address
+      ansible.builtin.assert:
+        that:
+          - vlan_input is match('^[1-9][0-9]{0,3}$')
+          - (vlan_input | int) >= 1
+          - (vlan_input | int) <= 4094
+          - multicast_input is match('^[0-9]+(\.[0-9]+){3}$')
+          - (multicast_input.split('.')[0] | int) >= 224
+          - (multicast_input.split('.')[0] | int) <= 239
+
+        fail_msg: >-
+          Invalid input. Pass vlan_id=1..4094 and ip_address as a multicast
+          IPv4 address from 224.0.0.0 through 239.255.255.255.
+          Example: -e 'vlan_id=200 ip_address=239.1.1.1'.
+
+    - name: Validate every IPv4 octet
+      ansible.builtin.assert:
+        that:
+          - item is match('^(0|[1-9][0-9]{0,2})$')
+          - (item | int) <= 255
+
+        fail_msg: >-
+          Invalid IPv4 address: {{ multicast_input }}.
+          Each octet must be 0..255 without leading zeros.
+
+      loop: "{{ multicast_input.split('.') }}"
+
+      loop_control:
+        label: "IPv4 octet {{ item }}"
+
+    # ==========================================
+    # 2. Ensure local working directories exist
+    # ==========================================
+
+    - name: Ensure temporary and output directories exist
+      ansible.builtin.file:
+        path: "/opt/librenms/librenms-ansible-inventory-plugin/{{ item }}"
+        state: directory
+        mode: '0755'
+
+      loop:
+        - tmp
+        - output
+
+  tasks:
+
+    # ==========================================
+    # 3. Generate helper, execute it, and remove it
+    # ==========================================
+
+    - name: Execute IGMP snooping VLAN filter deletion
+      block:
+
+        - name: Create Python SSH helper for VLAN filter deletion
+          ansible.builtin.copy:
+            dest: "/opt/librenms/librenms-ansible-inventory-plugin/tmp/igmp_snooping_vlan_filter_delete_exec.py"
+            mode: '0700'
+
+            content: |
+              #!/usr/bin/env python3
+
+              import ipaddress
+              import json
+              import re
+              import time
+
+              import paramiko
+
+              # ==========================================
+              # Switch connection details
+              # ==========================================
+
+              HOST = {{ ansible_host | to_json }}
+              PORT = int({{ ansible_port | default(22) | to_json }})
+              USER = {{ ansible_user | to_json }}
+              PASSWORD = {{ ansible_password | to_json }}
+
+              # ==========================================
+              # User inputs
+              # ==========================================
+
+              VLAN_INPUT = {{ vlan_input | to_json }}
+              IP_INPUT = {{ multicast_input | to_json }}
+
+              # ==========================================
+              # CLI output handling
+              # ==========================================
+
+              ansi_re = re.compile(
+                  r'\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])'
+              )
+
+              prompt_re = re.compile(r'[>#]\s*\Z')
+
+              cli_error_re = re.compile(
+                  r'(?im)^\s*%\s*(?:invalid|error|incomplete|ambiguous|'
+                  r'unknown|unrecognized)\b|'
+                  r'^\s*(?:error|invalid input|unknown command|command rejected)\b|'
+                  r'\bfail with ret\s*-?\d+\b'
+              )
+
+              # ==========================================
+              # Validate VLAN and multicast IP
+              # ==========================================
+
+              def validate_inputs():
+                  """
+                  Validate both inputs before opening SSH.
+
+                  VLAN:
+                      1 through 4094
+
+                  Multicast IPv4:
+                      224.0.0.0 through 239.255.255.255
+                  """
+
+                  # Validate the VLAN number format.
+                  if not re.fullmatch(r'[1-9][0-9]{0,3}', VLAN_INPUT):
+
+                      raise ValueError(
+                          'vlan_id must be a decimal number from 1 to 4094'
+                      )
+
+                  vlan = int(VLAN_INPUT)
+
+                  # Validate the VLAN range.
+                  if not 1 <= vlan <= 4094:
+
+                      raise ValueError(
+                          'vlan_id must be between 1 and 4094'
+                      )
+
+                  # Validate IPv4 syntax.
+                  try:
+
+                      address = ipaddress.IPv4Address(
+                          IP_INPUT
+                      )
+
+                  except ipaddress.AddressValueError as exc:
+
+                      raise ValueError(
+                          'ip_address must be a valid IPv4 address'
+                      ) from exc
+
+                  # Validate the multicast range and canonical format.
+                  if not address.is_multicast or str(address) != IP_INPUT:
+
+                      raise ValueError(
+                          'ip_address must be multicast IPv4 (224.0.0.0 - '
+                          '239.255.255.255) without leading zeros'
+                      )
+
+                  return vlan, str(address)
+
+              # ==========================================
+              # Read SSH output until the CLI prompt
+              # ==========================================
+
+              def read_until_prompt(shell, stage, timeout=30):
+                  """
+                  Wait for the switch prompt.
+
+                  Do not accept incomplete responses.
+                  """
+
+                  output = ""
+
+                  deadline = time.monotonic() + timeout
+
+                  while time.monotonic() < deadline:
+
+                      if shell.recv_ready():
+
+                          output += shell.recv(
+                              65535
+                          ).decode(
+                              errors="ignore"
+                          )
+
+                          cleaned = ansi_re.sub(
+                              "",
+                              output
+                          ).replace(
+                              "\r",
+                              ""
+                          )
+
+                          if prompt_re.search(cleaned.rstrip()):
+
+                              return cleaned
+
+                      else:
+
+                          time.sleep(0.1)
+
+                  raise TimeoutError(
+                      f"Timed out waiting for switch prompt during {stage}"
+                  )
+
+              # ==========================================
+              # Execute one switch command
+              # ==========================================
+
+              def run_command(shell, command, timeout=30):
+                  """
+                  Send a CLI command and check for errors.
+                  """
+
+                  shell.send(
+                      command + "\n"
+                  )
+
+                  output = read_until_prompt(
+                      shell,
+                      command,
+                      timeout
+                  )
+
+                  if cli_error_re.search(output):
+
+                      raise RuntimeError(
+                          f"Switch rejected {command!r}: {output}"
+                      )
+
+                  return output
+
+              # ==========================================
+              # Get the last CLI prompt
+              # ==========================================
+
+              def last_prompt(output):
+
+                  return output.rstrip().splitlines()[-1].strip()
+
+              # ==========================================
+              # Initialize SSH objects
+              # ==========================================
+
+              ssh = None
+
+              shell = None
+
+              stage = "validate input"
+
+              try:
+
+                  # ==========================================
+                  # 4. Validate inputs again in Python
+                  # ==========================================
+
+                  vlan, multicast_ip = validate_inputs()
+
+                  # Construct the exact deletion command.
+                  command = (
+                      f"no ip igmp-snooping vlan {vlan} "
+                      f"filter {multicast_ip}"
+                  )
+
+                  # ==========================================
+                  # 5. Connect to the switch
+                  # ==========================================
+
+                  stage = "SSH connection"
+
+                  ssh = paramiko.SSHClient()
+
+                  ssh.set_missing_host_key_policy(
+                      paramiko.AutoAddPolicy()
+                  )
+
+                  ssh.connect(
+                      HOST,
+                      port=PORT,
+                      username=USER,
+                      password=PASSWORD,
+                      look_for_keys=False,
+                      allow_agent=False,
+                      timeout=20,
+                      auth_timeout=20,
+                      banner_timeout=20,
+                  )
+
+                  shell = ssh.invoke_shell()
+
+                  read_until_prompt(
+                      shell,
+                      "initial prompt",
+                      timeout=10
+                  )
+
+                  # ==========================================
+                  # 6. Enter privileged EXEC mode
+                  # ==========================================
+
+                  stage = "enable mode"
+
+                  enable_output = run_command(
+                      shell,
+                      "enable",
+                      timeout=10
+                  )
+
+                  enable_prompt = last_prompt(
+                      enable_output
+                  )
+
+                  if not enable_prompt.endswith("#"):
+
+                      raise RuntimeError(
+                          "Switch did not enter privileged EXEC mode"
+                      )
+
+                  # ==========================================
+                  # 7. Enter global configuration mode
+                  # ==========================================
+
+                  stage = "global configuration mode"
+
+                  config_output = run_command(
+                      shell,
+                      "config",
+                      timeout=10
+                  )
+
+                  config_prompt = last_prompt(
+                      config_output
+                  )
+
+                  if (
+                      config_prompt == enable_prompt
+                      or not config_prompt.endswith("#")
+                  ):
+
+                      raise RuntimeError(
+                          "Switch did not enter global configuration mode"
+                      )
+
+                  # ==========================================
+                  # 8. Delete IGMP snooping VLAN filter
+                  # ==========================================
+
+                  stage = "delete VLAN multicast filter"
+
+                  delete_output = run_command(
+                      shell,
+                      command,
+                      timeout=20
+                  )
+
+                  # Confirm that the switch remained in config mode.
+                  if last_prompt(delete_output) != config_prompt:
+
+                      raise RuntimeError(
+                          "Unexpected CLI mode after filter deletion command"
+                      )
+
+                  # ==========================================
+                  # 9. Exit configuration mode
+                  # ==========================================
+
+                  stage = "exit configuration mode"
+
+                  exit_output = run_command(
+                      shell,
+                      "exit",
+                      timeout=10
+                  )
+
+                  if last_prompt(exit_output) != enable_prompt:
+
+                      raise RuntimeError(
+                          "Switch did not return to privileged EXEC mode"
+                      )
+
+                  # ==========================================
+                  # 10. Return simplified success JSON
+                  # ==========================================
+
+                  print(
+                      json.dumps(
+                          {
+                              "ip": HOST,
+                              "status": "success"
+                          }
+                      )
+                  )
+
+              except Exception as exc:
+
+                  # ==========================================
+                  # Return failure JSON
+                  # ==========================================
+
+                  print(
+                      json.dumps(
+                          {
+                              "ip": HOST,
+                              "status": "failed",
+                              "stage": stage,
+                              "error": str(exc)
+                          }
+                      )
+                  )
+
+              finally:
+
+                  # ==========================================
+                  # Close SSH connections
+                  # ==========================================
+
+                  if shell is not None:
+
+                      try:
+                          shell.close()
+
+                      except Exception:
+                          pass
+
+                  if ssh is not None:
+
+                      try:
+                          ssh.close()
+
+                      except Exception:
+                          pass
+
+          no_log: true
+
+        # ==========================================
+        # 11. Execute Python helper
+        # ==========================================
+
+        - name: Execute VLAN filter delete Python script
+          ansible.builtin.command:
+            argv:
+              - /opt/librenms/librenms-ansible-inventory-plugin/bin/python3
+              - /opt/librenms/librenms-ansible-inventory-plugin/tmp/igmp_snooping_vlan_filter_delete_exec.py
+
+          register: igmp_delete_raw
+
+          changed_when: false
+
+          failed_when: false
+
+      # ==========================================
+      # 12. Remove temporary script
+      # ==========================================
+      #
+      # Always runs after the block, even if
+      # execution fails.
+      #
+      # The helper contains SSH credentials.
+      # ==========================================
+
+      always:
+
+        - name: Remove temporary Python helper containing SSH credentials
+          ansible.builtin.file:
+            path: "/opt/librenms/librenms-ansible-inventory-plugin/tmp/igmp_snooping_vlan_filter_delete_exec.py"
+            state: absent
+
+          no_log: true
+
+    # ==========================================
+    # 13. Verify Python returned JSON
+    # ==========================================
+
+    - name: Fail if Python helper returned no JSON
+      ansible.builtin.fail:
+        msg: >-
+          IGMP VLAN filter DELETE helper returned no JSON.
+          rc={{ igmp_delete_raw.rc }};
+          stderr={{ igmp_delete_raw.stderr }}
+
+      when: igmp_delete_raw.stdout | trim | length == 0
+
+    # ==========================================
+    # 14. Convert JSON result
+    # ==========================================
+
+    - name: Parse VLAN filter deletion result
+      ansible.builtin.set_fact:
+        igmp_delete_result: "{{ igmp_delete_raw.stdout | from_json }}"
+
+    # ==========================================
+    # 15. Fail if deletion failed
+    # ==========================================
+
+    - name: Fail if deletion failed
+      ansible.builtin.fail:
+        msg: >-
+          IGMP VLAN filter deletion failed during
+          {{ igmp_delete_result.stage | default('execution') }}:
+          {{ igmp_delete_result.error | default(igmp_delete_raw.stderr) }}
+
+      when: igmp_delete_raw.rc != 0 or igmp_delete_result.status != 'success'
+
+    # ==========================================
+    # 16. Display simplified success result
+    # ==========================================
+
+    - name: Display VLAN filter delete result
+      ansible.builtin.debug:
+        msg: |
+          ip: {{ igmp_delete_result.ip }}
+          status: {{ igmp_delete_result.status }}
+
+    # ==========================================
+    # 17. Save simplified YAML report
+    # ==========================================
+
+    - name: Save VLAN filter delete report
+      ansible.builtin.copy:
+        dest: "/opt/librenms/librenms-ansible-inventory-plugin/output/{{ ansible_host }}_igmp_snooping_vlan_filter_delete.yml"
+
+        content: |
+          ip: {{ igmp_delete_result.ip }}
+          status: {{ igmp_delete_result.status }}
+
+    # ==========================================
+    # 18. Display report location
+    # ==========================================
+
+    - name: Display report location
+      ansible.builtin.debug:
+        msg: >-
+          IGMP snooping VLAN filter delete command completed successfully.
+          Report saved to output/{{ ansible_host }}_igmp_snooping_vlan_filter_delete.yml
