@@ -292,15 +292,14 @@
       ansible.builtin.copy:
         dest: "{{ output_dir }}/{{ device_ip }}_lldp_interface_configuration.yml"
         content: |
-          IP: {{ device_ip }}
-
+          ip: {{ device_ip }}
+          lldp_interfaces:
           {% for line in lldp_get_result.stdout.splitlines() %}
           {% if line.startswith('INTERFACE|') %}
           {% set parts = line.split('|') %}
-          Interface: {{ parts[1] }}
-          Rx: {{ parts[2] }}
-          Tx: {{ parts[3] }}
-
+            - interface: "{{ parts[1] }}"
+              rx: {{ parts[2] }}
+              tx: {{ parts[3] }}
           {% endif %}
           {% endfor %}
 

@@ -359,7 +359,6 @@ class ConfigurationController implements DeviceTab
 
         if ($device->macs()->exists()) {
             $tabs[] = ['name' => __('Startup-Config'), 'url' => 'startupconfig'];
-            $tabs[] = ['name' => __('Ntp'), 'url' => 'ntp'];
             $tabs[] = ['name' => __('Port Config'), 'url' => 'dayfirst'];
             $tabs[] = ['name' => __('Reboot'), 'url' => 'reboot'];
         }
