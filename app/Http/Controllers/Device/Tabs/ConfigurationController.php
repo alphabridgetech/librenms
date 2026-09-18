@@ -334,7 +334,7 @@ class ConfigurationController implements DeviceTab
             $tabs[] = ['name' => __('PDP configuration'), 'url' => 'pdpconfig'];
             $tabs[] = ['name' => __('MQTT configuration'), 'url' => 'mqttconfig'];
             $tabs[] = ['name' => __('GVRP Configuration'), 'url' => 'gvrpconfig'];
-            $tabs[] = ['name' => __('ddm'), 'url' => 'ddm'];
+            $tabs[] = ['name' => __('DDM Configuration'), 'url' => 'ddm'];
         }
 
         return $tabs;

@@ -89,6 +89,14 @@ Route::prefix('v0')->group(function () {
         Route::post('pdp/interface/set/{hostname}', [App\Api\Controllers\KunalApiController::class, 'setpdpinterface'])->name('pdp.interface.set');
         Route::get('mqtt/show/{hostname}', [App\Api\Controllers\KunalApiController::class, 'getmqtt'])->name('mqtt.show');
         Route::post('mqtt/set/{hostname}', [App\Api\Controllers\KunalApiController::class, 'setmqtt'])->name('mqtt.set');
+        Route::get('ddm/show/{hostname}', [App\Api\Controllers\KunalApiController::class, 'getddm'])->name('ddm.show');
+        Route::post('ddm/set/{hostname}', [App\Api\Controllers\KunalApiController::class, 'setddm'])->name('ddm.set');
+        Route::get('vlan/interface/attribute/show/{hostname}', [App\Api\Controllers\KunalApiController::class, 'getinterfacevlanattribute'])->name('vlan.interface.attribute.show');
+        Route::post('vlan/interface/attribute/set/{hostname}', [App\Api\Controllers\KunalApiController::class, 'setinterfacevlanattribute'])->name('vlan.interface.attribute.set');
+        Route::get('vlan/voice/show/{hostname}', [App\Api\Controllers\KunalApiController::class, 'getvoicevlan'])->name('vlan.voice.show');
+        Route::post('vlan/voice/set/{hostname}', [App\Api\Controllers\KunalApiController::class, 'setvoicevlan'])->name('vlan.voice.set');
+        Route::get('vlan/interface/voice/show/{hostname}', [App\Api\Controllers\KunalApiController::class, 'getinterfacevoicevlan'])->name('vlan.interface.voice.show');
+        Route::post('vlan/interface/voice/set/{hostname}', [App\Api\Controllers\KunalApiController::class, 'setinterfacevoicevlan'])->name('vlan.interface.voice.set');
         Route::post('vlandelete/{hostname}', [App\Api\Controllers\KunalApiController::class, 'vlandelete'])->name('vlandelete');
         Route::get('voicevlanshow/{hostname}', [App\Api\Controllers\KunalApiController::class, 'voicevlanshow'])->name('voicevlanshow');
         Route::post('voicevlan/batch/{hostname}', [App\Api\Controllers\KunalApiController::class, 'voicevlandelete'])->name('voicevlandelete');

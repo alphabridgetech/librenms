@@ -348,7 +348,15 @@
                 if (res.status === "success") {
                     alert("PDP configuration updated successfully");
                     document.getElementById('pdp_no_data_note').style.display = "none";
-                    loadPdpConfig();
+                    // Re-fetch directly, skipping loadPdpConfig()'s cookie
+                    // prefill step - that cookie still holds the PRE-change
+                    // value at this point, so calling loadPdpConfig() here
+                    // would briefly flash the form back to the old values
+                    // right after a successful save (same bug found and
+                    // fixed on the DDM tab).
+                    document.getElementById('pdp_global_loading_note').innerHTML = '<i class="fa fa-spinner fa-spin"></i> reading live configuration from device...';
+                    document.getElementById('pdp_global_loading_note').style.display = "inline";
+                    fetchPdpConfig(false);
                 } else if (res.errors) {
                     if (res.errors.holdtime) showPdpError("pdp_holdtime_error", res.errors.holdtime[0]);
                     if (res.errors.tx_interval) showPdpError("pdp_tx_interval_error", res.errors.tx_interval[0]);

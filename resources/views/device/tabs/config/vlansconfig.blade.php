@@ -169,45 +169,33 @@
 
 
         <div class="tab-pane" id="interface_vlan">
-            <button class="btn btn-primary" id="btnAddVlan">
-                <i class="glyphicon glyphicon-plus"></i> Add
-            </button>
             <span id="interface_vlan_cache_note" class="text-muted" style="display:none; margin-left:10px;">
                 <i class="fa fa-spinner fa-spin"></i> showing last known data, refreshing in background...
             </span>
+            <button type="button" class="btn btn-xs btn-default pull-right" onclick="interfaceVlanTable.ajax.reload(null, false)">
+                <i class="fa fa-refresh"></i> Refresh
+            </button>
             <div class="table-responsive">
-                <table id="interfaceTable" class="table table-striped table-bordered table-condensed" style="width:auto;">
+                <table id="interfaceVlanTable" class="table table-striped table-bordered table-condensed" style="width:auto;">
                     <thead>
                         <tr>
-                            <th width="40">
-                                <input type="checkbox" id="selectAll">
-                            </th>
                             <th width="100">Port</th>
-                            <th width="90">Status</th>
-                            <th width="110">Vlan</th>
-                            <th width="90">Duplex</th>
-                            <th width="110">Speed</th>
-                            <th width="100">Type</th>
+                            <th width="80">PVID</th>
+                            <th width="90">Mode</th>
+                            <th width="150">VLAN Allowed</th>
+                            <th width="150">VLAN Untagged</th>
+                            <th width="90">MAC VLAN</th>
+                            <th width="80">Actions</th>
                         </tr>
                     </thead>
                 </table>
-            </div>
-
-
-
-            <div class="row" style="margin-top:10px;">
-                <div class="col-sm-6">
-                    <label><input id="selectAllLabel" type="checkbox"> Select All / None</label>
-                </div>
-                <div class="col-sm-6 text-right">
-                    <button id="batchDeleteBtn" class="btn btn-danger btn-sm">Batch Delete</button>
-                </div>
             </div>
 
             <div class="alert alert-info" style="margin-top:20px;">
                 <ul>
                     <li>VLAN-allowed and VLAN-untagged: (1-4094), such as (1,3,5,7) Or (1,3-5,7) Or (1-7) Or (1 3,5 7-9)
                     </li>
+                    <li>For Access mode, PVID and VLAN-allowed must be the same.</li>
                 </ul>
             </div>
         </div>
@@ -222,16 +210,18 @@
             <span id="voice_vlan_cache_note" class="text-muted" style="display:none; margin-left:10px;">
                 <i class="fa fa-spinner fa-spin"></i> showing last known data, refreshing in background...
             </span>
+            <button type="button" class="btn btn-xs btn-default pull-right" onclick="voicevlanTable.ajax.reload(null, false)">
+                <i class="fa fa-refresh"></i> Refresh
+            </button>
             <div class="table-responsive">
                 <table id="voicevlanTable" class="table table-striped table-bordered table-condensed" style="width:auto;">
                     <thead>
                         <tr>
                             <th width="40">
-                                <input type="checkbox" id="selectAll">
+                                <input type="checkbox" id="selectAllVoiceVlan">
                             </th>
                             <th width="160">MAC Address</th>
                             <th width="160">MAC MASK</th>
-                            {{-- <th width="80">Operate</th> --}}
                         </tr>
                     </thead>
                 </table>
@@ -243,20 +233,48 @@
 
                 </div>
                 <div class="col-sm-6 text-right">
-                    <button id="batchVoicevlanDeleteBtn" class="btn btn-danger btn-sm">Batch Delete</button>
+                    <button id="batchVoicevlanDeleteBtn" class="btn btn-danger btn-sm">
+                        <span class="spinner-border" style="display:none;"></span>
+                        <span id="batchVoicevlanDeleteBtnLabel">Batch Delete</span>
+                    </button>
                 </div>
             </div>
 
             <div class="alert alert-info" style="margin-top:20px;">
                 <ul>
-                    <li> </li>
-
+                    <li>MAC Address and MAC Mask use the xxxx.xxxx.xxxx format.</li>
                 </ul>
             </div>
 
         </div>
         <div class="tab-pane" id="interface_voice_vlan">
-            <h4>Interface Voice VLAN</h4>
+            <span id="interface_voice_vlan_cache_note" class="text-muted" style="display:none; margin-left:10px;">
+                <i class="fa fa-spinner fa-spin"></i> showing last known data, refreshing in background...
+            </span>
+            <button type="button" class="btn btn-xs btn-default pull-right" onclick="interfaceVoiceVlanTable.ajax.reload(null, false)">
+                <i class="fa fa-refresh"></i> Refresh
+            </button>
+            <div class="table-responsive">
+                <table id="interfaceVoiceVlanTable" class="table table-striped table-bordered table-condensed" style="width:auto;">
+                    <thead>
+                        <tr>
+                            <th width="100">Port</th>
+                            <th width="100">VLAN ID</th>
+                            <th width="120">Priority Mode</th>
+                            <th width="90">Priority</th>
+                            <th width="120">Mode</th>
+                            <th width="140">Actions</th>
+                        </tr>
+                    </thead>
+                </table>
+            </div>
+
+            <div class="alert alert-info" style="margin-top:20px;">
+                <ul>
+                    <li>Priority: 0-7 for COS, 0-63 for DSCP.</li>
+                    <li>Mode: vlan or mac-address.</li>
+                </ul>
+            </div>
         </div>
     </div>
 </div>
@@ -288,6 +306,150 @@
                 <button id="saveVlanBtn" class="btn btn-success">
                     <span class="spinner-border" style="display:none;"></span>
                     Save VLAN
+                </button>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Edit Interface VLAN Attribute Modal -->
+<div id="editInterfaceVlanModal" class="modal fade" tabindex="-1" role="dialog">
+    <div class="modal-dialog">
+        <div class="modal-content">
+            <div class="modal-header">
+                <button type="button" class="close" data-dismiss="modal">&times;</button>
+                <h4 class="modal-title">Edit Interface VLAN Attribute - <span id="ivlan_edit_port"></span></h4>
+            </div>
+            <div class="modal-body">
+                <form id="editInterfaceVlanForm" class="form-horizontal">
+                    <input type="hidden" id="ivlan_interface">
+                    <div class="form-group">
+                        <label class="col-sm-4 control-label">Mode</label>
+                        <div class="col-sm-8">
+                            <select id="ivlan_mode" class="form-control">
+                                <option value="Access">Access</option>
+                                <option value="Trunk">Trunk</option>
+                            </select>
+                        </div>
+                    </div>
+                    <div class="form-group">
+                        <label class="col-sm-4 control-label">PVID</label>
+                        <div class="col-sm-8">
+                            <input type="number" class="form-control" id="ivlan_pvid" min="1" max="4094">
+                        </div>
+                    </div>
+                    <div class="form-group">
+                        <label class="col-sm-4 control-label">VLAN Allowed</label>
+                        <div class="col-sm-8">
+                            <input type="text" class="form-control" id="ivlan_allowed" placeholder="e.g. 1,3-5,7">
+                        </div>
+                    </div>
+                    <div class="form-group">
+                        <label class="col-sm-4 control-label">VLAN Untagged</label>
+                        <div class="col-sm-8">
+                            <input type="text" class="form-control" id="ivlan_untagged" placeholder="e.g. 1,3-5,7">
+                        </div>
+                    </div>
+                    <div id="ivlan_edit_error" class="text-danger" style="display:none;"></div>
+                </form>
+            </div>
+            <div class="modal-footer">
+                <button class="btn btn-default" data-dismiss="modal">Close</button>
+                <button id="saveInterfaceVlanBtn" class="btn btn-success">
+                    <span class="spinner-border" style="display:none;"></span>
+                    Save
+                </button>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Add Voice VLAN Modal -->
+<div id="addVoiceVlanModal" class="modal fade" tabindex="-1" role="dialog">
+    <div class="modal-dialog">
+        <div class="modal-content">
+            <div class="modal-header">
+                <button type="button" class="close" data-dismiss="modal">&times;</button>
+                <h4 class="modal-title">Add Voice VLAN</h4>
+            </div>
+            <div class="modal-body">
+                <form id="addVoiceVlanForm" class="form-horizontal">
+                    <div class="form-group">
+                        <label class="col-sm-4 control-label">MAC Address</label>
+                        <div class="col-sm-8">
+                            <input type="text" class="form-control" id="voice_mac_address" placeholder="e.g. 001a.2b3c.4d5e">
+                        </div>
+                    </div>
+                    <div class="form-group">
+                        <label class="col-sm-4 control-label">MAC Mask</label>
+                        <div class="col-sm-8">
+                            <input type="text" class="form-control" id="voice_mac_mask" placeholder="e.g. ffff.ffff.ffff">
+                        </div>
+                    </div>
+                    <div id="voice_vlan_add_error" class="text-danger" style="display:none;"></div>
+                </form>
+            </div>
+            <div class="modal-footer">
+                <button class="btn btn-default" data-dismiss="modal">Close</button>
+                <button id="saveVoiceVlanBtn" class="btn btn-success">
+                    <span class="spinner-border" style="display:none;"></span>
+                    Save
+                </button>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Edit Interface Voice VLAN Modal -->
+<div id="editInterfaceVoiceVlanModal" class="modal fade" tabindex="-1" role="dialog">
+    <div class="modal-dialog">
+        <div class="modal-content">
+            <div class="modal-header">
+                <button type="button" class="close" data-dismiss="modal">&times;</button>
+                <h4 class="modal-title">Interface Voice VLAN - <span id="ivvlan_edit_port"></span></h4>
+            </div>
+            <div class="modal-body">
+                <form id="editInterfaceVoiceVlanForm" class="form-horizontal">
+                    <input type="hidden" id="ivvlan_interface">
+                    <div class="form-group">
+                        <label class="col-sm-4 control-label">VLAN ID</label>
+                        <div class="col-sm-8">
+                            <input type="number" class="form-control" id="ivvlan_vlan_id" min="2" max="4094">
+                        </div>
+                    </div>
+                    <div class="form-group">
+                        <label class="col-sm-4 control-label">Priority Mode</label>
+                        <div class="col-sm-8">
+                            <select id="ivvlan_priority_mode" class="form-control">
+                                <option value="cos">COS</option>
+                                <option value="dscp">DSCP</option>
+                            </select>
+                        </div>
+                    </div>
+                    <div class="form-group">
+                        <label class="col-sm-4 control-label">Priority</label>
+                        <div class="col-sm-8">
+                            <input type="number" class="form-control" id="ivvlan_priority" min="0" max="63">
+                        </div>
+                    </div>
+                    <div class="form-group">
+                        <label class="col-sm-4 control-label">Mode</label>
+                        <div class="col-sm-8">
+                            <select id="ivvlan_mode" class="form-control">
+                                <option value="vlan">vlan</option>
+                                <option value="mac-address">mac-address</option>
+                            </select>
+                        </div>
+                    </div>
+                    <div id="ivvlan_edit_error" class="text-danger" style="display:none;"></div>
+                </form>
+            </div>
+            <div class="modal-footer">
+                <button class="btn btn-default" data-dismiss="modal">Close</button>
+                <button id="deleteInterfaceVoiceVlanBtn" class="btn btn-danger">Delete</button>
+                <button id="saveInterfaceVoiceVlanBtn" class="btn btn-success">
+                    <span class="spinner-border" style="display:none;"></span>
+                    Save
                 </button>
             </div>
         </div>
@@ -387,7 +549,7 @@
         serverSide: false,
         autoWidth: false,
         ajax: {
-            url: "/api/v0/voicevlanshow/" + DEVICE_IP,
+            url: "/api/v0/vlan/voice/show/" + DEVICE_IP,
             type: "GET",
             headers: {
                 "Authorization": "Bearer " + API_TOKEN,
@@ -395,19 +557,19 @@
             },
             dataSrc: function(json) {
                 document.getElementById('voice_vlan_cache_note').style.display = json.cached ? "inline" : "none";
-                return json.mac_addresses ?? json;
+                return json.entries ?? [];
             }
         },
         columns: [{
                 data: null,
                 orderable: false,
                 render: function(data, type, row) {
-                    return `<input type="checkbox" class="row-check voice" data-mac="${row.mac}"
+                    return `<input type="checkbox" class="row-check voice" data-mac="${row.mac_address}"
                     data-mask="${row.mask}">`;
                 }
             },
             {
-                data: "mac"
+                data: "mac_address"
             },
             {
                 data: "mask"
@@ -422,17 +584,15 @@
         }
     });
 
-
-
     /* -----------------------
-       HANDLE EDIT BUTTON
+       INTERFACE VLAN ATTRIBUTE
     ----------------------- */
-    var interfaceTable = $('#interfaceTable').DataTable({
+    var interfaceVlanTable = $('#interfaceVlanTable').DataTable({
         processing: true,
         serverSide: false,
         autoWidth: false,
         ajax: {
-            url: "/api/v0/vlan/interface/" + DEVICE_IP,
+            url: "/api/v0/vlan/interface/attribute/show/" + DEVICE_IP,
             type: "GET",
             headers: {
                 "Authorization": "Bearer " + API_TOKEN,
@@ -440,37 +600,27 @@
             },
             dataSrc: function(json) {
                 document.getElementById('interface_vlan_cache_note').style.display = json.cached ? "inline" : "none";
-                return json.interfaces || [];
+                return json.entries ?? [];
             }
         },
-        columns: [{
-                data: "name",
+        columns: [
+            { data: "port_name" },
+            { data: "pvid" },
+            { data: "mode" },
+            { data: "vlan_allowed_range" },
+            { data: "vlan_untagged_range" },
+            { data: "mac_vlan" },
+            {
+                data: null,
                 orderable: false,
-                render: function(data) {
-                    return `<input type="checkbox" class="row-check" value="${data}">`;
+                searchable: false,
+                render: function(row) {
+                    return '<button type="button" class="btn btn-xs btn-warning btn-edit-ivlan">Edit</button>';
                 }
-            },
-            {
-                data: "name"
-            }, // Port
-            {
-                data: "status"
-            }, // Status
-            {
-                data: "vlan"
-            }, // VLAN
-            {
-                data: "duplex"
-            }, // Duplex
-            {
-                data: "speed"
-            }, // Speed
-            {
-                data: "type"
-            } // Type
+            }
         ],
         order: [
-            [1, "asc"]
+            [0, "asc"]
         ],
         lengthMenu: [10, 25, 50, 100],
         language: {
@@ -478,6 +628,238 @@
         }
     });
 
+    $('#interfaceVlanTable tbody').on('click', '.btn-edit-ivlan', function() {
+        const row = interfaceVlanTable.row($(this).closest('tr')).data();
+        document.getElementById('ivlan_edit_port').innerText = row.port_name;
+        document.getElementById('ivlan_interface').value = row.interface;
+        document.getElementById('ivlan_mode').value = row.mode;
+        document.getElementById('ivlan_pvid').value = row.pvid;
+        document.getElementById('ivlan_allowed').value = row.vlan_allowed_range;
+        document.getElementById('ivlan_untagged').value = row.vlan_untagged_range;
+        document.getElementById('ivlan_edit_error').style.display = 'none';
+        $('#editInterfaceVlanModal').modal('show');
+    });
+
+    $('#saveInterfaceVlanBtn').on('click', function() {
+        const btn = this;
+        const errorBox = document.getElementById('ivlan_edit_error');
+        errorBox.style.display = 'none';
+
+        const payload = {
+            interface: document.getElementById('ivlan_interface').value,
+            mode: document.getElementById('ivlan_mode').value,
+            pvid: document.getElementById('ivlan_pvid').value,
+            vlan_allowed_range: document.getElementById('ivlan_allowed').value,
+            vlan_untagged_range: document.getElementById('ivlan_untagged').value
+        };
+
+        $(btn).find('.spinner-border').show();
+        $(btn).prop('disabled', true);
+
+        $.ajax({
+            url: "/api/v0/vlan/interface/attribute/set/" + DEVICE_IP,
+            method: "POST",
+            headers: {
+                "Authorization": "Bearer " + API_TOKEN,
+                "Accept": "application/json"
+            },
+            contentType: "application/json",
+            data: JSON.stringify(payload),
+            success: function(res) {
+                $(btn).find('.spinner-border').hide();
+                $(btn).prop('disabled', false);
+                $('#editInterfaceVlanModal').modal('hide');
+                alert(res.message || "Interface VLAN attribute updated");
+                interfaceVlanTable.ajax.reload(null, false);
+            },
+            error: function(xhr) {
+                $(btn).find('.spinner-border').hide();
+                $(btn).prop('disabled', false);
+                errorBox.innerText = xhr.responseJSON?.message || "Failed to update interface VLAN attribute";
+                errorBox.style.display = 'block';
+            }
+        });
+    });
+
+    /* -----------------------
+       INTERFACE VOICE VLAN
+    ----------------------- */
+    var interfaceVoiceVlanTable = $('#interfaceVoiceVlanTable').DataTable({
+        processing: true,
+        serverSide: false,
+        autoWidth: false,
+        ajax: {
+            url: "/api/v0/vlan/interface/voice/show/" + DEVICE_IP,
+            type: "GET",
+            headers: {
+                "Authorization": "Bearer " + API_TOKEN,
+                "Accept": "application/json"
+            },
+            dataSrc: function(json) {
+                document.getElementById('interface_voice_vlan_cache_note').style.display = json.cached ? "inline" : "none";
+                return json.entries ?? [];
+            }
+        },
+        columns: [
+            { data: "port_name" },
+            { data: "vlan_id", render: data => data || '-' },
+            { data: "priority_mode", render: data => data || '-' },
+            { data: "priority", render: data => (data === '' || data === null || data === undefined) ? '-' : data },
+            { data: "mode", render: data => data || '-' },
+            {
+                data: null,
+                orderable: false,
+                searchable: false,
+                render: function(row) {
+                    return '<button type="button" class="btn btn-xs btn-warning btn-edit-ivvlan">Edit</button>';
+                }
+            }
+        ],
+        order: [
+            [0, "asc"]
+        ],
+        lengthMenu: [10, 25, 50, 100],
+        language: {
+            emptyTable: "No interfaces found"
+        }
+    });
+
+    $('#interfaceVoiceVlanTable tbody').on('click', '.btn-edit-ivvlan', function() {
+        const row = interfaceVoiceVlanTable.row($(this).closest('tr')).data();
+        document.getElementById('ivvlan_edit_port').innerText = row.port_name;
+        document.getElementById('ivvlan_interface').value = row.port_name;
+        document.getElementById('ivvlan_vlan_id').value = row.vlan_id || 90;
+        document.getElementById('ivvlan_priority_mode').value = row.priority_mode || 'dscp';
+        document.getElementById('ivvlan_priority').value = (row.priority === '' || row.priority === undefined) ? 5 : row.priority;
+        document.getElementById('ivvlan_mode').value = row.mode || 'vlan';
+        document.getElementById('ivvlan_edit_error').style.display = 'none';
+        $('#editInterfaceVoiceVlanModal').modal('show');
+    });
+
+    $('#saveInterfaceVoiceVlanBtn').on('click', function() {
+        const btn = this;
+        const errorBox = document.getElementById('ivvlan_edit_error');
+        errorBox.style.display = 'none';
+
+        const payload = {
+            operation: 'set',
+            interface: document.getElementById('ivvlan_interface').value,
+            vlan_id: document.getElementById('ivvlan_vlan_id').value,
+            priority_mode: document.getElementById('ivvlan_priority_mode').value,
+            priority: document.getElementById('ivvlan_priority').value,
+            mode: document.getElementById('ivvlan_mode').value
+        };
+
+        $(btn).find('.spinner-border').show();
+        $(btn).prop('disabled', true);
+
+        $.ajax({
+            url: "/api/v0/vlan/interface/voice/set/" + DEVICE_IP,
+            method: "POST",
+            headers: {
+                "Authorization": "Bearer " + API_TOKEN,
+                "Accept": "application/json"
+            },
+            contentType: "application/json",
+            data: JSON.stringify(payload),
+            success: function(res) {
+                $(btn).find('.spinner-border').hide();
+                $(btn).prop('disabled', false);
+                $('#editInterfaceVoiceVlanModal').modal('hide');
+                alert(res.message || "Interface Voice VLAN updated");
+                interfaceVoiceVlanTable.ajax.reload(null, false);
+            },
+            error: function(xhr) {
+                $(btn).find('.spinner-border').hide();
+                $(btn).prop('disabled', false);
+                errorBox.innerText = xhr.responseJSON?.message || "Failed to update interface voice VLAN";
+                errorBox.style.display = 'block';
+            }
+        });
+    });
+
+    $('#deleteInterfaceVoiceVlanBtn').on('click', function() {
+        if (!confirm("Remove voice VLAN configuration from this interface?")) {
+            return;
+        }
+
+        $.ajax({
+            url: "/api/v0/vlan/interface/voice/set/" + DEVICE_IP,
+            method: "POST",
+            headers: {
+                "Authorization": "Bearer " + API_TOKEN,
+                "Accept": "application/json"
+            },
+            contentType: "application/json",
+            data: JSON.stringify({
+                operation: 'delete',
+                interface: document.getElementById('ivvlan_interface').value
+            }),
+            success: function(res) {
+                $('#editInterfaceVoiceVlanModal').modal('hide');
+                alert(res.message || "Interface Voice VLAN removed");
+                interfaceVoiceVlanTable.ajax.reload(null, false);
+            },
+            error: function(xhr) {
+                alert(xhr.responseJSON?.message || "Failed to remove interface voice VLAN");
+            }
+        });
+    });
+
+    /* -----------------------
+       ADD VOICE VLAN
+    ----------------------- */
+    $('#btnAddvoiceVlan').on('click', function() {
+        $('#addVoiceVlanForm')[0].reset();
+        document.getElementById('voice_vlan_add_error').style.display = 'none';
+        $('#addVoiceVlanModal').modal('show');
+    });
+
+    $('#saveVoiceVlanBtn').on('click', function() {
+        const btn = this;
+        const errorBox = document.getElementById('voice_vlan_add_error');
+        errorBox.style.display = 'none';
+
+        const macAddress = document.getElementById('voice_mac_address').value.trim();
+        const macMask = document.getElementById('voice_mac_mask').value.trim();
+
+        if (!macAddress || !macMask) {
+            errorBox.innerText = "Please enter both MAC Address and MAC Mask";
+            errorBox.style.display = 'block';
+            return;
+        }
+
+        $(btn).find('.spinner-border').show();
+        $(btn).prop('disabled', true);
+
+        $.ajax({
+            url: "/api/v0/vlan/voice/set/" + DEVICE_IP,
+            method: "POST",
+            headers: {
+                "Authorization": "Bearer " + API_TOKEN,
+                "Accept": "application/json"
+            },
+            contentType: "application/json",
+            data: JSON.stringify({
+                operation: 'set',
+                mac_address: macAddress,
+                mac_mask: macMask
+            }),
+            success: function(res) {
+                $(btn).find('.spinner-border').hide();
+                $(btn).prop('disabled', false);
+                $('#addVoiceVlanModal').modal('hide');
+                alert(res.message || "Voice VLAN added successfully");
+                voicevlanTable.ajax.reload(null, false);
+            },
+            error: function(xhr) {
+                $(btn).find('.spinner-border').hide();
+                $(btn).prop('disabled', false);
+                errorBox.innerText = xhr.responseJSON?.message || "Failed to add voice VLAN";
+                errorBox.style.display = 'block';
+            }
+        });
+    });
 
     /* -----------------------
        ADD VLAN MODAL
@@ -489,6 +871,10 @@
 
     $('#selectAll').on('change', function() {
         $('.row-check').prop('checked', this.checked);
+    });
+
+    $('#selectAllVoiceVlan').on('change', function() {
+        $('.row-check.voice').prop('checked', this.checked);
     });
 
     $('#batchDeleteBtn').on('click', function() {
@@ -527,40 +913,73 @@
 
     $('#batchVoicevlanDeleteBtn').on('click', function() {
 
-        let macs = [];
-        let masks = [];
+        let entries = [];
 
         $('.row-check.voice:checked').each(function() {
-            macs.push($(this).data('mac'));
-            masks.push($(this).data('mask'));
+            entries.push({
+                mac_address: $(this).data('mac'),
+                mac_mask: $(this).data('mask')
+            });
         });
 
-        if (!macs.length) {
+        if (!entries.length) {
             alert("Please select Voice VLAN");
             return;
         }
 
-        console.log('====================================');
-        console.log(macs);
-        console.log(masks);
-        console.log('====================================');
+        if (!confirm(`Delete ${entries.length} Voice VLAN entr${entries.length === 1 ? 'y' : 'ies'}?`)) {
+            return;
+        }
 
-        $.ajax({
-            url: "/api/v0/voicevlan/batch/" + DEVICE_IP,
-            type: "POST",
-            headers: {
-                "Authorization": "Bearer " + API_TOKEN,
-                "Accept": "application/json"
-            },
-            contentType: "application/json",
-            data: JSON.stringify({
-                mac: macs,
-                mask: masks
-            }),
-            success: function(res) {
-                alert(res.message || "Voice VLAN deleted");
-                voicevlanTable.ajax.reload(null, false);
+        const btn = document.getElementById('batchVoicevlanDeleteBtn');
+        const btnLabel = document.getElementById('batchVoicevlanDeleteBtnLabel');
+        let done = 0;
+
+        $(btn).prop('disabled', true).find('.spinner-border').show();
+        btnLabel.innerText = `Processing 0/${entries.length}...`;
+
+        // setvoicevlan.yml only accepts one MAC/mask pair per call, so
+        // delete each selected entry with its own request, in sequence -
+        // each can take a while (a full SSH round trip), so the button
+        // shows live progress instead of sitting there with no feedback.
+        let chain = Promise.resolve();
+        let failures = [];
+
+        entries.forEach(entry => {
+            chain = chain
+                .then(() => $.ajax({
+                    url: "/api/v0/vlan/voice/set/" + DEVICE_IP,
+                    type: "POST",
+                    headers: {
+                        "Authorization": "Bearer " + API_TOKEN,
+                        "Accept": "application/json"
+                    },
+                    contentType: "application/json",
+                    data: JSON.stringify({
+                        operation: 'delete',
+                        mac_address: entry.mac_address,
+                        mac_mask: entry.mac_mask
+                    })
+                }))
+                .catch(() => {
+                    failures.push(entry.mac_address);
+                })
+                .then(() => {
+                    done++;
+                    btnLabel.innerText = `Processing ${done}/${entries.length}...`;
+                });
+        });
+
+        chain.then(() => {
+            $(btn).prop('disabled', false).find('.spinner-border').hide();
+            btnLabel.innerText = 'Batch Delete';
+
+            if (failures.length) {
+                alert("Failed to delete: " + failures.join(', '));
+            } else {
+                alert("Voice VLAN entries deleted successfully");
             }
+            voicevlanTable.ajax.reload(null, false);
         });
     });
 

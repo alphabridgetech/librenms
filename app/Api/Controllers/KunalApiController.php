@@ -80,6 +80,28 @@ class KunalApiController
         return shell_exec($cmd);
     }
 
+    /**
+     * PHP's ext-yaml (libyaml) resolves a bare comma-grouped digit scalar
+     * like `12,23,111` as an integer (stripping the commas to `1223111`)
+     * instead of the string YAML's own spec implies - this corrupts VLAN
+     * range values such as "switchport trunk vlan-allowed 12,23,111".
+     * Symfony's YAML component isn't installed to fall back on, so quote
+     * any such bare value before handing the file to yaml_parse().
+     */
+    private function parseYamlSafely(string $path): ?array
+    {
+        if (!file_exists($path)) {
+            return null;
+        }
+
+        $content = file_get_contents($path);
+        $content = preg_replace('/^(\s*(?:-\s*)?[A-Za-z_][A-Za-z0-9_]*:\s*)([0-9]+(?:,[0-9]+)+)\s*$/m', '$1"$2"', $content);
+
+        $data = yaml_parse($content);
+
+        return is_array($data) ? $data : null;
+    }
+
     #------------------------------------------------------------
     #                       SYSTEM INFO
     #------------------------------------------------------------
@@ -1538,6 +1560,370 @@ public function getmtu($hostname)
 
         return $this->success([
             "message" => "PDP configuration updated for {$data['interface']}",
+            "raw"     => $output,
+        ]);
+    }
+
+    #------------------------------------------------------------
+    #                    GET DDM (GLOBAL)
+    #------------------------------------------------------------
+    // Serve the last-known output file immediately if one exists and
+    // refresh live in the background - same cache-then-background-refresh
+    // pattern as PDP's global tab, with a "peek" mode the frontend uses to
+    // silently pick up the refreshed value without re-triggering ansible.
+    public function getddm(Request $request, $hostname)
+    {
+        if (!function_exists('yaml_parse_file')) {
+            return $this->error("PHP YAML extension missing", null);
+        }
+
+        $playbook = "{$this->pluginPath}/playbooks/ddm/ddm_show.yml";
+        $hosts    = "{$this->pluginPath}/hosts/{$hostname}.yml";
+        $yamlFile = "{$this->pluginPath}/output/{$hostname}_ddm_show.yml";
+
+        if ($request->boolean('peek')) {
+            if (!file_exists($yamlFile)) {
+                return $this->error("DDM output file not found", null);
+            }
+
+            $data = yaml_parse_file($yamlFile);
+
+            return $this->success([
+                "found"  => true,
+                "ddm"    => $this->formatDdmGlobal($data),
+                "cached" => false,
+            ]);
+        }
+
+        if (file_exists($yamlFile)) {
+            $cached = yaml_parse_file($yamlFile);
+
+            $this->runAnsibleAsync($playbook, $hosts);
+
+            return $this->success([
+                "found"  => true,
+                "ddm"    => $this->formatDdmGlobal($cached),
+                "cached" => true,
+            ]);
+        }
+
+        $output = $this->runAnsiblejs($playbook, $hosts);
+
+        if (!file_exists($yamlFile)) {
+            return $this->error("DDM output file not found", $output);
+        }
+
+        $data = yaml_parse_file($yamlFile);
+
+        return $this->success([
+            "found"  => true,
+            "ddm"    => $this->formatDdmGlobal($data),
+            "cached" => false,
+        ]);
+    }
+
+    /**
+     * ddm_show.yml reports ddm_status as "Enable"/"Disable" - lowercase it
+     * to match the <select> values used on the frontend.
+     */
+    private function formatDdmGlobal(?array $data): ?array
+    {
+        if (!is_array($data)) {
+            return null;
+        }
+
+        return [
+            'ddm_status' => strtolower($data['ddm_status'] ?? 'enable') === 'disable' ? 'disable' : 'enable',
+        ];
+    }
+
+    #------------------------------------------------------------
+    #                    SET DDM (GLOBAL)
+    #------------------------------------------------------------
+    public function setddm(Request $request, $hostname)
+    {
+        $data = $request->validate([
+            'ddm_status' => 'required|string|in:enable,disable,Enable,Disable',
+        ]);
+
+        $playbook = "{$this->pluginPath}/playbooks/ddm/ddm_set.yml";
+        $hosts    = "{$this->pluginPath}/hosts/{$hostname}.yml";
+
+        // ddm_set.yml itself accepts either case, but normalize anyway to
+        // stay consistent with the PDP state fix (a lowercase <select>
+        // value forwarded as-is elsewhere has caused a live failure before).
+        $output = $this->runAnsiblejs($playbook, $hosts, [
+            'ddm_status' => ucfirst(strtolower($data['ddm_status'])),
+        ]);
+
+        // ddm_set.yml fails the whole play via ansible.builtin.fail on any
+        // error, which prints "fatal: [...]: FAILED! => {...}" to console.
+        if (stripos($output, 'FAILED!') !== false) {
+            return $this->error("DDM configuration failed", $output);
+        }
+
+        // Refresh the GET cache synchronously so the form the frontend
+        // reloads right after this call already reflects the change.
+        $this->runAnsiblejs("{$this->pluginPath}/playbooks/ddm/ddm_show.yml", $hosts);
+
+        return $this->success([
+            "message" => "DDM configuration updated successfully",
+            "raw"     => $output,
+        ]);
+    }
+
+    #------------------------------------------------------------
+    #              GET INTERFACE VLAN ATTRIBUTE
+    #------------------------------------------------------------
+    public function getinterfacevlanattribute($hostname)
+    {
+        if (!function_exists('yaml_parse_file')) {
+            return $this->error("PHP YAML extension missing", null);
+        }
+
+        $playbook = "{$this->pluginPath}/playbooks/vlan/getinterfacevlanattribute.yml";
+        $hosts    = "{$this->pluginPath}/hosts/{$hostname}.yml";
+        $yamlFile = "{$this->pluginPath}/output/{$hostname}_interface_vlan_attribute.yml";
+
+        // Serve the last-known list immediately (if any) and refresh live
+        // in the background - same cache-then-background-refresh pattern
+        // used for GVRP/Rate Limit's per-port tables.
+        if (file_exists($yamlFile)) {
+            $cached = $this->parseYamlSafely($yamlFile);
+
+            $this->runAnsibleAsync($playbook, $hosts);
+
+            return $this->success([
+                "entries" => is_array($cached['interface_vlan_attribute'] ?? null) ? $cached['interface_vlan_attribute'] : [],
+                "cached"  => true,
+            ]);
+        }
+
+        $output = $this->runAnsiblejs($playbook, $hosts);
+
+        if (!file_exists($yamlFile)) {
+            return $this->error("Interface VLAN attribute output file not found", $output);
+        }
+
+        $data = $this->parseYamlSafely($yamlFile);
+
+        return $this->success([
+            "entries" => is_array($data['interface_vlan_attribute'] ?? null) ? $data['interface_vlan_attribute'] : [],
+            "cached"  => false,
+        ]);
+    }
+
+    #------------------------------------------------------------
+    #              SET INTERFACE VLAN ATTRIBUTE
+    #------------------------------------------------------------
+    public function setinterfacevlanattribute(Request $request, $hostname)
+    {
+        $data = $request->validate([
+            'interface'            => 'required|string',
+            'pvid'                 => 'required|integer|min:1|max:4094',
+            'mode'                 => 'required|string|in:Access,Trunk,access,trunk',
+            'vlan_allowed_range'   => 'required|string',
+            'vlan_untagged_range'  => 'required|string',
+            'vlan_allowed_add'     => 'nullable|string',
+            'vlan_allowed_remove'  => 'nullable|string',
+            'vlan_untagged_add'    => 'nullable|string',
+            'vlan_untagged_remove' => 'nullable|string',
+        ]);
+
+        $playbook = "{$this->pluginPath}/playbooks/vlan/setinterfacevlanattribute.yml";
+        $hosts    = "{$this->pluginPath}/hosts/{$hostname}.yml";
+
+        $extraVars = array_filter([
+            'interface'            => $data['interface'],
+            'pvid'                 => $data['pvid'],
+            'mode'                 => ucfirst(strtolower($data['mode'])),
+            'vlan_allowed_range'   => $data['vlan_allowed_range'],
+            'vlan_untagged_range'  => $data['vlan_untagged_range'],
+            'vlan_allowed_add'     => $data['vlan_allowed_add'] ?? null,
+            'vlan_allowed_remove'  => $data['vlan_allowed_remove'] ?? null,
+            'vlan_untagged_add'    => $data['vlan_untagged_add'] ?? null,
+            'vlan_untagged_remove' => $data['vlan_untagged_remove'] ?? null,
+        ], fn ($value) => $value !== null && $value !== '');
+
+        $output = $this->runAnsiblejs($playbook, $hosts, $extraVars);
+
+        if (stripos($output, 'FAILED!') !== false) {
+            return $this->error("Interface VLAN attribute configuration failed", $output);
+        }
+
+        // setinterfacevlanattribute.yml overwrites the SAME output file
+        // getinterfacevlanattribute.yml reads from, but with only this one
+        // interface's set-result - refresh the full list synchronously so
+        // the table the frontend reloads right after this call reflects
+        // every interface again instead of a single clobbered row.
+        $this->runAnsiblejs("{$this->pluginPath}/playbooks/vlan/getinterfacevlanattribute.yml", $hosts);
+
+        return $this->success([
+            "message" => "Interface VLAN attribute updated for {$data['interface']}",
+            "raw"     => $output,
+        ]);
+    }
+
+    #------------------------------------------------------------
+    #              GET VOICE VLAN (GLOBAL MAC LIST)
+    #------------------------------------------------------------
+    public function getvoicevlan($hostname)
+    {
+        if (!function_exists('yaml_parse_file')) {
+            return $this->error("PHP YAML extension missing", null);
+        }
+
+        $playbook = "{$this->pluginPath}/playbooks/vlan/getvoicevlan.yml";
+        $hosts    = "{$this->pluginPath}/hosts/{$hostname}.yml";
+        $yamlFile = "{$this->pluginPath}/output/{$hostname}_voice_vlan.yml";
+
+        if (file_exists($yamlFile)) {
+            $cached = yaml_parse_file($yamlFile);
+
+            $this->runAnsibleAsync($playbook, $hosts);
+
+            return $this->success([
+                "entries" => is_array($cached['voice_vlan_mac_addresses'] ?? null) ? $cached['voice_vlan_mac_addresses'] : [],
+                "cached"  => true,
+            ]);
+        }
+
+        $output = $this->runAnsiblejs($playbook, $hosts);
+
+        if (!file_exists($yamlFile)) {
+            return $this->error("Voice VLAN output file not found", $output);
+        }
+
+        $data = yaml_parse_file($yamlFile);
+
+        return $this->success([
+            "entries" => is_array($data['voice_vlan_mac_addresses'] ?? null) ? $data['voice_vlan_mac_addresses'] : [],
+            "cached"  => false,
+        ]);
+    }
+
+    #------------------------------------------------------------
+    #              SET / DELETE VOICE VLAN (GLOBAL MAC LIST)
+    #------------------------------------------------------------
+    public function setvoicevlan(Request $request, $hostname)
+    {
+        $macRule = ['required', 'string', 'regex:/^[0-9A-Fa-f]{4}\.[0-9A-Fa-f]{4}\.[0-9A-Fa-f]{4}$/'];
+
+        $data = $request->validate([
+            'operation'   => 'required|string|in:set,delete,Set,Delete',
+            'mac_address' => $macRule,
+            'mac_mask'    => $macRule,
+        ]);
+
+        $playbook = "{$this->pluginPath}/playbooks/vlan/setvoicevlan.yml";
+        $hosts    = "{$this->pluginPath}/hosts/{$hostname}.yml";
+
+        $output = $this->runAnsiblejs($playbook, $hosts, [
+            'operation'   => strtolower($data['operation']),
+            'mac_address' => $data['mac_address'],
+            'mac_mask'    => $data['mac_mask'],
+        ]);
+
+        if (stripos($output, 'FAILED!') !== false) {
+            return $this->error("Voice VLAN configuration failed", $output);
+        }
+
+        // setvoicevlan.yml overwrites the SAME output file getvoicevlan.yml
+        // reads from with just a SUCCESS/FAILED line - refresh the full
+        // list synchronously so the table reflects the change afterward.
+        $this->runAnsiblejs("{$this->pluginPath}/playbooks/vlan/getvoicevlan.yml", $hosts);
+
+        return $this->success([
+            "message" => "Voice VLAN " . ($data['operation'] === 'delete' || $data['operation'] === 'Delete' ? 'deleted' : 'added') . " successfully",
+            "raw"     => $output,
+        ]);
+    }
+
+    #------------------------------------------------------------
+    #              GET INTERFACE VOICE VLAN
+    #------------------------------------------------------------
+    public function getinterfacevoicevlan($hostname)
+    {
+        if (!function_exists('yaml_parse_file')) {
+            return $this->error("PHP YAML extension missing", null);
+        }
+
+        $playbook = "{$this->pluginPath}/playbooks/vlan/getinterfacevoicevlan.yml";
+        $hosts    = "{$this->pluginPath}/hosts/{$hostname}.yml";
+        $yamlFile = "{$this->pluginPath}/output/{$hostname}_interface_voice_vlan.yml";
+
+        if (file_exists($yamlFile)) {
+            $cached = yaml_parse_file($yamlFile);
+
+            $this->runAnsibleAsync($playbook, $hosts);
+
+            return $this->success([
+                "entries" => is_array($cached['interfaces'] ?? null) ? $cached['interfaces'] : [],
+                "cached"  => true,
+            ]);
+        }
+
+        $output = $this->runAnsiblejs($playbook, $hosts);
+
+        if (!file_exists($yamlFile)) {
+            return $this->error("Interface Voice VLAN output file not found", $output);
+        }
+
+        $data = yaml_parse_file($yamlFile);
+
+        return $this->success([
+            "entries" => is_array($data['interfaces'] ?? null) ? $data['interfaces'] : [],
+            "cached"  => false,
+        ]);
+    }
+
+    #------------------------------------------------------------
+    #              SET / DELETE INTERFACE VOICE VLAN
+    #------------------------------------------------------------
+    public function setinterfacevoicevlan(Request $request, $hostname)
+    {
+        $data = $request->validate([
+            'operation'     => 'required|string|in:set,delete',
+            'interface'     => ['required', 'string', 'regex:/^(g|tg)[0-9]+\/[0-9]+$/i'],
+            'vlan_id'       => 'required_if:operation,set|integer|min:2|max:4094',
+            'priority_mode' => 'required_if:operation,set|string|in:cos,dscp',
+            'priority'      => 'required_if:operation,set|integer|min:0|max:63',
+            'mode'          => 'required_if:operation,set|string|in:vlan,mac-address',
+        ]);
+
+        $playbook = "{$this->pluginPath}/playbooks/vlan/setinterfacevoicevlan.yml";
+        $hosts    = "{$this->pluginPath}/hosts/{$hostname}.yml";
+
+        // The playbook's own `vars:` block defines each of these as
+        // `"{{ vlan_id | default('') }}"` (self-referencing the same
+        // name) - that only resolves correctly when the key is actually
+        // present in extra-vars; omitting it entirely (e.g. for a delete,
+        // which needs none of these) makes Jinja try to resolve the bare
+        // token against itself and blow the recursion limit. Always send
+        // all four, defaulting to '' for delete, instead of filtering
+        // them out.
+        $extraVars = [
+            'operation'     => strtolower($data['operation']),
+            'interface'     => strtolower($data['interface']),
+            'vlan_id'       => $data['vlan_id'] ?? '',
+            'priority_mode' => $data['priority_mode'] ?? '',
+            'priority'      => $data['priority'] ?? '',
+            'mode'          => $data['mode'] ?? '',
+        ];
+
+        $output = $this->runAnsiblejs($playbook, $hosts, $extraVars);
+
+        if (stripos($output, 'FAILED!') !== false) {
+            return $this->error("Interface Voice VLAN configuration failed", $output);
+        }
+
+        // setinterfacevoicevlan.yml overwrites the SAME output file
+        // getinterfacevoicevlan.yml reads from with just a status line -
+        // refresh the full list synchronously afterward.
+        $this->runAnsiblejs("{$this->pluginPath}/playbooks/vlan/getinterfacevoicevlan.yml", $hosts);
+
+        return $this->success([
+            "message" => "Interface Voice VLAN updated for {$data['interface']}",
             "raw"     => $output,
         ]);
     }
