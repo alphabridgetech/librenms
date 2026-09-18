@@ -16,7 +16,7 @@
     }
 </style>
 
-<div class="container" style="margin-top:30px;">
+<div class="container-fluid" style="margin-top:30px; padding-left:0; padding-right:0;">
     <div class="panel panel-info">
         <div class="panel-heading">
             <strong>MTU Configuration</strong>

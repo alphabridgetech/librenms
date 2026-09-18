@@ -14,6 +14,22 @@
             transform: rotate(360deg);
         }
     }
+
+    .dataTables_wrapper {
+        max-width: 100%;
+    }
+
+    .dataTables_filter input {
+        max-width: 100%;
+    }
+
+    @media (max-width: 600px) {
+        .dataTables_length,
+        .dataTables_filter {
+            text-align: left !important;
+            margin-bottom: 8px;
+        }
+    }
 </style>
 
 <link rel="stylesheet" href="//cdn.datatables.net/1.10.25/css/dataTables.bootstrap.min.css">
@@ -22,7 +38,7 @@
 <script src="//cdn.datatables.net/1.10.25/js/dataTables.bootstrap.min.js"></script>
 
 
-<div class="container" style="margin-top:30px;">
+<div class="container-fluid" style="margin-top:30px; padding-left:0; padding-right:0;">
     <ul class="nav nav-tabs">
         <li class="active"><a href="#lldp_global_config" data-toggle="tab">LLDP Global Configuration</a></li>
         <li><a href="#lldp_interface_config" data-toggle="tab">LLDP Interface Configuration</a></li>
@@ -119,7 +135,7 @@
             </div>
 
             <div class="table-responsive">
-                <table id="lldpinterfaceTable" class="table table-striped table-bordered table-condensed" style="width:auto;">
+                <table id="lldpinterfaceTable" class="table table-striped table-bordered table-condensed" style="width:100%;">
                     <thead>
                         <tr>
                             <th width="40">
@@ -224,6 +240,7 @@
 var lldpinterfaceTable = $('#lldpinterfaceTable').DataTable({
     processing: true,
     serverSide: false,
+    autoWidth: false,
     ajax: {
         url: "/api/v0/getlldpinterface/" + DEVICE_IP,
         type: "GET",

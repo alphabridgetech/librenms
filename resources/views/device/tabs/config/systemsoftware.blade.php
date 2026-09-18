@@ -1,4 +1,4 @@
-<div class="container" style="margin-top:30px;">
+<div class="container-fluid" style="margin-top:30px; padding-left:0; padding-right:0;">
 
     <!-- Export the current System Software -->
     <div class="panel panel-primary">

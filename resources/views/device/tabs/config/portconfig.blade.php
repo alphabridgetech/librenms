@@ -12,6 +12,22 @@
     @keyframes spin {
         100% { transform: rotate(360deg); }
     }
+
+    .dataTables_wrapper {
+        max-width: 100%;
+    }
+
+    .dataTables_filter input {
+        max-width: 100%;
+    }
+
+    @media (max-width: 600px) {
+        .dataTables_length,
+        .dataTables_filter {
+            text-align: left !important;
+            margin-bottom: 8px;
+        }
+    }
 </style>
 
 <link rel="stylesheet" href="//cdn.datatables.net/1.10.25/css/dataTables.bootstrap.min.css">
@@ -30,7 +46,7 @@
     </div>
     <div class="panel-body">
         <div class="table-responsive">
-            <table id="portConfigTable" class="table table-striped table-bordered table-condensed" style="width:auto;">
+            <table id="portConfigTable" class="table table-striped table-bordered table-condensed" style="width:100%;">
                 <thead>
                     <tr>
                         <th>Interface</th>

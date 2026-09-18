@@ -23,6 +23,22 @@
         white-space: nowrap;
     }
 
+    .dataTables_wrapper {
+        max-width: 100%;
+    }
+
+    .dataTables_filter input {
+        max-width: 100%;
+    }
+
+    @media (max-width: 600px) {
+        .dataTables_length,
+        .dataTables_filter {
+            text-align: left !important;
+            margin-bottom: 8px;
+        }
+    }
+
     .pc-transfer-wrap {
         display: flex;
         align-items: stretch;
@@ -61,7 +77,7 @@
     }
 </style>
 
-<div class="container" style="margin-top:30px;">
+<div class="container-fluid" style="margin-top:30px; padding-left:0; padding-right:0;">
     @php
         // Show every real interface on this device. Backend
         // (port_aggregate_config.yml) currently only accepts the short
@@ -167,7 +183,7 @@
                 </div>
                 <div class="panel-body">
                     <div class="table-responsive">
-                        <table id="portChannelTable" class="table table-condensed table-hover table-striped" style="width:auto;">
+                        <table id="portChannelTable" class="table table-condensed table-hover table-striped" style="width:100%;">
                             <thead>
                                 <tr>
                                     <th width="90">Group</th>

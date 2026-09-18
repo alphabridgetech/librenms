@@ -22,9 +22,25 @@
     .dataTables_wrapper thead th {
         white-space: nowrap;
     }
+
+    .dataTables_wrapper {
+        max-width: 100%;
+    }
+
+    .dataTables_filter input {
+        max-width: 100%;
+    }
+
+    @media (max-width: 600px) {
+        .dataTables_length,
+        .dataTables_filter {
+            text-align: left !important;
+            margin-bottom: 8px;
+        }
+    }
 </style>
 
-<div class="container" style="margin-top:30px;">
+<div class="container-fluid" style="margin-top:30px; padding-left:0; padding-right:0;">
 
     <div class="panel panel-info">
         <div class="panel-heading" data-toggle="collapse" data-target="#addBackuplinkCollapse" style="cursor:pointer;">
@@ -84,7 +100,7 @@
         </div>
         <div class="panel-body">
             <div class="table-responsive">
-                <table id="backuplinkTable" class="table table-condensed table-hover table-striped" style="width:auto;">
+                <table id="backuplinkTable" class="table table-condensed table-hover table-striped" style="width:100%;">
                     <thead>
                         <tr>
                             <th width="90">Group ID</th>

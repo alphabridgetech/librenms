@@ -24,6 +24,19 @@
 
     .tab-pane .dataTables_wrapper {
         margin-bottom: 10px;
+        max-width: 100%;
+    }
+
+    .dataTables_filter input {
+        max-width: 100%;
+    }
+
+    @media (max-width: 600px) {
+        .dataTables_length,
+        .dataTables_filter {
+            text-align: left !important;
+            margin-bottom: 8px;
+        }
     }
 </style>
 
@@ -94,7 +107,7 @@
             </div>
             <div class="panel-body">
                 <div class="table-responsive">
-                    <table id="gvrpTable" class="table table-striped table-bordered table-condensed" style="width:auto;">
+                    <table id="gvrpTable" class="table table-striped table-bordered table-condensed" style="width:100%;">
                         <thead>
                             <tr>
                                 <th>Interface</th>

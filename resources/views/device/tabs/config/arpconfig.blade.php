@@ -18,9 +18,25 @@
             transform: rotate(360deg);
         }
     }
+
+    .dataTables_wrapper {
+        max-width: 100%;
+    }
+
+    .dataTables_filter input {
+        max-width: 100%;
+    }
+
+    @media (max-width: 600px) {
+        .dataTables_length,
+        .dataTables_filter {
+            text-align: left !important;
+            margin-bottom: 8px;
+        }
+    }
 </style>
 
-<div class="container" style="margin-top:30px;">
+<div class="container-fluid" style="margin-top:30px; padding-left:0; padding-right:0;">
 
     <div class="panel panel-info">
         <div class="panel-heading" data-toggle="collapse" data-target="#addArpCollapse" style="cursor:pointer;">
@@ -76,7 +92,7 @@
         </div>
         <div class="panel-body">
             <div class="table-responsive">
-                <table id="arpTable" class="table table-striped table-bordered table-condensed" style="width:auto;">
+                <table id="arpTable" class="table table-striped table-bordered table-condensed" style="width:100%;">
                     <thead>
                         <tr>
                             <th>IP Address</th>
@@ -169,6 +185,7 @@
     var arpTable = $('#arpTable').DataTable({
         processing: true,
         serverSide: false,
+        autoWidth: false,
         ajax: {
             url: `/api/v0/arp/show/${arpIp}`,
             type: "GET",

@@ -26,6 +26,19 @@
 
     .tab-pane .dataTables_wrapper {
         margin-bottom: 10px;
+        max-width: 100%;
+    }
+
+    .dataTables_filter input {
+        max-width: 100%;
+    }
+
+    @media (max-width: 600px) {
+        .dataTables_length,
+        .dataTables_filter {
+            text-align: left !important;
+            margin-bottom: 8px;
+        }
     }
 </style>
 
@@ -34,7 +47,7 @@
 <script src="//cdn.datatables.net/1.10.25/js/jquery.dataTables.min.js"></script>
 <script src="//cdn.datatables.net/1.10.25/js/dataTables.bootstrap.min.js"></script>
 
-<div class="container" style="margin-top:30px;">
+<div class="container-fluid" style="margin-top:30px; padding-left:0; padding-right:0;">
     <!-- Tabs -->
     <ul class="nav nav-tabs">
         <li class="active"><a href="#vlan_config" data-toggle="tab">VLAN Configuration</a></li>
@@ -53,7 +66,7 @@
                 <i class="fa fa-spinner fa-spin"></i> showing last known data, refreshing in background...
             </span>
             <div class="table-responsive">
-                <table id="vlanTable" class="table table-striped table-bordered table-condensed" style="width:auto;">
+                <table id="vlanTable" class="table table-striped table-bordered table-condensed" style="width:100%;">
                     <thead>
                         <tr>
                             <th width="40">
@@ -176,7 +189,7 @@
                 <i class="fa fa-refresh"></i> Refresh
             </button>
             <div class="table-responsive">
-                <table id="interfaceVlanTable" class="table table-striped table-bordered table-condensed" style="width:auto;">
+                <table id="interfaceVlanTable" class="table table-striped table-bordered table-condensed" style="width:100%;">
                     <thead>
                         <tr>
                             <th width="100">Port</th>
@@ -214,7 +227,7 @@
                 <i class="fa fa-refresh"></i> Refresh
             </button>
             <div class="table-responsive">
-                <table id="voicevlanTable" class="table table-striped table-bordered table-condensed" style="width:auto;">
+                <table id="voicevlanTable" class="table table-striped table-bordered table-condensed" style="width:100%;">
                     <thead>
                         <tr>
                             <th width="40">
@@ -255,7 +268,7 @@
                 <i class="fa fa-refresh"></i> Refresh
             </button>
             <div class="table-responsive">
-                <table id="interfaceVoiceVlanTable" class="table table-striped table-bordered table-condensed" style="width:auto;">
+                <table id="interfaceVoiceVlanTable" class="table table-striped table-bordered table-condensed" style="width:100%;">
                     <thead>
                         <tr>
                             <th width="100">Port</th>
