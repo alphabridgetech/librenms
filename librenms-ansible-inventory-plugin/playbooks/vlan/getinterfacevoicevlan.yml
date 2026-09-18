@@ -1,0 +1,671 @@
+# ============================================================
+# Interface Voice VLAN Configuration - GET
+# ============================================================
+#
+# Command:
+#
+# ansible-playbook -i inventory/192.168.2.245.yml \
+# playbooks/vlan/getinterfacevoicevlan.yml
+#
+# CLI:
+#   terminal length 0
+#   show running-config
+#
+# Supported interfaces:
+#   g0/1
+#   tg0/1
+#   Port-aggregator1
+#
+# Output:
+#
+# /opt/librenms/librenms-ansible-inventory-plugin/output/<switch-ip>_interface_voice_vlan.yml
+#
+# ============================================================
+
+- name: Interface Voice VLAN Configuration - GET
+  hosts: alphabridge_devices
+  gather_facts: false
+
+  vars:
+
+    output_dir: "/opt/librenms/librenms-ansible-inventory-plugin/output"
+    temp_dir: "/opt/librenms/librenms-ansible-inventory-plugin/tmp"
+
+  tasks:
+
+    # ========================================================
+    # CREATE OUTPUT DIRECTORY
+    # ========================================================
+
+    - name: Create output directory
+      ansible.builtin.file:
+        path: "{{ output_dir }}"
+        state: directory
+        mode: "0755"
+      delegate_to: localhost
+
+    # ========================================================
+    # CREATE TEMPORARY DIRECTORY
+    # ========================================================
+
+    - name: Create temporary directory
+      ansible.builtin.file:
+        path: "{{ temp_dir }}"
+        state: directory
+        mode: "0755"
+      delegate_to: localhost
+
+    # ========================================================
+    # CREATE PYTHON SCRIPT
+    # ========================================================
+
+    - name: Create Interface Voice VLAN GET script
+      ansible.builtin.copy:
+        dest: "{{ temp_dir }}/get_interface_voice_vlan.py"
+        mode: "0755"
+
+        content: |
+          import paramiko
+          import time
+          import re
+          import yaml
+          import sys
+
+
+          # ======================================================
+          # DEVICE INFORMATION
+          # ======================================================
+
+          HOST = "{{ ansible_host | default(inventory_hostname) }}"
+          USERNAME = "{{ ansible_user }}"
+          PASSWORD = "{{ ansible_password }}"
+
+          OUTPUT_FILE = (
+              "{{ output_dir }}/"
+              "{{ ansible_host | default(inventory_hostname) }}"
+              "_interface_voice_vlan.yml"
+          )
+
+
+          # ======================================================
+          # DEFAULT GUI VALUES
+          # ======================================================
+
+          DEFAULT_PRIORITY_MODE = "cos"
+          DEFAULT_PRIORITY = "6"
+
+
+          # ======================================================
+          # WAIT FOR CLI PROMPT
+          # ======================================================
+
+          def wait_for_prompt(shell, timeout=15):
+
+              buffer = ""
+              start = time.time()
+
+              while time.time() - start < timeout:
+
+                  if shell.recv_ready():
+
+                      data = shell.recv(65535).decode(
+                          errors="ignore"
+                      )
+
+                      buffer += data
+
+                      lines = buffer.splitlines()
+
+                      for line in reversed(lines):
+
+                          line = line.strip()
+
+                          if re.search(
+                              r"[>#]\s*$",
+                              line
+                          ):
+                              return buffer, line
+
+                  time.sleep(0.2)
+
+              return buffer, None
+
+
+          # ======================================================
+          # SEND COMMAND
+          #
+          # Handles CLI pagination.
+          # ======================================================
+
+          def send_command(shell, command, timeout=60):
+
+              shell.send(command + "\n")
+
+              buffer = ""
+              start = time.time()
+
+              while time.time() - start < timeout:
+
+                  if shell.recv_ready():
+
+                      data = shell.recv(65535).decode(
+                          errors="ignore"
+                      )
+
+                      buffer += data
+
+                      # ------------------------------------------
+                      # Handle pagination
+                      # ------------------------------------------
+
+                      if (
+                          "--More--" in buffer
+                          or "-- More --" in buffer
+                      ):
+
+                          shell.send(" ")
+
+                          buffer = buffer.replace(
+                              "--More-- ",
+                              ""
+                          )
+
+                          buffer = buffer.replace(
+                              "--More--",
+                              ""
+                          )
+
+                          buffer = buffer.replace(
+                              "-- More --",
+                              ""
+                          )
+
+                          continue
+
+                      # ------------------------------------------
+                      # Detect CLI prompt
+                      # ------------------------------------------
+
+                      lines = buffer.splitlines()
+
+                      for line in reversed(lines):
+
+                          line = line.strip()
+
+                          if re.search(
+                              r"[>#]\s*$",
+                              line
+                          ):
+
+                              return buffer, line
+
+                  time.sleep(0.2)
+
+              return buffer, None
+
+
+          # ======================================================
+          # PARSE RUNNING CONFIGURATION
+          # ======================================================
+
+          def parse_voice_vlan_config(config_text):
+
+              interfaces = []
+
+              current_interface = None
+
+              lines = config_text.splitlines()
+
+              for raw_line in lines:
+
+                  line = raw_line.rstrip()
+
+                  # ==================================================
+                  # DETECT PHYSICAL INTERFACE
+                  #
+                  # Supported:
+                  #
+                  # interface GigaEthernet0/1
+                  # interface TGigaEthernet0/1
+                  #
+                  # ==================================================
+
+                  interface_match = re.match(
+                      r"^\s*interface\s+"
+                      r"(GigaEthernet|TGigaEthernet)\s*"
+                      r"([0-9]+/[0-9]+)\s*$",
+                      line,
+                      re.IGNORECASE
+                  )
+
+                  # ==================================================
+                  # DETECT PORT AGGREGATOR
+                  #
+                  # Example:
+                  #
+                  # interface Port-aggregator1
+                  #
+                  # ==================================================
+
+                  port_aggregator_match = re.match(
+                      r"^\s*interface\s+"
+                      r"(Port-aggregator)"
+                      r"([0-9]+)\s*$",
+                      line,
+                      re.IGNORECASE
+                  )
+
+                  # ==================================================
+                  # PHYSICAL INTERFACE FOUND
+                  # ==================================================
+
+                  if interface_match:
+
+                      interface_type = (
+                          interface_match.group(1)
+                      )
+
+                      interface_number = (
+                          interface_match.group(2)
+                      )
+
+                      if (
+                          interface_type.lower()
+                          == "gigaethernet"
+                      ):
+
+                          port_prefix = "g"
+
+                      else:
+
+                          port_prefix = "tg"
+
+                      current_interface = {
+
+                          "port_name":
+                              port_prefix
+                              + interface_number,
+
+                          "device_interface":
+                              interface_type
+                              + interface_number,
+
+                          "vlan_id": "",
+
+                          "priority_mode":
+                              DEFAULT_PRIORITY_MODE,
+
+                          "priority":
+                              DEFAULT_PRIORITY,
+
+                          "mode": ""
+                      }
+
+                      interfaces.append(
+                          current_interface
+                      )
+
+                      continue
+
+                  # ==================================================
+                  # PORT AGGREGATOR FOUND
+                  # ==================================================
+
+                  if port_aggregator_match:
+
+                      interface_type = (
+                          port_aggregator_match.group(1)
+                      )
+
+                      interface_number = (
+                          port_aggregator_match.group(2)
+                      )
+
+                      current_interface = {
+
+                          "port_name":
+                              interface_type
+                              + interface_number,
+
+                          "device_interface":
+                              interface_type
+                              + interface_number,
+
+                          "vlan_id": "",
+
+                          "priority_mode":
+                              DEFAULT_PRIORITY_MODE,
+
+                          "priority":
+                              DEFAULT_PRIORITY,
+
+                          "mode": ""
+                      }
+
+                      interfaces.append(
+                          current_interface
+                      )
+
+                      continue
+
+                  # ==================================================
+                  # IGNORE OUTSIDE INTERFACE
+                  # ==================================================
+
+                  if current_interface is None:
+                      continue
+
+                  # ==================================================
+                  # VOICE VLAN
+                  #
+                  # Example:
+                  #
+                  # switchport voice-vlan 12 cos 2
+                  #
+                  # switchport voice-vlan 90 dscp 5
+                  # ==================================================
+
+                  voice_match = re.match(
+                      r"^\s*switchport\s+voice-vlan\s+"
+                      r"(\d+)\s+"
+                      r"(cos|dscp)\s+"
+                      r"(\d+)\s*$",
+                      line,
+                      re.IGNORECASE
+                  )
+
+                  if voice_match:
+
+                      current_interface["vlan_id"] = (
+                          voice_match.group(1)
+                      )
+
+                      current_interface["priority_mode"] = (
+                          voice_match.group(2).lower()
+                      )
+
+                      current_interface["priority"] = (
+                          voice_match.group(3)
+                      )
+
+                      continue
+
+                  # ==================================================
+                  # VOICE VLAN MODE
+                  #
+                  # Example:
+                  #
+                  # switchport voice-vlan mode vlan
+                  #
+                  # switchport voice-vlan mode mac-address
+                  # ==================================================
+
+                  mode_match = re.match(
+                      r"^\s*switchport\s+voice-vlan\s+"
+                      r"mode\s+"
+                      r"(vlan|mac-address)\s*$",
+                      line,
+                      re.IGNORECASE
+                  )
+
+                  if mode_match:
+
+                      current_interface["mode"] = (
+                          mode_match.group(1).lower()
+                      )
+
+                      continue
+
+              return interfaces
+
+
+          # ======================================================
+          # WRITE OUTPUT
+          #
+          # IMPORTANT:
+          # No commands/output log is written.
+          # ======================================================
+
+          def write_output(
+              status,
+              interfaces=None,
+              reason=None
+          ):
+
+              result = {
+                  "status": status,
+                  "device_ip": HOST,
+                  "feature": "interface_voice_vlan"
+              }
+
+              if interfaces is not None:
+
+                  result["interfaces"] = interfaces
+
+              if reason:
+
+                  result["reason"] = reason
+
+              with open(
+                  OUTPUT_FILE,
+                  "w"
+              ) as f:
+
+                  yaml.safe_dump(
+                      result,
+                      f,
+                      sort_keys=False,
+                      default_flow_style=False
+                  )
+
+              return result
+
+
+          # ======================================================
+          # MAIN
+          # ======================================================
+
+          client = None
+
+          try:
+
+              # ==================================================
+              # SSH CONNECTION
+              # ==================================================
+
+              client = paramiko.SSHClient()
+
+              client.set_missing_host_key_policy(
+                  paramiko.AutoAddPolicy()
+              )
+
+              client.connect(
+                  hostname=HOST,
+                  username=USERNAME,
+                  password=PASSWORD,
+                  look_for_keys=False,
+                  allow_agent=False,
+                  timeout=20,
+                  banner_timeout=20,
+                  auth_timeout=20
+              )
+
+              # ==================================================
+              # OPEN INTERACTIVE SHELL
+              # ==================================================
+
+              shell = client.invoke_shell(
+                  term="vt100",
+                  width=200,
+                  height=1000
+              )
+
+              time.sleep(1)
+
+              if shell.closed:
+
+                  raise Exception(
+                      "SSH shell is closed"
+                  )
+
+              # ==================================================
+              # WAKE CLI
+              # ==================================================
+
+              shell.send("\n")
+
+              initial_output, current_prompt = (
+                  wait_for_prompt(
+                      shell,
+                      10
+                  )
+              )
+
+              if not current_prompt:
+
+                  raise Exception(
+                      "Unable to detect device prompt"
+                  )
+
+              # ==================================================
+              # ENABLE MODE
+              # ==================================================
+
+              if current_prompt.endswith(">"):
+
+                  _, current_prompt = send_command(
+                      shell,
+                      "enable",
+                      10
+                  )
+
+                  if not current_prompt:
+
+                      raise Exception(
+                          "Unable to enter privileged mode"
+                      )
+
+              # ==================================================
+              # DISABLE CLI PAGINATION
+              # ==================================================
+
+              _, current_prompt = send_command(
+                  shell,
+                  "terminal length 0",
+                  10
+              )
+
+              if not current_prompt:
+
+                  raise Exception(
+                      "Unable to disable CLI pagination"
+                  )
+
+              # ==================================================
+              # GET RUNNING CONFIGURATION
+              # ==================================================
+
+              output, current_prompt = send_command(
+                  shell,
+                  "show running-config",
+                  60
+              )
+
+              if not current_prompt:
+
+                  raise Exception(
+                      "Unable to get running configuration"
+                  )
+
+              # ==================================================
+              # PARSE CONFIGURATION
+              # ==================================================
+
+              interfaces = parse_voice_vlan_config(
+                  output
+              )
+
+              # ==================================================
+              # WRITE SUCCESS OUTPUT
+              # ==================================================
+
+              result = write_output(
+                  "SUCCESS",
+                  interfaces=interfaces
+              )
+
+              print(
+                  yaml.safe_dump(
+                      result,
+                      sort_keys=False,
+                      default_flow_style=False
+                  )
+              )
+
+              client.close()
+
+              sys.exit(0)
+
+          except Exception as exc:
+
+              try:
+
+                  if client:
+
+                      client.close()
+
+              except Exception:
+
+                  pass
+
+              # ==================================================
+              # WRITE FAILED OUTPUT
+              # ==================================================
+
+              result = write_output(
+                  "FAILED",
+                  reason=str(exc)
+              )
+
+              print(
+                  yaml.safe_dump(
+                      result,
+                      sort_keys=False,
+                      default_flow_style=False
+                  )
+              )
+
+              sys.exit(1)
+
+
+    # ========================================================
+    # RUN PYTHON SCRIPT
+    # ========================================================
+
+    - name: Run Interface Voice VLAN GET
+      ansible.builtin.command:
+        cmd: >
+          /opt/librenms/librenms-ansible-inventory-plugin/bin/python3
+          {{ temp_dir }}/get_interface_voice_vlan.py
+
+      register: interface_voice_vlan_result
+
+      delegate_to: localhost
+
+      changed_when: false
+
+      failed_when: >
+        interface_voice_vlan_result.rc != 0 or
+        'SUCCESS' not in
+        (interface_voice_vlan_result.stdout | default(''))
+
+
+    # ========================================================
+    # DISPLAY RESULT
+    # ========================================================
+
+    - name: Display Interface Voice VLAN result
+      ansible.builtin.debug:
+        var: interface_voice_vlan_result.stdout
+
+

@@ -1,0 +1,264 @@
+# ==========================================
+# ddm_show.yml
+# Created on Sep 17, 2026.
+#
+# Copyright (c), ALPHA BRIDGE, Inc.
+# All rights reserved.
+#
+# =============================================================================
+# Playbook Name : Show DDM Global Configuration
+# =============================================================================
+# Description:
+# Retrieve the global Digital Diagnostic Monitoring (DDM) setting from an
+# AlphaBridge switch using SSH and the running configuration.
+#
+# CLI command:
+#   show running-config
+#
+# Parsing rule (global configuration only):
+#   Exact, unindented line "ddm disable" present -> ddm_status: Disable
+#   Exact, unindented line "ddm disable" absent  -> ddm_status: Enable
+#
+# An interface-level command or unrelated text must not be treated as the
+# global "ddm disable" command. The parser checks entire lines, not substrings.
+# It also checks that a running configuration was returned before deciding
+# that an absent command means Enable.
+#
+# SSH command flow:
+#   enable
+#   terminal length 0
+#   show running-config
+#
+# Example (run from the Ansible project root):
+#   ansible-playbook -i inventory/192.168.3.1.yml \
+#     playbooks/ddm/ddm_show.yml
+#
+# Example result when disabled:
+#   ip: 192.168.3.1
+#   ddm_status: Disable
+#   status: success
+#
+# Example result when enabled:
+#   ip: 192.168.3.1
+#   ddm_status: Enable
+#   status: success
+#
+# Output file:
+#   output/<switch_ip>_ddm_show.yml
+#
+# This playbook is read-only; it does not change or save switch settings.
+# =============================================================================
+
+- name: Show DDM global configuration
+  hosts: alphabridge_devices
+  gather_facts: false
+
+  vars:
+    # The playbook is stored under playbooks/port_config/.
+    project_root: "{{ playbook_dir }}/../.."
+
+  pre_tasks:
+    - name: Ensure temporary and output directories exist
+      ansible.builtin.file:
+        path: "{{ project_root }}/{{ item }}"
+        state: directory
+        mode: '0755'
+      loop:
+        - tmp
+        - output
+
+  tasks:
+    # ==========================================
+    # 1. Create Python SSH helper
+    # ==========================================
+    - name: Create Python SSH script for DDM show
+      ansible.builtin.copy:
+        dest: "/opt/librenms/librenms-ansible-inventory-plugin/tmp/ddm_show_exec.py"
+        mode: '0700'
+        content: |
+          #!/usr/bin/env python3
+
+          import json
+          import re
+          import time
+          import paramiko
+
+          HOST = {{ ansible_host | to_json }}
+          PORT = int({{ ansible_port | default(22) | to_json }})
+          USER = {{ ansible_user | to_json }}
+          PASSWORD = {{ ansible_password | to_json }}
+
+          # Remove ANSI escape sequences before reading CLI output.
+          ansi_re = re.compile(
+              r'\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])'
+          )
+          prompt_re = re.compile(r'[>#]\s*\Z')
+          cli_error_re = re.compile(
+              r'(?im)^\s*%\s*(?:invalid|error|incomplete|ambiguous|'
+              r'unknown|unrecognized)\b|'
+              r'\b(?:invalid input|unknown command|incomplete command|'
+              r'command rejected)\b'
+          )
+
+          def read_until_prompt(shell, stage, timeout=30):
+              """Read the entire response or fail instead of parsing partial data."""
+              output = ""
+              deadline = time.monotonic() + timeout
+
+              while time.monotonic() < deadline:
+                  if shell.recv_ready():
+                      output += shell.recv(65535).decode(errors="ignore")
+                      clean = ansi_re.sub("", output).replace("\r", "")
+                      if prompt_re.search(clean.rstrip()):
+                          return clean
+                  else:
+                      time.sleep(0.1)
+
+              raise TimeoutError(
+                  f"Timed out waiting for switch prompt during {stage}"
+              )
+
+          def run_command(shell, command, timeout=30):
+              """Send one command and check for recognizable CLI errors."""
+              shell.send(command + "\n")
+              output = read_until_prompt(shell, command, timeout)
+              if cli_error_re.search(output):
+                  raise RuntimeError(
+                      f"Switch rejected {command!r}: {output}"
+                  )
+              return output
+
+          def parse_ddm_status(running_config):
+              """Return the status of the GLOBAL DDM setting only."""
+              # The supplied switch output includes this marker. Requiring it
+              # prevents an empty/error response from being treated as Enable.
+              if "Current configuration:" not in running_config:
+                  raise ValueError(
+                      "SHOW output did not contain 'Current configuration:'"
+                  )
+
+              for raw_line in running_config.splitlines():
+                  # Global commands appear without leading indentation.
+                  # The full line must equal 'ddm disable' (ignoring case
+                  # and trailing whitespace); do not use a substring search.
+                  if (raw_line == raw_line.lstrip()
+                          and raw_line.strip().casefold() == "ddm disable"):
+                      return "Disable"
+
+              return "Enable"
+
+          ssh = None
+          shell = None
+          stage = "SSH connection"
+
+          try:
+              # 1. Connect and open the interactive switch CLI.
+              ssh = paramiko.SSHClient()
+              ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+              ssh.connect(
+                  HOST,
+                  port=PORT,
+                  username=USER,
+                  password=PASSWORD,
+                  look_for_keys=False,
+                  allow_agent=False,
+                  timeout=20,
+                  auth_timeout=20,
+                  banner_timeout=20
+              )
+              shell = ssh.invoke_shell()
+              read_until_prompt(shell, "initial SSH prompt", timeout=10)
+
+              # 2. Enter privileged EXEC mode; no 'config' is needed for SHOW.
+              stage = "enable mode"
+              run_command(shell, "enable", timeout=10)
+
+              # 3. Prevent '--More--' paging from truncating the config.
+              stage = "disable paging"
+              run_command(shell, "terminal length 0", timeout=10)
+
+              # 4. Fetch the configuration exactly as requested.
+              stage = "show running-config"
+              running_config = run_command(
+                  shell, "show running-config", timeout=60
+              )
+
+              # 5. Parse the global DDM line.
+              stage = "parse DDM configuration"
+              ddm_status = parse_ddm_status(running_config)
+
+              # Keep stdout as JSON only so Ansible can use from_json.
+              print(json.dumps({
+                  "ip": HOST,
+                  "ddm_status": ddm_status,
+                  "status": "success"
+              }, indent=4))
+
+          except Exception as exc:
+              print(json.dumps({
+                  "ip": HOST,
+                  "status": "failed",
+                  "stage": stage,
+                  "error": str(exc)
+              }))
+
+          finally:
+              if shell is not None:
+                  shell.close()
+              if ssh is not None:
+                  ssh.close()
+      no_log: true
+
+    # ==========================================
+    # 2. Execute helper and parse its JSON
+    # ==========================================
+    - name: Execute DDM show script
+      ansible.builtin.command:
+        argv:
+          - /opt/librenms/librenms-ansible-inventory-plugin/bin/python3
+          - /opt/librenms/librenms-ansible-inventory-plugin/tmp/ddm_show_exec.py
+      register: ddm_raw
+      changed_when: false
+      failed_when: false
+
+    - name: Fail if DDM script returned no JSON
+      ansible.builtin.fail:
+        msg: >-
+          DDM SHOW script returned no JSON.
+          rc={{ ddm_raw.rc }}; stderr={{ ddm_raw.stderr }}
+      when: ddm_raw.stdout | trim | length == 0
+
+    - name: Convert DDM show result from JSON
+      ansible.builtin.set_fact:
+        ddm_result: "{{ ddm_raw.stdout | from_json }}"
+
+    - name: Fail if DDM SHOW failed
+      ansible.builtin.fail:
+        msg: >-
+          DDM SHOW failed during {{ ddm_result.stage | default('execution') }}:
+          {{ ddm_result.error | default(ddm_raw.stderr) }}
+      when: ddm_result.status != 'success' or ddm_raw.rc != 0
+
+    # ==========================================
+    # 3. Display and save the DDM status
+    # ==========================================
+    - name: Display DDM show result
+      ansible.builtin.debug:
+        msg: |
+          ip: {{ ddm_result.ip }}
+          ddm_status: {{ ddm_result.ddm_status }}
+          status: {{ ddm_result.status }}
+
+    - name: Save DDM show result
+      ansible.builtin.copy:
+        dest: "{{ project_root }}/output/{{ ansible_host }}_ddm_show.yml"
+        content: |
+          ip: {{ ddm_result.ip }}
+          ddm_status: {{ ddm_result.ddm_status }}
+          status: {{ ddm_result.status }}
+
+    - name: Display result file
+      ansible.builtin.debug:
+        msg: >-
+          DDM status collected successfully.
+          Result saved to output/{{ ansible_host }}_ddm_show.yml

@@ -1,0 +1,345 @@
+# ==========================================
+# igmp_snooping_multicast_group_show.yml
+# Created on Sept 1, 2026 by Vikash Kumar (vikash.kumar@alphabrige.tech).
+#
+# Copyright (c), ALPHA BRIDGE, Inc.
+# 357D, Udyog Vihar Industrial Area Phase VI, Sector 37, Gurugram, Haryana.
+#
+# All rights reserved.
+#
+# This software is the confidential and proprietary information of
+# ALPHA BRIDGE, Inc. ("Confidential Information").  You shall not
+# disclose such Confidential Information and shall use it only in
+# accordance with the terms of the license agreement you entered into
+# with ALPHA BRIDGE.
+#
+# =============================================================================
+# Playbook Name : IGMP Snooping Group Show
+# =============================================================================
+#
+# Description:
+# This playbook only READS the current IGMP snooping multicast group table
+# from an AlphaBridge switch over SSH by running:
+#   show ip igmp-snooping group [vlan <vlan_id>]
+#
+# It does not change any configuration.
+#
+# Assumed raw device output format (adjust the parser below if your
+# switch's real output differs):
+#
+# show ip igmp-snooping group
+# VLAN  Group           Type      Port(s)
+# ----------------------------------------------
+# 3     224.1.0.1       Static    g0/6
+# 3     239.1.1.1       Dynamic   g0/6, g0/7
+#
+# Input vars:
+#   vlan_id  (optional) - if set, runs "show ip igmp-snooping group vlan <vlan_id>"
+#                          and returns only groups on that VLAN.
+#                          If omitted, runs "show ip igmp-snooping group"
+#                          (all VLANs) and returns every group.
+#
+# Example:
+# ansible-playbook -i inventory/192.168.2.245.yml \
+#   playbooks/igmp_snooping_multicast_group_show.yml \
+#   -e "vlan_id=3"
+#
+# Output:
+# output/<switch_ip>_igmp_snooping_multicast_group_show.yml
+# =============================================================================
+
+- name: IGMP snooping group show
+  hosts: alphabridge_devices
+  gather_facts: no
+
+  tasks:
+
+    # ==========================================
+    # Validate vlan_id if provided
+    # ==========================================
+
+    - name: Validate VLAN ID is numeric (when provided)
+      ansible.builtin.assert:
+        that:
+          - vlan_id | string is match('^[0-9]+$')
+        fail_msg: "vlan_id must be a whole number (got: {{ vlan_id }})"
+      when: vlan_id is defined
+
+    - name: Validate VLAN ID is in range 1-4094 (when provided)
+      ansible.builtin.assert:
+        that:
+          - (vlan_id | int) >= 1
+          - (vlan_id | int) <= 4094
+        fail_msg: "vlan_id must be between 1 and 4094 (got: {{ vlan_id }})"
+      when: vlan_id is defined
+
+    # ==========================================
+    # Create Python SSH Script
+    # ==========================================
+
+    - name: Create Python SSH Script for IGMP snooping group show
+      ansible.builtin.copy:
+        dest: "/opt/librenms/librenms-ansible-inventory-plugin/\
+               tmp/igmp_snooping_multicast_group_show_exec.py"
+        mode: '0755'
+        content: |
+          #!/usr/bin/env python3
+
+          import paramiko
+          import time
+          import re
+          import json
+
+          HOST = "{{ ansible_host }}"
+          USER = "{{ ansible_user }}"
+          PASSWORD = "{{ ansible_password }}"
+          VLAN_ID = "{{ vlan_id | default('') }}"
+
+
+          def read_until_prompt(shell, prompt_regex, timeout=10):
+              buf = ""
+              end_time = time.time() + timeout
+
+              while time.time() < end_time:
+                  if shell.recv_ready():
+                      chunk = shell.recv(65535).decode(errors="ignore")
+                      buf += chunk
+
+                      if re.search(prompt_regex, buf):
+                          return buf
+                  else:
+                      time.sleep(0.1)
+
+              return buf
+
+
+          ansi_re = re.compile(
+              r'\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])'
+          )
+
+          shell = None
+          ssh = None
+
+          try:
+              # ==========================================
+              # SSH CONNECTION
+              # ==========================================
+
+              ssh = paramiko.SSHClient()
+              ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+
+              ssh.connect(
+                  HOST,
+                  username=USER,
+                  password=PASSWORD,
+                  look_for_keys=False,
+                  allow_agent=False,
+                  timeout=10
+              )
+
+              shell = ssh.invoke_shell()
+              time.sleep(0.5)
+
+              # ==========================================
+              # INITIAL PROMPT
+              # ==========================================
+
+              initial_output = read_until_prompt(
+                  shell,
+                  r'[>#]\s*$',
+                  timeout=5
+              )
+
+              # ==========================================
+              # ENABLE
+              # ==========================================
+
+              shell.send("enable\n")
+
+              enable_output = read_until_prompt(
+                  shell,
+                  r'[>#]\s*$',
+                  timeout=5
+              )
+
+              # ==========================================
+              # DISABLE PAGING
+              # ==========================================
+
+              shell.send("terminal length 0\n")
+
+              terminal_output = read_until_prompt(
+                  shell,
+                  r'[>#]\s*$',
+                  timeout=5
+              )
+
+              # ==========================================
+              # SHOW COMMAND
+              # If VLAN_ID is blank, shows groups on all VLANs.
+              # ==========================================
+
+              if VLAN_ID.strip():
+                  show_cmd = f"show ip igmp-snooping group vlan {VLAN_ID}\n"
+              else:
+                  show_cmd = "show ip igmp-snooping group\n"
+
+              shell.send(show_cmd)
+
+              show_output = read_until_prompt(
+                  shell,
+                  r'[>#]\s*$',
+                  timeout=10
+              )
+
+              if re.search(r'%err|invalid|error', show_output, re.IGNORECASE):
+                  raise Exception(
+                      f"'{show_cmd.strip()}' rejected by switch: "
+                      f"{show_output.strip()}"
+                  )
+
+              # ==========================================
+              # CLEAN ANSI CHARACTERS
+              # ==========================================
+
+              show_output = ansi_re.sub("", show_output)
+
+              # ==========================================
+              # PARSE TABLE
+              #
+              # Expected row format:
+              # VLAN  Group           Type      Port(s)
+              # 3     224.1.0.1       Static    g0/6
+              #
+              # Port(s) may list multiple ports comma-separated, or be empty.
+              # NOTE: adjust this regex if the real device output differs
+              # (e.g. different column order or extra columns).
+              # ==========================================
+
+              row_re = re.compile(
+                  r'^\s*(\d+)\s+(\d{1,3}(?:\.\d{1,3}){3})\s+(\S+)\s*(.*?)\s*$'
+              )
+
+              groups = []
+
+              for line in show_output.splitlines():
+                  clean_line = line.strip()
+
+                  if not clean_line:
+                      continue
+
+                  # Skip header and separator lines
+                  if clean_line.lower().startswith("vlan"):
+                      continue
+
+                  if clean_line.startswith("---"):
+                      continue
+
+                  # Skip the echoed command / prompt lines
+                  if clean_line.lower().startswith("show ip igmp-snooping"):
+                      continue
+
+                  match = row_re.match(clean_line)
+                  if not match:
+                      continue
+
+                  vlan_num, group_ip, entry_type, ports = match.groups()
+
+                  groups.append({
+                      "vlan_id": vlan_num,
+                      "group": group_ip,
+                      "type": entry_type,
+                      "ports": [p.strip() for p in ports.split(",") if p.strip()]
+                  })
+
+              # ==========================================
+              # CLOSE SSH
+              # ==========================================
+
+              shell.close()
+              ssh.close()
+
+              # ==========================================
+              # RETURN JSON
+              # ==========================================
+
+              print(json.dumps({
+                  "ip": HOST,
+                  "status": "success",
+                  "groups": groups
+              }))
+
+          except Exception as e:
+              try:
+                  if shell:
+                      shell.close()
+
+                  if ssh:
+                      ssh.close()
+              except:
+                  pass
+
+              print(json.dumps({
+                  "ip": HOST,
+                  "status": "failed",
+                  "error": str(e)
+              }))
+
+    # ==========================================
+    # EXECUTE PYTHON SCRIPT
+    # ==========================================
+
+    - name: Execute IGMP snooping group show script
+      ansible.builtin.command:
+        cmd: >
+          /opt/librenms/librenms-ansible-inventory-plugin/bin/python3
+          /opt/librenms/librenms-ansible-inventory-plugin/tmp/\
+          igmp_snooping_multicast_group_show_exec.py
+      register: igmp_raw
+      changed_when: false
+      failed_when: false
+
+    # ==========================================
+    # CONVERT JSON RESULT
+    # ==========================================
+
+    - name: Convert IGMP snooping result to JSON
+      ansible.builtin.set_fact:
+        igmp_result: "{{ igmp_raw.stdout | from_json }}"
+
+    # ==========================================
+    # DISPLAY RESULT
+    # ==========================================
+
+    - name: Display IGMP snooping result
+      ansible.builtin.debug:
+        var: igmp_result
+
+    # ==========================================
+    # SAVE RESULT
+    # ==========================================
+
+    - name: Save IGMP snooping result
+      ansible.builtin.copy:
+        dest: "/opt/librenms/librenms-ansible-inventory-plugin/output/\
+               {{ ansible_host }}_igmp_snooping_multicast_group_show.yml"
+        content: |
+          {{ igmp_result | to_nice_yaml }}
+
+    # ==========================================
+    # FAIL IF SHOW COMMAND FAILED
+    # ==========================================
+
+    - name: Fail if IGMP snooping group show failed
+      ansible.builtin.fail:
+        msg: "{{ igmp_result.error }}"
+      when: igmp_result.status == "failed"
+
+    # ==========================================
+    # FINAL MESSAGE
+    # ==========================================
+
+    - name: Display result file
+      ansible.builtin.debug:
+        msg: "IGMP snooping group table retrieved from {{ ansible_host }}.
+        Result saved to output/{{ ansible_host }}_igmp_snooping_multicast_group_show.yml"

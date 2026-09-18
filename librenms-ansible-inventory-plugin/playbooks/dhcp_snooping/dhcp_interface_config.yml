@@ -1,0 +1,611 @@
+# ==========================================
+# dhcp_interface_config.yml
+# Created on Sept 4, 2026 by Vikash Kumar (vikash.kumar@alphabrige.tech).
+#
+# Copyright (c), ALPHA BRIDGE, Inc.
+# 357D, Udyog Vihar Industrial Area Phase VI, Sector 37, Gurugram, Haryana.
+#
+# All rights reserved.
+#
+# This software is the confidential and proprietary information of ALPHA BRIDGE,
+# Inc. ("Confidential Information"). You shall not disclose such Confidential
+# Information and shall use it only in accordance with the terms of the license
+# agreement you entered into with ALPHA BRIDGE.
+#
+# =============================================================================
+# Playbook Name : DHCP Snooping Interface Configuration
+# =============================================================================
+#
+# Description:
+# Configures per-port DHCP Trust, ARP Inspection Trust, and
+# IP Source Trust settings on AlphaBridge switches over SSH.
+#
+# Input vars (all optional, default to empty):
+#   dhcp_trust_ports        - comma-separated ports to set
+#                              to "Trust" for DHCP Trust
+#                              Port, e.g. "g0/1,g0/3"
+#   dhcp_distrust_ports     - comma-separated ports to set
+#                              to "Distrust" for DHCP Trust
+#                              Port (sends the "no" form -
+#                              see ASSUMPTIONS below)
+#   arp_trust_ports         - comma-separated ports to set
+#                              to "Trust" for ARP Inspection
+#                              Trust Port
+#   arp_distrust_ports      - comma-separated ports to set
+#                              to "Distrust" for ARP
+#                              Inspection Trust Port
+#   ip_source_trust_ports   - comma-separated ports to set
+#                              to "Trust" for IP Source
+#                              Trust Port
+#   ip_source_distrust_ports - comma-separated ports to set
+#                              to "Distrust" for IP Source
+#                              Trust Port
+#
+# Command sequence sent
+#   config
+#   -- for each port g0/1..g0/10 --
+#   interface <full_interface_name>
+#   [dhcp snooping trust | no dhcp snooping trust]
+#     (only if port is in dhcp_trust_ports or
+#     dhcp_distrust_ports respectively)
+#   [arp inspection trust | no arp inspection trust]
+#     (only if port is in arp_trust_ports or
+#     arp_distrust_ports respectively)
+#   [ip-source trust | no ip-source trust]
+#     (only if port is in ip_source_trust_ports or
+#     ip_source_distrust_ports respectively)
+#   exit
+#   -- end loop --
+#   write
+#
+# Example:
+# ansible-playbook -i inventory/192.168.2.245.yml \
+#   playbooks/dhcp_interface_config.yml \
+#   -e dhcp_trust_ports=g0/1 \
+#   -e arp_trust_ports=g0/1 \
+#   -e ip_source_trust_ports=g0/1 \
+#   -e dhcp_distrust_ports=g0/2
+#
+# Output:
+# output/<switch_ip>_dhcp_interface_config.yml
+# =============================================================================
+
+- name: DHCP snooping interface configuration
+  hosts: alphabridge_devices
+  gather_facts: no
+
+  tasks:
+
+    # ==========================================
+    # Split each trust list into an actual list
+    # ==========================================
+
+    - name: Split dhcp_trust_ports into a list
+      ansible.builtin.set_fact:
+        dhcp_trust_port_list: >-
+          {{ (dhcp_trust_ports | default('')).split(',')
+          | map('trim') | select('!=', '') | list }}
+
+    - name: Split arp_trust_ports into a list
+      ansible.builtin.set_fact:
+        arp_trust_port_list: >-
+          {{ (arp_trust_ports | default('')).split(',')
+          | map('trim') | select('!=', '') | list }}
+
+    - name: Split ip_source_trust_ports into a list
+      ansible.builtin.set_fact:
+        ip_source_trust_port_list: >-
+          {{ (ip_source_trust_ports | default(''))
+          .split(',') | map('trim')
+          | select('!=', '') | list }}
+
+    - name: Split dhcp_distrust_ports into a list
+      ansible.builtin.set_fact:
+        dhcp_distrust_port_list: >-
+          {{ (dhcp_distrust_ports | default(''))
+          .split(',') | map('trim')
+          | select('!=', '') | list }}
+
+    - name: Split arp_distrust_ports into a list
+      ansible.builtin.set_fact:
+        arp_distrust_port_list: >-
+          {{ (arp_distrust_ports | default(''))
+          .split(',') | map('trim')
+          | select('!=', '') | list }}
+
+    - name: Split ip_source_distrust_ports into a list
+      ansible.builtin.set_fact:
+        ip_source_distrust_port_list: >-
+          {{ (ip_source_distrust_ports | default(''))
+          .split(',') | map('trim')
+          | select('!=', '') | list }}
+
+    # ==========================================
+    # Validate every port in every list is
+    # g0/1 through g0/10
+    # ==========================================
+
+    - name: Validate dhcp_trust_ports entries
+      ansible.builtin.assert:
+        that:
+          - >-
+            item in [
+            'g0/1', 'g0/2', 'g0/3', 'g0/4', 'g0/5',
+            'g0/6', 'g0/7', 'g0/8', 'g0/9', 'g0/10']
+        fail_msg: >
+          Each dhcp_trust_ports entry must be g0/1
+          through g0/10 (got: {{ item }})
+      loop: "{{ dhcp_trust_port_list }}"
+
+    - name: Validate arp_trust_ports entries
+      ansible.builtin.assert:
+        that:
+          - >-
+            item in [
+            'g0/1', 'g0/2', 'g0/3', 'g0/4', 'g0/5',
+            'g0/6', 'g0/7', 'g0/8', 'g0/9', 'g0/10']
+        fail_msg: >
+          Each arp_trust_ports entry must be g0/1
+          through g0/10 (got: {{ item }})
+      loop: "{{ arp_trust_port_list }}"
+
+    - name: Validate ip_source_trust_ports entries
+      ansible.builtin.assert:
+        that:
+          - >-
+            item in [
+            'g0/1', 'g0/2', 'g0/3', 'g0/4', 'g0/5',
+            'g0/6', 'g0/7', 'g0/8', 'g0/9', 'g0/10']
+        fail_msg: >
+          Each ip_source_trust_ports entry must be g0/1
+          through g0/10 (got: {{ item }})
+      loop: "{{ ip_source_trust_port_list }}"
+
+    - name: Validate dhcp_distrust_ports entries
+      ansible.builtin.assert:
+        that:
+          - >-
+            item in [
+            'g0/1', 'g0/2', 'g0/3', 'g0/4', 'g0/5',
+            'g0/6', 'g0/7', 'g0/8', 'g0/9', 'g0/10']
+        fail_msg: >
+          Each dhcp_distrust_ports entry must be g0/1
+          through g0/10 (got: {{ item }})
+      loop: "{{ dhcp_distrust_port_list }}"
+
+    - name: Validate arp_distrust_ports entries
+      ansible.builtin.assert:
+        that:
+          - >-
+            item in [
+            'g0/1', 'g0/2', 'g0/3', 'g0/4', 'g0/5',
+            'g0/6', 'g0/7', 'g0/8', 'g0/9', 'g0/10']
+        fail_msg: >
+          Each arp_distrust_ports entry must be g0/1
+          through g0/10 (got: {{ item }})
+      loop: "{{ arp_distrust_port_list }}"
+
+    - name: Validate ip_source_distrust_ports entries
+      ansible.builtin.assert:
+        that:
+          - >-
+            item in [
+            'g0/1', 'g0/2', 'g0/3', 'g0/4', 'g0/5',
+            'g0/6', 'g0/7', 'g0/8', 'g0/9', 'g0/10']
+        fail_msg: >
+          Each ip_source_distrust_ports entry must be g0/1
+          through g0/10 (got: {{ item }})
+      loop: "{{ ip_source_distrust_port_list }}"
+
+    # ==========================================
+    # Validate no port is in both the trust and
+    # distrust list for the same feature
+    # ==========================================
+
+    - name: >-
+        Validate dhcp trust/distrust lists don't overlap
+      ansible.builtin.assert:
+        that:
+          - >-
+            (dhcp_trust_port_list
+            | intersect(dhcp_distrust_port_list))
+            | length == 0
+        fail_msg: >
+          A port cannot be in both dhcp_trust_ports and
+          dhcp_distrust_ports at the same time.
+
+    - name: >-
+        Validate arp trust/distrust lists don't overlap
+      ansible.builtin.assert:
+        that:
+          - >-
+            (arp_trust_port_list
+            | intersect(arp_distrust_port_list))
+            | length == 0
+        fail_msg: >
+          A port cannot be in both arp_trust_ports and
+          arp_distrust_ports at the same time.
+
+    - name: >-
+        Validate ip_source trust/distrust lists don't
+        overlap
+      ansible.builtin.assert:
+        that:
+          - >-
+            (ip_source_trust_port_list
+            | intersect(ip_source_distrust_port_list))
+            | length == 0
+        fail_msg: >
+          A port cannot be in both ip_source_trust_ports
+          and ip_source_distrust_ports at the same time.
+
+    # ==========================================
+    # Create Python SSH Script
+    # ==========================================
+
+    - name: >-
+        Create Python SSH Script for DHCP interface config
+      ansible.builtin.copy:
+        dest: "/opt/librenms/librenms-ansible-inventory-plugin/tmp/dhcp_interface_config_exec.py"
+        mode: '0755'
+        content: |
+          #!/usr/bin/env python3
+
+          import paramiko
+          import time
+          import re
+          import json
+
+          HOST = "{{ ansible_host }}"
+          USER = "{{ ansible_user }}"
+          PASSWORD = "{{ ansible_password }}"
+
+          DHCP_TRUST_PORTS = [
+              p.strip() for p in
+              "{{ dhcp_trust_port_list | join(',') }}"
+              .split(',') if p.strip()
+          ]
+          ARP_TRUST_PORTS = [
+              p.strip() for p in
+              "{{ arp_trust_port_list | join(',') }}"
+              .split(',') if p.strip()
+          ]
+          IP_SOURCE_TRUST_PORTS = [
+              p.strip() for p in
+              "{{ ip_source_trust_port_list | join(',') }}"
+              .split(',') if p.strip()
+          ]
+          DHCP_DISTRUST_PORTS = [
+              p.strip() for p in
+              "{{ dhcp_distrust_port_list | join(',') }}"
+              .split(',') if p.strip()
+          ]
+          ARP_DISTRUST_PORTS = [
+              p.strip() for p in
+              "{{ arp_distrust_port_list | join(',') }}"
+              .split(',') if p.strip()
+          ]
+          IP_SOURCE_DISTRUST_PORTS = [
+              p.strip() for p in
+              "{{ ip_source_distrust_port_list | join(',') }}"
+              .split(',') if p.strip()
+          ]
+
+          PROMPT_RE = r'[>#]\s*$'
+
+          VALID_PORTS = [f"g0/{n}" for n in range(1, 11)]
+          PORT_NAME_MAP = {
+              f"g0/{n}": f"GigaEthernet0/{n}"
+              for n in range(1, 11)
+          }
+
+
+          def read_until_prompt(shell, prompt_re, timeout=10):
+              buf = ""
+              end_time = time.time() + timeout
+
+              while time.time() < end_time:
+                  if shell.recv_ready():
+                      chunk = shell.recv(65535).decode(
+                          errors="ignore"
+                      )
+                      buf += chunk
+
+                      if re.search(prompt_re, buf):
+                          return buf
+                  else:
+                      time.sleep(0.1)
+
+              return buf
+
+
+          def send_cmd(
+              shell, cmd, timeout=10, check_errors=True
+          ):
+              """Send a CLI command, wait for the prompt,
+              optionally raise on switch-reported errors.
+              Returns the raw output."""
+              shell.send(
+                  cmd if cmd.endswith("\n") else cmd + "\n"
+              )
+              output = read_until_prompt(
+                  shell, PROMPT_RE, timeout=timeout
+              )
+
+              if check_errors and re.search(
+                  r'%err|invalid|error', output, re.IGNORECASE
+              ):
+                  raise Exception(
+                      f"'{cmd.strip()}' rejected by switch: "
+                      f"{output.strip()}"
+                  )
+
+              return output
+
+
+          shell = None
+          ssh = None
+
+          try:
+              # ==================================
+              # RE-VALIDATE INPUTS (defense in
+              # depth, in case this script is ever
+              # invoked outside the playbook)
+              # ==================================
+
+              for port in (
+                  DHCP_TRUST_PORTS + ARP_TRUST_PORTS
+                  + IP_SOURCE_TRUST_PORTS
+                  + DHCP_DISTRUST_PORTS
+                  + ARP_DISTRUST_PORTS
+                  + IP_SOURCE_DISTRUST_PORTS
+              ):
+                  if port not in VALID_PORTS:
+                      raise Exception(
+                          f"Invalid port '{port}': must be "
+                          f"g0/1 through g0/10"
+                      )
+
+              for label, trust, distrust in (
+                  ("dhcp", DHCP_TRUST_PORTS,
+                   DHCP_DISTRUST_PORTS),
+                  ("arp", ARP_TRUST_PORTS,
+                   ARP_DISTRUST_PORTS),
+                  ("ip_source", IP_SOURCE_TRUST_PORTS,
+                   IP_SOURCE_DISTRUST_PORTS),
+              ):
+                  overlap = set(trust) & set(distrust)
+                  if overlap:
+                      raise Exception(
+                          f"{label}: port(s) "
+                          f"{sorted(overlap)} in both "
+                          f"trust and distrust lists"
+                      )
+
+              # ==================================
+              # SSH CONNECTION
+              # ==================================
+
+              ssh = paramiko.SSHClient()
+              ssh.set_missing_host_key_policy(
+                  paramiko.AutoAddPolicy()
+              )
+
+              ssh.connect(
+                  HOST,
+                  username=USER,
+                  password=PASSWORD,
+                  look_for_keys=False,
+                  allow_agent=False,
+                  timeout=10
+              )
+
+              shell = ssh.invoke_shell()
+              time.sleep(0.5)
+
+              # ==================================
+              # LOGIN BANNER / INITIAL PROMPT
+              # ==================================
+
+              read_until_prompt(shell, PROMPT_RE, timeout=5)
+
+              # ==================================
+              # ENABLE, DISABLE PAGING, ENTER CONFIG
+              # ==================================
+
+              send_cmd(
+                  shell, "enable",
+                  timeout=5, check_errors=False
+              )
+              send_cmd(
+                  shell, "terminal length 0",
+                  timeout=5, check_errors=False
+              )
+              send_cmd(shell, "config", timeout=10)
+
+              # ==================================
+              # VISIT EVERY PORT g0/1-g0/10, MATCHING
+              # THE CONFIRMED LOG (every interface is
+              # entered/exited even when no trust
+              # command applies to it).
+              # ==================================
+
+              applied = {
+                  "dhcp_trust": [],
+                  "arp_trust": [],
+                  "ip_source_trust": [],
+                  "dhcp_distrust": [],
+                  "arp_distrust": [],
+                  "ip_source_distrust": [],
+              }
+
+              for port in VALID_PORTS:
+                  full_name = PORT_NAME_MAP[port]
+                  send_cmd(
+                      shell, f"interface {full_name}",
+                      timeout=10
+                  )
+
+                  if port in DHCP_TRUST_PORTS:
+                      send_cmd(
+                          shell, "dhcp snooping trust",
+                          timeout=10
+                      )
+                      applied["dhcp_trust"].append(port)
+                  elif port in DHCP_DISTRUST_PORTS:
+                      send_cmd(
+                          shell, "no dhcp snooping trust",
+                          timeout=10, check_errors=False
+                      )
+                      applied["dhcp_distrust"].append(port)
+
+                  if port in ARP_TRUST_PORTS:
+                      send_cmd(
+                          shell, "arp inspection trust",
+                          timeout=10
+                      )
+                      applied["arp_trust"].append(port)
+                  elif port in ARP_DISTRUST_PORTS:
+                      send_cmd(
+                          shell, "no arp inspection trust",
+                          timeout=10, check_errors=False
+                      )
+                      applied["arp_distrust"].append(port)
+
+                  if port in IP_SOURCE_TRUST_PORTS:
+                      send_cmd(
+                          shell, "ip-source trust",
+                          timeout=10
+                      )
+                      applied["ip_source_trust"].append(port)
+                  elif port in IP_SOURCE_DISTRUST_PORTS:
+                      send_cmd(
+                          shell, "no ip-source trust",
+                          timeout=10, check_errors=False
+                      )
+                      applied["ip_source_distrust"].append(
+                          port
+                      )
+
+                  send_cmd(
+                      shell, "exit",
+                      timeout=5, check_errors=False
+                  )
+
+              # ==================================
+              # EXIT CONFIG MODE
+              # ==================================
+
+              send_cmd(
+                  shell, "exit",
+                  timeout=5, check_errors=False
+              )
+
+              # ==================================
+              # SAVE CONFIG (persist running-config)
+              # NOTE: "write" was not shown in the
+              # confirmed log for this command;
+              # included for consistency with other
+              # config playbooks. Remove if not
+              # applicable here.
+              # ==================================
+
+              write_output = send_cmd(
+                  shell, "write",
+                  timeout=15, check_errors=False
+              )
+              if re.search(
+                  r'%err|invalid|error|fail',
+                  write_output, re.IGNORECASE
+              ):
+                  raise Exception(
+                      "'write' (save config) rejected "
+                      f"by switch: {write_output.strip()}"
+                  )
+
+              # ==================================
+              # CLOSE SSH / RETURN JSON
+              # ==================================
+
+              shell.close()
+              ssh.close()
+
+              print(json.dumps({
+                  "ip": HOST,
+                  "status": "success",
+              }))
+
+          except Exception as e:
+              try:
+                  if shell:
+                      shell.close()
+                  if ssh:
+                      ssh.close()
+              except:
+                  pass
+
+              print(json.dumps({
+                  "ip": HOST,
+                  "status": "failed",
+                  "error": str(e)
+              }))
+
+    # ==========================================
+    # EXECUTE PYTHON SCRIPT
+    # ==========================================
+
+    - name: Execute DHCP interface config script
+      ansible.builtin.command:
+        cmd: >
+          /opt/librenms/librenms-ansible-inventory-plugin/bin/python3
+          /opt/librenms/librenms-ansible-inventory-plugin/tmp/dhcp_interface_config_exec.py
+      register: dhcp_raw
+      changed_when: false
+      failed_when: false
+
+    # ==========================================
+    # CONVERT JSON RESULT
+    # ==========================================
+
+    - name: Convert DHCP interface config result to JSON
+      ansible.builtin.set_fact:
+        dhcp_result: "{{ dhcp_raw.stdout | from_json }}"
+
+    # ==========================================
+    # DISPLAY RESULT
+    # ==========================================
+
+    - name: Display DHCP interface config result
+      ansible.builtin.debug:
+        var: dhcp_result
+
+    # ==========================================
+    # SAVE RESULT
+    # ==========================================
+
+    - name: Save DHCP interface config result
+      ansible.builtin.copy:
+        dest: "/opt/librenms/librenms-ansible-inventory-plugin/output/\
+              {{ ansible_host }}_dhcp_interface_config.yml"
+        content: |
+          {{ dhcp_result | to_nice_yaml }}
+
+    # ==========================================
+    # FAIL IF COMMAND FAILED
+    # ==========================================
+
+    - name: Fail if DHCP interface config failed
+      ansible.builtin.fail:
+        msg: "{{ dhcp_result.error }}"
+      when: dhcp_result.status == "failed"
+
+    # ==========================================
+    # FINAL MESSAGE
+    # ==========================================
+
+    - name: Display result file
+      ansible.builtin.debug:
+        msg: >
+          DHCP snooping interface config applied on
+          {{ ansible_host }}. Result saved to
+          output/{{ ansible_host }}_dhcp_interface_config.yml

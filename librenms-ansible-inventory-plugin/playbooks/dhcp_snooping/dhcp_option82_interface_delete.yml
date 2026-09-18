@@ -1,0 +1,403 @@
+# ==========================================
+# dhcp_option82_interface_delete.yml
+# Created on Sept 4, 2026 by Vikash Kumar (vikash.kumar@alphabrige.tech).
+#
+# Copyright (c), ALPHA BRIDGE, Inc.
+# 357D, Udyog Vihar Industrial Area Phase VI, Sector 37, Gurugram, Haryana.
+#
+# All rights reserved.
+#
+# This software is the confidential and proprietary information of ALPHA BRIDGE,
+# Inc. ("Confidential Information"). You shall not disclose such Confidential
+# Information and shall use it only in accordance with the
+# terms of the license agreement you entered into with
+# ALPHA BRIDGE.
+#
+# =============================================================================
+# Playbook Name : DHCP Snooping Interface Option82 Delete
+# =============================================================================
+#
+# Description:
+# Clears all DHCP Snooping Option82 settings on a single
+# port on AlphaBridge switches over SSH - the "delete entry"
+# counterpart to dhcp_option82_interface_config.yml.
+#
+# Input vars:
+#   port - g0/1 through g0/10 (required, short interface
+#          form, matching the confirmed device log)
+#
+# Command sequence sent (confirmed order from device logs,
+# except circuit-id - see ASSUMPTIONS below):
+#   config
+#   interface <port>
+#   no dhcp snooping information circuit-id
+#   no dhcp snooping information remote-id
+#   no dhcp snooping information vendor-specific
+#   no dhcp snooping information drop
+#   no dhcp snooping information replace
+#   no dhcp snooping information transmit
+#   exit
+#   write
+#
+# ASSUMPTIONS TO CONFIRM AGAINST YOUR SWITCH:
+#   - Your confirmed log did NOT include "no dhcp snooping
+#     information circuit-id" - only remote-id,
+#     vendor-specific, drop, replace, and transmit were
+#     cleared. It's included here for a complete reset,
+#     following the identical "no <field>" pattern the log
+#     DID confirm for remote-id and vendor-specific, but its
+#     own removal was never directly demonstrated. If your
+#     switch does something unexpected with it (or if
+#     circuit-id simply wasn't set in that test and this
+#     command isn't actually needed), you may want to drop
+#     this line.
+#   - "write" at the end was not shown in your confirmed log
+#     for this command; included for consistency with the
+#     other config playbooks. Remove it if not needed.
+#
+# Example:
+# ansible-playbook -i inventory/192.168.2.245.yml \
+#   playbooks/dhcp_option82_interface_delete.yml \
+#   -e port=g0/1
+#
+# Output:
+# output/<switch_ip>_dhcp_option82_interface_delete.yml
+# =============================================================================
+
+- name: DHCP snooping interface Option82 delete
+  hosts: alphabridge_devices
+  gather_facts: no
+
+  tasks:
+
+    # ==========================================
+    # Validate required input variables are present
+    # ==========================================
+
+    - name: Validate required input variables are provided
+      ansible.builtin.assert:
+        that:
+          - port is defined
+        fail_msg: >
+          You must pass port, e.g. -e port=g0/1
+
+    # ==========================================
+    # Validate port (g0/1-g0/10)
+    # ==========================================
+
+    - name: Normalize port
+      ansible.builtin.set_fact:
+        port_normalized: "{{ port | lower | trim }}"
+
+    - name: Validate port is g0/1 through g0/10
+      ansible.builtin.assert:
+        that:
+          - >-
+            port_normalized in [
+            'g0/1', 'g0/2', 'g0/3', 'g0/4', 'g0/5',
+            'g0/6', 'g0/7', 'g0/8', 'g0/9', 'g0/10']
+        fail_msg: >
+          port must be g0/1 through g0/10 (got: {{ port }})
+
+    # ==========================================
+    # Create Python SSH Script
+    # ==========================================
+
+    - name: >-
+        Create Python SSH Script for DHCP Option82
+        interface delete
+      ansible.builtin.copy:
+        dest: "/opt/librenms/librenms-ansible-inventory-plugin/tmp/\
+               dhcp_option82_interface_delete_exec.py"
+        mode: '0755'
+        content: |
+          #!/usr/bin/env python3
+
+          import paramiko
+          import time
+          import re
+          import json
+
+          HOST = "{{ ansible_host }}"
+          USER = "{{ ansible_user }}"
+          PASSWORD = "{{ ansible_password }}"
+          PORT = "{{ port_normalized }}"
+
+          PROMPT_RE = r'[>#]\s*$'
+
+          VALID_PORTS = [f"g0/{n}" for n in range(1, 11)]
+
+
+          def read_until_prompt(shell, prompt_re, timeout=10):
+              buf = ""
+              end_time = time.time() + timeout
+
+              while time.time() < end_time:
+                  if shell.recv_ready():
+                      chunk = shell.recv(65535).decode(
+                          errors="ignore"
+                      )
+                      buf += chunk
+
+                      if re.search(prompt_re, buf):
+                          return buf
+                  else:
+                      time.sleep(0.1)
+
+              return buf
+
+
+          def send_cmd(
+              shell, cmd, timeout=10, check_errors=True
+          ):
+              """Send a CLI command, wait for the prompt,
+              optionally raise on switch-reported errors.
+              Returns the raw output."""
+              shell.send(
+                  cmd if cmd.endswith("\n") else cmd + "\n"
+              )
+              output = read_until_prompt(
+                  shell, PROMPT_RE, timeout=timeout
+              )
+
+              if check_errors and re.search(
+                  r'%err|invalid|error', output, re.IGNORECASE
+              ):
+                  raise Exception(
+                      f"'{cmd.strip()}' rejected by switch: "
+                      f"{output.strip()}"
+                  )
+
+              return output
+
+
+          shell = None
+          ssh = None
+
+          try:
+              # ==================================
+              # RE-VALIDATE INPUTS (defense in
+              # depth, in case this script is ever
+              # invoked outside the playbook)
+              # ==================================
+
+              if PORT not in VALID_PORTS:
+                  raise Exception(
+                      f"Invalid port '{PORT}': must be "
+                      f"g0/1 through g0/10"
+                  )
+
+              # ==================================
+              # SSH CONNECTION
+              # ==================================
+
+              ssh = paramiko.SSHClient()
+              ssh.set_missing_host_key_policy(
+                  paramiko.AutoAddPolicy()
+              )
+
+              ssh.connect(
+                  HOST,
+                  username=USER,
+                  password=PASSWORD,
+                  look_for_keys=False,
+                  allow_agent=False,
+                  timeout=10
+              )
+
+              shell = ssh.invoke_shell()
+              time.sleep(0.5)
+
+              # ==================================
+              # LOGIN BANNER / INITIAL PROMPT
+              # ==================================
+
+              read_until_prompt(shell, PROMPT_RE, timeout=5)
+
+              # ==================================
+              # ENABLE, DISABLE PAGING, ENTER CONFIG
+              # ==================================
+
+              send_cmd(
+                  shell, "enable",
+                  timeout=5, check_errors=False
+              )
+              send_cmd(
+                  shell, "terminal length 0",
+                  timeout=5, check_errors=False
+              )
+              send_cmd(shell, "config", timeout=10)
+
+              # ==================================
+              # SELECT THE PORT (short form, per
+              # confirmed log)
+              # ==================================
+
+              send_cmd(
+                  shell, f"interface {PORT}", timeout=10
+              )
+
+              # ==================================
+              # CLEAR ALL OPTION82 SETTINGS
+              # NOTE: "no ... circuit-id" was not in
+              # the confirmed log (only remote-id,
+              # vendor-specific, drop, replace,
+              # transmit were) - included for a
+              # complete reset, see header note.
+              # ==================================
+
+              send_cmd(
+                  shell,
+                  "no dhcp snooping information "
+                  "circuit-id",
+                  timeout=10, check_errors=False
+              )
+              send_cmd(
+                  shell,
+                  "no dhcp snooping information "
+                  "remote-id",
+                  timeout=10
+              )
+              send_cmd(
+                  shell,
+                  "no dhcp snooping information "
+                  "vendor-specific",
+                  timeout=10
+              )
+              send_cmd(
+                  shell,
+                  "no dhcp snooping information drop",
+                  timeout=10
+              )
+              send_cmd(
+                  shell,
+                  "no dhcp snooping information "
+                  "replace",
+                  timeout=10
+              )
+              send_cmd(
+                  shell,
+                  "no dhcp snooping information "
+                  "transmit",
+                  timeout=10
+              )
+
+              # ==================================
+              # EXIT CONFIG MODE
+              # ==================================
+
+              send_cmd(
+                  shell, "exit",
+                  timeout=5, check_errors=False
+              )
+
+              # ==================================
+              # SAVE CONFIG (persist running-config)
+              # NOTE: "write" was not shown in the
+              # confirmed log for this command;
+              # included for consistency with other
+              # config playbooks. Remove if not
+              # applicable here.
+              # ==================================
+
+              write_output = send_cmd(
+                  shell, "write",
+                  timeout=15, check_errors=False
+              )
+              if re.search(
+                  r'%err|invalid|error|fail',
+                  write_output, re.IGNORECASE
+              ):
+                  raise Exception(
+                      "'write' (save config) rejected "
+                      f"by switch: {write_output.strip()}"
+                  )
+
+              # ==================================
+              # CLOSE SSH / RETURN JSON
+              # ==================================
+
+              shell.close()
+              ssh.close()
+
+              print(json.dumps({
+                  "ip": HOST,
+                  "status": "success",
+                  "port": PORT
+              }))
+
+          except Exception as e:
+              try:
+                  if shell:
+                      shell.close()
+                  if ssh:
+                      ssh.close()
+              except:
+                  pass
+
+              print(json.dumps({
+                  "ip": HOST,
+                  "status": "failed",
+                  "error": str(e)
+              }))
+
+    # ==========================================
+    # EXECUTE PYTHON SCRIPT
+    # ==========================================
+
+    - name: Execute DHCP Option82 interface delete script
+      ansible.builtin.command:
+        cmd: >
+          /opt/librenms/librenms-ansible-inventory-plugin/bin/python3
+          /opt/librenms/librenms-ansible-inventory-plugin/\
+          tmp/dhcp_option82_interface_delete_exec.py
+      register: option82_raw
+      changed_when: false
+      failed_when: false
+
+    # ==========================================
+    # CONVERT JSON RESULT
+    # ==========================================
+
+    - name: Convert DHCP Option82 delete result to JSON
+      ansible.builtin.set_fact:
+        option82_result: "{{ option82_raw.stdout | from_json }}"
+
+    # ==========================================
+    # DISPLAY RESULT
+    # ==========================================
+
+    - name: Display DHCP Option82 delete result
+      ansible.builtin.debug:
+        var: option82_result
+
+    # ==========================================
+    # SAVE RESULT
+    # ==========================================
+
+    - name: Save DHCP Option82 delete result
+      ansible.builtin.copy:
+        dest: "/opt/librenms/librenms-ansible-inventory-plugin/output/\
+             {{ ansible_host }}_dhcp_option82_interface_delete.yml"
+        content: |
+          {{ option82_result | to_nice_yaml }}
+
+    # ==========================================
+    # FAIL IF COMMAND FAILED
+    # ==========================================
+
+    - name: Fail if DHCP Option82 delete failed
+      ansible.builtin.fail:
+        msg: "{{ option82_result.error }}"
+      when: option82_result.status == "failed"
+
+    # ==========================================
+    # FINAL MESSAGE
+    # ==========================================
+
+    - name: Display result file
+      ansible.builtin.debug:
+        msg: >
+          DHCP Option82 settings cleared on {{ port }}
+          on {{ ansible_host }}. Result saved to
+          output/{{ ansible_host }}_dhcp_option82_interface_delete.yml

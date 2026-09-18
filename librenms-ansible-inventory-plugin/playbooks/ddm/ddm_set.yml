@@ -1,0 +1,476 @@
+# ==========================================
+# ddm_set.yml
+# Created on Sep 17, 2026.
+#
+# Copyright (c), ALPHA BRIDGE, Inc.
+# All rights reserved.
+#
+# =============================================================================
+# Playbook Name : Set DDM Global Configuration
+# =============================================================================
+# Description:
+# Enable or disable global Digital Diagnostic Monitoring (DDM) on an
+# AlphaBridge switch using an interactive SSH/Paramiko session.
+#
+# User input:
+#   ddm_status=Enable   -> no ddm disable
+#   ddm_status=Disable  -> ddm disable
+#
+# CLI flow:
+#   enable
+#   config
+#   no ddm disable    OR    ddm disable
+#   exit
+#
+# The DDM setting is global. No interface name is required.
+# This playbook does not save the running configuration to startup-config
+# or independently read back the resulting DDM setting.
+#
+# Examples (from the Ansible project root):
+#   ansible-playbook -i inventory/192.168.3.1.yml \
+#     playbooks/ddm/ddm_set.yml -e 'ddm_status=Enable'
+#
+#   ansible-playbook -i inventory/192.168.3.1.yml \
+#     playbooks/ddm/ddm_set.yml -e 'ddm_status=Disable'
+#
+# Successful displayed and saved output:
+#   ip: <switch_ip>
+#   status: success
+#
+# Output file: output/<switch_ip>_ddm_set.yml
+# =============================================================================
+
+- name: Set DDM global configuration
+  hosts: alphabridge_devices
+  gather_facts: false
+
+  vars:
+    # This file is expected in playbooks/port_config/.
+    project_root: "{{ playbook_dir }}/../.."
+
+  pre_tasks:
+
+    # ==========================================
+    # Validate user input
+    # ==========================================
+
+    - name: Validate requested DDM status
+      ansible.builtin.assert:
+        that:
+          - "(ddm_status | default('') | string | trim | lower) in ['enable', 'disable']"
+        fail_msg: "Provide -e 'ddm_status=Enable' or -e 'ddm_status=Disable'."
+
+
+    # ==========================================
+    # Create required directories
+    # ==========================================
+
+    - name: Ensure temporary and output directories exist
+      ansible.builtin.file:
+        path: "{{ project_root }}/{{ item }}"
+        state: directory
+        mode: '0755'
+      loop:
+        - tmp
+        - output
+
+
+  tasks:
+
+    # ==========================================
+    # Create SSH helper script
+    # ==========================================
+
+    - name: Create Python SSH script for DDM set
+      ansible.builtin.copy:
+        dest: "/opt/librenms/librenms-ansible-inventory-plugin/tmp/ddm_set_exec.py"
+        mode: '0700'
+
+        content: |
+          #!/usr/bin/env python3
+
+          import json
+          import re
+          import time
+          import paramiko
+
+
+          # ==========================================
+          # Switch connection information
+          # ==========================================
+
+          HOST = {{ ansible_host | to_json }}
+
+          PORT = int({{ ansible_port | default(22) | to_json }})
+
+          USER = {{ ansible_user | to_json }}
+
+          PASSWORD = {{ ansible_password | to_json }}
+
+          DDM_STATUS = {{ ddm_status | string | trim | lower | to_json }}
+
+
+          # ==========================================
+          # DDM command selection
+          # ==========================================
+          #
+          # Enable:
+          #   no ddm disable
+          #
+          # Disable:
+          #   ddm disable
+          #
+          # ==========================================
+
+          COMMAND = (
+              "no ddm disable" if DDM_STATUS == "enable"
+              else "ddm disable"
+          )
+
+
+          # ==========================================
+          # ANSI character cleanup
+          # ==========================================
+
+          ansi_re = re.compile(
+              r'\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])'
+          )
+
+
+          # ==========================================
+          # Switch prompt detection
+          # ==========================================
+
+          prompt_re = re.compile(
+              r'[>#]\s*\Z'
+          )
+
+
+          # ==========================================
+          # CLI error detection
+          # ==========================================
+
+          cli_error_re = re.compile(
+              r'(?im)^\s*%\s*(?:invalid|error|incomplete|ambiguous|'
+              r'unknown|unrecognized)\b|'
+              r'\b(?:invalid input|unknown command|incomplete command|'
+              r'command rejected|fail with ret\s*-?\d+)\b'
+          )
+
+
+          # ==========================================
+          # Read output until switch prompt
+          # ==========================================
+
+          def read_until_prompt(shell, stage, timeout=20):
+
+              """
+              Read a complete CLI response.
+
+              If the switch prompt does not return
+              before the timeout, raise an error.
+              """
+
+              output = ""
+
+              deadline = time.monotonic() + timeout
+
+              while time.monotonic() < deadline:
+
+                  if shell.recv_ready():
+
+                      output += shell.recv(
+                          65535
+                      ).decode(
+                          errors="ignore"
+                      )
+
+                      clean = ansi_re.sub(
+                          "",
+                          output
+                      ).replace(
+                          "\r",
+                          ""
+                      )
+
+                      if prompt_re.search(clean.rstrip()):
+                          return clean
+
+                  else:
+                      time.sleep(0.1)
+
+              raise TimeoutError(
+                  f"Timed out waiting for switch prompt during {stage}"
+              )
+
+
+          # ==========================================
+          # Execute one CLI command
+          # ==========================================
+
+          def run_command(shell, command, stage):
+
+              """
+              Send one command to the switch.
+
+              Wait for the prompt before continuing.
+
+              Stop if a recognized CLI error occurs.
+              """
+
+              shell.send(
+                  command + "\n"
+              )
+
+              output = read_until_prompt(
+                  shell,
+                  stage
+              )
+
+              if cli_error_re.search(output):
+
+                  raise RuntimeError(
+                      f"Switch rejected {command!r}: {output}"
+                  )
+
+              return output
+
+
+          # ==========================================
+          # Initialize SSH objects
+          # ==========================================
+
+          ssh = None
+
+          shell = None
+
+          stage = "SSH connection"
+
+
+          try:
+
+              # ==========================================
+              # 1. Connect to switch
+              # ==========================================
+
+              ssh = paramiko.SSHClient()
+
+              ssh.set_missing_host_key_policy(
+                  paramiko.AutoAddPolicy()
+              )
+
+              ssh.connect(
+                  HOST,
+                  port=PORT,
+                  username=USER,
+                  password=PASSWORD,
+                  look_for_keys=False,
+                  allow_agent=False,
+                  timeout=20,
+                  auth_timeout=20,
+                  banner_timeout=20
+              )
+
+
+              # ==========================================
+              # 2. Open SSH shell
+              # ==========================================
+
+              shell = ssh.invoke_shell()
+
+              read_until_prompt(
+                  shell,
+                  "initial SSH prompt",
+                  timeout=10
+              )
+
+
+              # ==========================================
+              # 3. Enter enable mode
+              # ==========================================
+
+              stage = "enable mode"
+
+              run_command(
+                  shell,
+                  "enable",
+                  stage
+              )
+
+
+              # ==========================================
+              # 4. Enter global configuration mode
+              # ==========================================
+
+              stage = "global configuration mode"
+
+              run_command(
+                  shell,
+                  "config",
+                  stage
+              )
+
+
+              # ==========================================
+              # 5. Apply DDM configuration
+              # ==========================================
+              #
+              # Enable  -> no ddm disable
+              # Disable -> ddm disable
+              #
+              # ==========================================
+
+              stage = f"apply {COMMAND}"
+
+              run_command(
+                  shell,
+                  COMMAND,
+                  stage
+              )
+
+
+              # ==========================================
+              # 6. Exit global configuration mode
+              # ==========================================
+
+              stage = "exit global configuration mode"
+
+              run_command(
+                  shell,
+                  "exit",
+                  stage
+              )
+
+
+              # ==========================================
+              # 7. Return success JSON
+              # ==========================================
+
+              print(
+                  json.dumps(
+                      {
+                          "ip": HOST,
+                          "status": "success"
+                      }
+                  )
+              )
+
+
+          except Exception as exc:
+
+              # ==========================================
+              # Return failure JSON
+              # ==========================================
+
+              print(
+                  json.dumps(
+                      {
+                          "ip": HOST,
+                          "status": "failed",
+                          "stage": stage,
+                          "error": str(exc)
+                      }
+                  )
+              )
+
+
+          finally:
+
+              # ==========================================
+              # Close SSH connection
+              # ==========================================
+
+              if shell is not None:
+                  shell.close()
+
+              if ssh is not None:
+                  ssh.close()
+
+      no_log: true
+
+
+    # ==========================================
+    # Execute Python SSH script
+    # ==========================================
+
+    - name: Execute DDM set script
+      ansible.builtin.command:
+        argv:
+          - /opt/librenms/librenms-ansible-inventory-plugin/bin/python3
+          - "/opt/librenms/librenms-ansible-inventory-plugin/tmp/ddm_set_exec.py"
+
+      register: ddm_raw
+
+      changed_when: false
+
+      failed_when: false
+
+
+    # ==========================================
+    # Verify Python returned JSON
+    # ==========================================
+
+    - name: Fail if DDM script did not produce JSON
+      ansible.builtin.fail:
+        msg: >-
+          DDM script did not return JSON. rc={{ ddm_raw.rc }};
+          stderr={{ ddm_raw.stderr }}
+
+      when: ddm_raw.stdout | trim | length == 0
+
+
+    # ==========================================
+    # Convert JSON result
+    # ==========================================
+
+    - name: Convert DDM set result from JSON
+      ansible.builtin.set_fact:
+        ddm_result: "{{ ddm_raw.stdout | from_json }}"
+
+
+    # ==========================================
+    # Fail if configuration failed
+    # ==========================================
+
+    - name: Fail if DDM configuration failed
+      ansible.builtin.fail:
+        msg: >-
+          DDM SET failed during {{ ddm_result.stage | default('execution') }}:
+          {{ ddm_result.error | default(ddm_raw.stderr) }}
+
+      when: ddm_result.status != 'success' or ddm_raw.rc != 0
+
+
+    # ==========================================
+    # Display success result
+    # ==========================================
+
+    - name: Display DDM set result
+      ansible.builtin.debug:
+        msg: |
+          ip: {{ ddm_result.ip }}
+          status: {{ ddm_result.status }}
+
+
+    # ==========================================
+    # Save success result
+    # ==========================================
+
+    - name: Save DDM set result
+      ansible.builtin.copy:
+        dest: "{{ project_root }}/output/{{ ansible_host }}_ddm_set.yml"
+
+        content: |
+          ip: {{ ddm_result.ip }}
+          status: {{ ddm_result.status }}
+
+
+    # ==========================================
+    # Display result file
+    # ==========================================
+
+    - name: Display result file
+      ansible.builtin.debug:
+        msg: >-
+          DDM configuration applied successfully.
+          Result saved to output/{{ ansible_host }}_ddm_set.yml

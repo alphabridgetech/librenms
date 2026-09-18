@@ -1,0 +1,515 @@
+# ==========================================
+# dhcp_vlan_config.yml
+# Created on Sept 4, 2026 by Vikash Kumar (vikash.kumar@alphabrige.tech).
+#
+# Copyright (c), ALPHA BRIDGE, Inc.
+# 357D, Udyog Vihar Industrial Area Phase VI, Sector 37, Gurugram, Haryana.
+#
+# All rights reserved.
+#
+# This software is the confidential and proprietary information of ALPHA BRIDGE,
+# Inc. ("Confidential Information"). You shall not disclose such Confidential
+# Information and shall use it only in accordance with the terms of the license
+# agreement you entered into with ALPHA BRIDGE.
+#
+# =============================================================================
+# Playbook Name : DHCP Snooping VLAN Configuration
+# =============================================================================
+#
+# Description:
+# Configures the DHCP Snooping VLAN, Dynamic ARP Inspection
+# VLAN, and IP Source Verify VLAN on AlphaBridge switches
+# over SSH. 
+#
+# Per your note: whether a field was previously configured
+# or left blank, the switch always removes the existing
+# entry first, then adds the new one. This playbook mirrors
+# that: for each of the three settings, if you supply the
+# OLD vlan it was previously set to, that gets removed
+# first; the NEW vlan is then always applied.
+#
+# Input vars:
+#   new_dhcp_vlan          - 1 to 4094 (required)
+#   old_dhcp_vlan          - 1 to 4094 (optional - omit if
+#                             the field was previously blank)
+#   new_arp_vlan           - 1 to 4094 (required)
+#   old_arp_vlan           - 1 to 4094 (optional)
+#   new_verify_source_vlan - 1 to 4094 (required)
+#   old_verify_source_vlan - 1 to 4094 (optional)
+#
+# Command sequence sent (confirmed order from device logs):
+#   config
+#   [no ip dhcp-relay snooping vlan <old_dhcp_vlan>]
+#     (only sent if old_dhcp_vlan is supplied)
+#   ip dhcp-relay snooping vlan <new_dhcp_vlan>
+#   [no ip arp inspection vlan <old_arp_vlan>]
+#     (only sent if old_arp_vlan is supplied)
+#   ip arp inspection vlan <new_arp_vlan>
+#   [no ip verify source vlan <old_verify_source_vlan>]
+#     (only sent if old_verify_source_vlan is supplied)
+#   ip verify source vlan <new_verify_source_vlan>
+#   show running-config non-interface
+#   exit
+#   write
+#
+# Example:
+# ansible-playbook -i inventory/192.168.2.245.yml \
+#   playbooks/dhcp_vlan_config.yml \
+#   -e old_dhcp_vlan=10 -e new_dhcp_vlan=100 \
+#   -e old_arp_vlan=10 -e new_arp_vlan=100 \
+#   -e old_verify_source_vlan=10 \
+#   -e new_verify_source_vlan=100
+#
+# Output:
+# output/<switch_ip>_dhcp_vlan_config.yml
+# =============================================================================
+
+- name: DHCP snooping VLAN configuration
+  hosts: alphabridge_devices
+  gather_facts: no
+
+  tasks:
+
+    # ==========================================
+    # Validate required input variables are present
+    # ==========================================
+
+    - name: Validate required input variables are provided
+      ansible.builtin.assert:
+        that:
+          - new_dhcp_vlan is defined
+          - new_arp_vlan is defined
+          - new_verify_source_vlan is defined
+        fail_msg: >
+          You must pass new_dhcp_vlan, new_arp_vlan and
+          new_verify_source_vlan.
+
+    # ==========================================
+    # Validate new_* vlans (1-4094, required)
+    # ==========================================
+
+    - name: Validate new vlan values are numeric
+      ansible.builtin.assert:
+        that:
+          - item.value | string is match('^[0-9]+$')
+        fail_msg: >
+          {{ item.name }} must be a whole number
+          (got: {{ item.value }})
+      loop:
+        - { name: "new_dhcp_vlan", value: "{{ new_dhcp_vlan }}" }
+        - { name: "new_arp_vlan", value: "{{ new_arp_vlan }}" }
+        - { name: "new_verify_source_vlan",
+            value: "{{ new_verify_source_vlan }}" }
+      loop_control:
+        label: "{{ item.name }}"
+
+    - name: Validate new vlan values are in range 1-4094
+      ansible.builtin.assert:
+        that:
+          - (item.value | int) >= 1
+          - (item.value | int) <= 4094
+        fail_msg: >
+          {{ item.name }} must be between 1 and 4094
+          (got: {{ item.value }})
+      loop:
+        - { name: "new_dhcp_vlan", value: "{{ new_dhcp_vlan }}" }
+        - { name: "new_arp_vlan", value: "{{ new_arp_vlan }}" }
+        - { name: "new_verify_source_vlan",
+            value: "{{ new_verify_source_vlan }}" }
+      loop_control:
+        label: "{{ item.name }}"
+
+    # ==========================================
+    # Validate old_* vlans (1-4094, optional)
+    # ==========================================
+
+    - name: Validate old vlan values are numeric (when set)
+      ansible.builtin.assert:
+        that:
+          - item.value | string is match('^[0-9]+$')
+        fail_msg: >
+          {{ item.name }} must be a whole number
+          (got: {{ item.value }})
+      loop:
+        - { name: "old_dhcp_vlan",
+            value: "{{ old_dhcp_vlan | default('') }}" }
+        - { name: "old_arp_vlan",
+            value: "{{ old_arp_vlan | default('') }}" }
+        - { name: "old_verify_source_vlan",
+            value: "{{ old_verify_source_vlan | default('') }}" }
+      loop_control:
+        label: "{{ item.name }}"
+      when: item.value != ""
+
+    - name: >-
+        Validate old vlan values are in range 1-4094
+        (when set)
+      ansible.builtin.assert:
+        that:
+          - (item.value | int) >= 1
+          - (item.value | int) <= 4094
+        fail_msg: >
+          {{ item.name }} must be between 1 and 4094
+          (got: {{ item.value }})
+      loop:
+        - { name: "old_dhcp_vlan",
+            value: "{{ old_dhcp_vlan | default('') }}" }
+        - { name: "old_arp_vlan",
+            value: "{{ old_arp_vlan | default('') }}" }
+        - { name: "old_verify_source_vlan",
+            value: "{{ old_verify_source_vlan | default('') }}" }
+      loop_control:
+        label: "{{ item.name }}"
+      when: item.value != ""
+
+    # ==========================================
+    # Create Python SSH Script
+    # ==========================================
+
+    - name: Create Python SSH Script for DHCP VLAN config
+      ansible.builtin.copy:
+        dest: "/opt/librenms/librenms-ansible-inventory-plugin/tmp/dhcp_vlan_config_exec.py"
+        mode: '0755'
+        content: |
+          #!/usr/bin/env python3
+
+          import paramiko
+          import time
+          import re
+          import json
+
+          HOST = "{{ ansible_host }}"
+          USER = "{{ ansible_user }}"
+          PASSWORD = "{{ ansible_password }}"
+
+          NEW_DHCP_VLAN = "{{ new_dhcp_vlan }}"
+          OLD_DHCP_VLAN = "{{ old_dhcp_vlan | default('') }}"
+          NEW_ARP_VLAN = "{{ new_arp_vlan }}"
+          OLD_ARP_VLAN = "{{ old_arp_vlan | default('') }}"
+          NEW_VERIFY_SOURCE_VLAN = (
+              "{{ new_verify_source_vlan }}"
+          )
+          OLD_VERIFY_SOURCE_VLAN = (
+              "{{ old_verify_source_vlan | default('') }}"
+          )
+
+          PROMPT_RE = r'[>#]\s*$'
+
+
+          def read_until_prompt(shell, prompt_re, timeout=10):
+              buf = ""
+              end_time = time.time() + timeout
+
+              while time.time() < end_time:
+                  if shell.recv_ready():
+                      chunk = shell.recv(65535).decode(
+                          errors="ignore"
+                      )
+                      buf += chunk
+
+                      if re.search(prompt_re, buf):
+                          return buf
+                  else:
+                      time.sleep(0.1)
+
+              return buf
+
+
+          def send_cmd(
+              shell, cmd, timeout=10, check_errors=True
+          ):
+              """Send a CLI command, wait for the prompt,
+              optionally raise on switch-reported errors.
+              Returns the raw output."""
+              shell.send(
+                  cmd if cmd.endswith("\n") else cmd + "\n"
+              )
+              output = read_until_prompt(
+                  shell, PROMPT_RE, timeout=timeout
+              )
+
+              if check_errors and re.search(
+                  r'%err|invalid|error', output, re.IGNORECASE
+              ):
+                  raise Exception(
+                      f"'{cmd.strip()}' rejected by switch: "
+                      f"{output.strip()}"
+                  )
+
+              return output
+
+
+          def is_valid_vlan(value):
+              return value.isdigit() and 1 <= int(value) <= 4094
+
+
+          ansi_re = re.compile(
+              r'\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])'
+          )
+
+          shell = None
+          ssh = None
+
+          try:
+              # ==================================
+              # RE-VALIDATE INPUTS (defense in
+              # depth, in case this script is ever
+              # invoked outside the playbook)
+              # ==================================
+
+              for label, value in (
+                  ("new_dhcp_vlan", NEW_DHCP_VLAN),
+                  ("new_arp_vlan", NEW_ARP_VLAN),
+                  ("new_verify_source_vlan",
+                   NEW_VERIFY_SOURCE_VLAN),
+              ):
+                  if not is_valid_vlan(value):
+                      raise Exception(
+                          f"Invalid {label} '{value}': "
+                          f"must be 1-4094"
+                      )
+
+              for label, value in (
+                  ("old_dhcp_vlan", OLD_DHCP_VLAN),
+                  ("old_arp_vlan", OLD_ARP_VLAN),
+                  ("old_verify_source_vlan",
+                   OLD_VERIFY_SOURCE_VLAN),
+              ):
+                  if value and not is_valid_vlan(value):
+                      raise Exception(
+                          f"Invalid {label} '{value}': "
+                          f"must be 1-4094"
+                      )
+
+              # ==================================
+              # SSH CONNECTION
+              # ==================================
+
+              ssh = paramiko.SSHClient()
+              ssh.set_missing_host_key_policy(
+                  paramiko.AutoAddPolicy()
+              )
+
+              ssh.connect(
+                  HOST,
+                  username=USER,
+                  password=PASSWORD,
+                  look_for_keys=False,
+                  allow_agent=False,
+                  timeout=10
+              )
+
+              shell = ssh.invoke_shell()
+              time.sleep(0.5)
+
+              # ==================================
+              # LOGIN BANNER / INITIAL PROMPT
+              # ==================================
+
+              read_until_prompt(shell, PROMPT_RE, timeout=5)
+
+              # ==================================
+              # ENABLE, DISABLE PAGING, ENTER CONFIG
+              # ==================================
+
+              send_cmd(
+                  shell, "enable",
+                  timeout=5, check_errors=False
+              )
+              send_cmd(
+                  shell, "terminal length 0",
+                  timeout=5, check_errors=False
+              )
+              send_cmd(shell, "config", timeout=10)
+
+              # ==================================
+              # DHCP SNOOPING VLAN
+              # (remove old first, if known, then
+              # add new - removal failure is
+              # tolerated since there may not have
+              # been anything configured to remove)
+              # ==================================
+
+              if OLD_DHCP_VLAN:
+                  send_cmd(
+                      shell,
+                      "no ip dhcp-relay snooping vlan "
+                      f"{OLD_DHCP_VLAN}",
+                      timeout=10, check_errors=False
+                  )
+
+              send_cmd(
+                  shell,
+                  "ip dhcp-relay snooping vlan "
+                  f"{NEW_DHCP_VLAN}",
+                  timeout=10
+              )
+
+              # ==================================
+              # DYNAMIC ARP INSPECTION VLAN
+              # ==================================
+
+              if OLD_ARP_VLAN:
+                  send_cmd(
+                      shell,
+                      f"no ip arp inspection vlan "
+                      f"{OLD_ARP_VLAN}",
+                      timeout=10, check_errors=False
+                  )
+
+              send_cmd(
+                  shell,
+                  f"ip arp inspection vlan {NEW_ARP_VLAN}",
+                  timeout=10
+              )
+
+              # ==================================
+              # IP SOURCE VERIFY VLAN
+              # ==================================
+
+              if OLD_VERIFY_SOURCE_VLAN:
+                  send_cmd(
+                      shell,
+                      "no ip verify source vlan "
+                      f"{OLD_VERIFY_SOURCE_VLAN}",
+                      timeout=10, check_errors=False
+                  )
+
+              send_cmd(
+                  shell,
+                  "ip verify source vlan "
+                  f"{NEW_VERIFY_SOURCE_VLAN}",
+                  timeout=10
+              )
+
+              # ==================================
+              # VERIFY WITH show running-config
+              # ==================================
+
+              running_config_output = send_cmd(
+                  shell, "show running-config non-interface",
+                  timeout=10, check_errors=False
+              )
+              running_config_output = ansi_re.sub(
+                  "", running_config_output
+              )
+
+              # ==================================
+              # EXIT CONFIG MODE
+              # ==================================
+
+              send_cmd(
+                  shell, "exit",
+                  timeout=5, check_errors=False
+              )
+
+              # ==================================
+              # SAVE CONFIG (persist running-config)
+              # NOTE: "write" was not shown in the
+              # confirmed log for this command;
+              # included for consistency with other
+              # config playbooks. Remove if not
+              # applicable here.
+              # ==================================
+
+              write_output = send_cmd(
+                  shell, "write",
+                  timeout=15, check_errors=False
+              )
+              if re.search(
+                  r'%err|invalid|error|fail',
+                  write_output, re.IGNORECASE
+              ):
+                  raise Exception(
+                      "'write' (save config) rejected "
+                      f"by switch: {write_output.strip()}"
+                  )
+
+              # ==================================
+              # CLOSE SSH / RETURN JSON
+              # ==================================
+
+              shell.close()
+              ssh.close()
+
+              print(json.dumps({
+                  "ip": HOST,
+                  "status": "success",
+              }))
+
+          except Exception as e:
+              try:
+                  if shell:
+                      shell.close()
+                  if ssh:
+                      ssh.close()
+              except:
+                  pass
+
+              print(json.dumps({
+                  "ip": HOST,
+                  "status": "failed",
+                  "error": str(e)
+              }))
+
+    # ==========================================
+    # EXECUTE PYTHON SCRIPT
+    # ==========================================
+
+    - name: Execute DHCP VLAN config script
+      ansible.builtin.command:
+        cmd: >
+          /opt/librenms/librenms-ansible-inventory-plugin/bin/python3
+          /opt/librenms/librenms-ansible-inventory-plugin/tmp/dhcp_vlan_config_exec.py
+      register: dhcp_raw
+      changed_when: false
+      failed_when: false
+
+    # ==========================================
+    # CONVERT JSON RESULT
+    # ==========================================
+
+    - name: Convert DHCP VLAN config result to JSON
+      ansible.builtin.set_fact:
+        dhcp_result: "{{ dhcp_raw.stdout | from_json }}"
+
+    # ==========================================
+    # DISPLAY RESULT
+    # ==========================================
+
+    - name: Display DHCP VLAN config result
+      ansible.builtin.debug:
+        var: dhcp_result
+
+    # ==========================================
+    # SAVE RESULT
+    # ==========================================
+
+    - name: Save DHCP VLAN config result
+      ansible.builtin.copy:
+        dest: "/opt/librenms/librenms-ansible-inventory-plugin/output/\
+              {{ ansible_host }}_dhcp_vlan_config.yml"
+        content: |
+          {{ dhcp_result | to_nice_yaml }}
+
+    # ==========================================
+    # FAIL IF COMMAND FAILED
+    # ==========================================
+
+    - name: Fail if DHCP VLAN config failed
+      ansible.builtin.fail:
+        msg: "{{ dhcp_result.error }}"
+      when: dhcp_result.status == "failed"
+
+    # ==========================================
+    # FINAL MESSAGE
+    # ==========================================
+
+    - name: Display result file
+      ansible.builtin.debug:
+        msg: >
+          DHCP snooping VLAN config applied on
+          {{ ansible_host }} (dhcp={{ new_dhcp_vlan }},
+          arp={{ new_arp_vlan }}, verify-source=
+          {{ new_verify_source_vlan }}). Result saved to
+          output/{{ ansible_host }}_dhcp_vlan_config.yml

@@ -1,0 +1,566 @@
+# ==========================================
+# igmp_snooping_config.yml
+# Created on Aug 31, 2026 by Vikash Kumar (vikash.kumar@alphabrige.tech).
+#
+# Copyright (c), ALPHA BRIDGE, Inc.
+# 357D, Udyog Vihar Industrial Area Phase VI, Sector 37, Gurugram, Haryana.
+#
+# All rights reserved.
+#
+# This software is the confidential and proprietary information of
+# ALPHA BRIDGE, Inc. ("Confidential Information").  You shall not
+# disclose such Confidential Information and shall use it only in
+# accordance with the terms of the license agreement you entered into
+# with ALPHA BRIDGE.
+#
+# =============================================================================
+# Playbook Name : IGMP Snooping Configuration
+# =============================================================================
+#
+# Description:
+# This playbook configures IGMP Snooping settings on AlphaBridge
+# switches through SSH using a Python helper script. It mirrors the fields
+# available on the "IGMP Snooping Configuration"
+#
+#   Destination Looking-up Failure : Transfer Unknown / Discard Unknown
+#   IGMP Snooping                  : Enable / Disable
+#   Enable Auto Query              : Enable / Disable
+#   Snooping Querier Address       : <IPv4 address>
+#   Query Interval(s)              : 10-2147483647
+#   Querier Expiry Interval(s)     : 10-2147483647
+#
+# Features:
+# - Enable or Disable IGMP Snooping
+# - Set Destination Looking-up Failure behaviour (Transfer Unknown / Discard Unknown)
+# - Enable or Disable Auto Query (Snooping Querier)
+# - Configure Snooping Querier Address
+# - Configure Query Interval
+# - Configure Querier Expiry Interval (router age)
+# - Validate user input
+# - Apply configuration on the switch
+# - Verify configuration using running-config
+# - Save switch configuration
+# - Generate JSON output
+# - Save execution result in YAML format
+#
+# Inputs:
+# igmp_snooping:
+#     enable | disable
+#
+# dlf_drop:
+#     discard_unknown | transfer_unknown
+#
+# auto_query:
+#     enable | disable
+#
+# querier_address:
+#     IPv4 address (e.g. 10.0.0.200)
+#
+# query_interval:
+#     10-2147483647
+#
+# querier_expiry_interval:
+#     10-2147483647
+#
+# Example:
+# ansible-playbook -i inventory/192.168.2.245.yml \
+# playbooks/igmp_snooping_config.yml \
+# -e "igmp_snooping=enable dlf_drop=transfer_unknown auto_query=disable \
+#     querier_address=10.0.0.200 query_interval=200 querier_expiry_interval=260"
+#
+# Output:
+# output/<switch_ip>_igmp_snooping_config.yml
+# =============================================================================
+
+- name: IGMP snooping config
+  hosts: alphabridge_devices
+  gather_facts: no
+
+  tasks:
+
+    # ==========================================
+    # Validate IGMP Snooping setting
+    # ==========================================
+
+    - name: Validate igmp_snooping
+      ansible.builtin.assert:
+        that:
+          - igmp_snooping is defined
+          - igmp_snooping | length > 0
+          - igmp_snooping in ['enable', 'disable']
+        fail_msg: "igmp_snooping must be explicitly set to
+          'enable' or 'disable' (e.g. -e \"igmp_snooping=enable\").
+          Check for a missing '=' in your -e argument if you did pass a value."
+
+    # ==========================================
+    # Validate Destination Looking-up Failure setting
+    # ==========================================
+
+    - name: Validate dlf_drop
+      ansible.builtin.assert:
+        that:
+          - dlf_drop is defined
+          - dlf_drop | length > 0
+          - dlf_drop in ['discard_unknown', 'transfer_unknown']
+        fail_msg: "dlf_drop must be explicitly set to
+          'discard_unknown' or 'transfer_unknown' (e.g. -e \"dlf_drop=transfer_unknown\").
+          Check for a missing '=' in your -e argument if you did pass a value."
+
+    # ==========================================
+    # Validate Enable Auto Query setting
+    # ==========================================
+
+    - name: Validate auto_query
+      ansible.builtin.assert:
+        that:
+          - auto_query is defined
+          - auto_query | length > 0
+          - auto_query in ['enable', 'disable']
+        fail_msg: "auto_query must be explicitly set to
+          'enable' or 'disable' (e.g. -e \"auto_query=enable\").
+          Check for a missing '=' in your -e argument if you did pass a value."
+
+    # ==========================================
+    # Validate Snooping Querier Address
+    # ==========================================
+    
+    - name: Validate querier_address
+      ansible.builtin.assert:
+        that:
+          - querier_address is defined
+          - querier_address is ansible.utils.ipv4
+        fail_msg: "querier_address must be a valid IPv4 address
+          (e.g. -e \"querier_address=10.0.0.200\").
+          Check for a missing '=' in your -e argument if you did pass a value."
+
+    # ==========================================
+    # Validate Query Interval
+    # ==========================================
+
+    - name: Validate query_interval
+      ansible.builtin.assert:
+        that:
+          - query_interval is defined
+          - query_interval | length > 0
+          - query_interval | int >= 10
+          - query_interval | int <= 2147483647
+        fail_msg: "query_interval must be a number between 10 and 2147483647
+          (e.g. -e \"query_interval=200\").
+          Check for a missing '=' in your -e argument if you did pass a value."
+
+    # ==========================================
+    # Validate Querier Expiry Interval
+    # ==========================================
+
+    - name: Validate querier_expiry_interval
+      ansible.builtin.assert:
+        that:
+          - querier_expiry_interval is defined
+          - querier_expiry_interval | length > 0
+          - querier_expiry_interval | int >= 10
+          - querier_expiry_interval | int <= 2147483647
+        fail_msg: "querier_expiry_interval must be a number between 10 and
+          2147483647 (e.g. -e \"querier_expiry_interval=260\").
+          Check for a missing '=' in your -e argument if you did pass a value."
+
+    # ==========================================
+    # Create Python SSH Script
+    # ==========================================
+
+    - name: Create Python SSH Script for IGMP snooping config
+      ansible.builtin.copy:
+        dest: "/opt/librenms/librenms-ansible-inventory-plugin/tmp/\
+               igmp_snooping_config_exec.py"
+        mode: '0755'
+        content: |
+          #!/usr/bin/env python3
+
+          import paramiko
+          import time
+          import re
+          import json
+
+          HOST = "{{ ansible_host }}"
+          USER = "{{ ansible_user }}"
+          PASSWORD = "{{ ansible_password }}"
+
+          IGMP_SNOOPING = "{{ igmp_snooping | default('disable') }}"
+          DLF_DROP = "{{ dlf_drop | default('transfer_unknown') }}"
+          AUTO_QUERY = "{{ auto_query | default('disable') }}"
+          QUERIER_ADDRESS = "{{ querier_address }}"
+          QUERY_INTERVAL = "{{ query_interval }}"
+          QUERIER_EXPIRY_INTERVAL = "{{ querier_expiry_interval }}"
+
+
+          def read_until_prompt(shell, prompt_regex, timeout=10):
+              buf = ""
+              end_time = time.time() + timeout
+
+              while time.time() < end_time:
+                  if shell.recv_ready():
+                      chunk = shell.recv(65535).decode(errors="ignore")
+                      buf += chunk
+
+                      if re.search(prompt_regex, buf):
+                          return buf
+                  else:
+                      time.sleep(0.1)
+
+              return buf
+
+
+          def run_config_cmd(shell, command, label, errors):
+              shell.send(command + "\n")
+
+              output = read_until_prompt(
+                  shell,
+                  r'_config#\s*$',
+                  timeout=5
+              )
+
+              if re.search(r'%err|parameter invalid|error', output, re.IGNORECASE):
+                  errors.append(
+                      f"{label} command rejected by switch: {output.strip()}"
+                  )
+
+              return output
+
+
+          ansi_re = re.compile(
+              r'\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])'
+          )
+
+          shell = None
+          ssh = None
+
+          try:
+              # ==========================================
+              # SSH CONNECTION
+              # ==========================================
+
+              ssh = paramiko.SSHClient()
+              ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+
+              ssh.connect(
+                  HOST,
+                  username=USER,
+                  password=PASSWORD,
+                  look_for_keys=False,
+                  allow_agent=False,
+                  timeout=10
+              )
+
+              shell = ssh.invoke_shell()
+              time.sleep(0.5)
+
+              # ==========================================
+              # INITIAL PROMPT
+              # Example:
+              # AS212XTS>
+              # ==========================================
+
+              initial_output = read_until_prompt(
+                  shell,
+                  r'[>#]\s*$',
+                  timeout=5
+              )
+
+              # ==========================================
+              # ENABLE
+              # Example:
+              # AS212XTS#
+              # ==========================================
+
+              shell.send("enable\n")
+
+              enable_output = read_until_prompt(
+                  shell,
+                  r'[>#]\s*$',
+                  timeout=5
+              )
+
+              # ==========================================
+              # CONFIG
+              # Example:
+              # AS212XTS_config#
+              # ==========================================
+
+              shell.send("config\n")
+
+              config_output = read_until_prompt(
+                  shell,
+                  r'_config#\s*$',
+                  timeout=5
+              )
+
+              # ==========================================
+              # DISABLE PAGING
+              # ==========================================
+
+              shell.send("terminal length 0\n")
+
+              terminal_output = read_until_prompt(
+                  shell,
+                  r'_config#\s*$',
+                  timeout=5
+              )
+
+              errors = []
+
+              # ==========================================
+              # IGMP SNOOPING (GLOBAL)
+              #
+              # Command:
+              # ip igmp-snooping
+              # no ip igmp-snooping
+              # ==========================================
+
+              igmp_snooping_cmd = (
+                  "ip igmp-snooping" if IGMP_SNOOPING == "enable"
+                  else "no ip igmp-snooping"
+              )
+
+              igmp_snooping_output = run_config_cmd(
+                  shell, igmp_snooping_cmd, "IGMP snooping", errors
+              )
+
+              # ==========================================
+              # DESTINATION LOOKING-UP FAILURE (DLF-DROP)
+              #
+              # Command:
+              # ip igmp-snooping dlf-drop
+              # no ip igmp-snooping dlf-drop
+              # ==========================================
+
+              dlf_drop_cmd = (
+                  "ip igmp-snooping dlf-drop" if DLF_DROP == "discard_unknown"
+                  else "no ip igmp-snooping dlf-drop"
+              )
+
+              dlf_drop_output = run_config_cmd(
+                  shell, dlf_drop_cmd, "Destination looking-up failure", errors
+              )
+
+              # ==========================================
+              # ENABLE AUTO QUERY (SNOOPING QUERIER)
+              #
+              # Command:
+              # ip igmp-snooping querier
+              # no ip igmp-snooping querier
+              # ==========================================
+
+              auto_query_cmd = (
+                  "ip igmp-snooping querier" if AUTO_QUERY == "enable"
+                  else "no ip igmp-snooping querier"
+              )
+
+              auto_query_output = run_config_cmd(
+                  shell, auto_query_cmd, "Enable auto query", errors
+              )
+
+              # ==========================================
+              # SNOOPING QUERIER ADDRESS
+              #
+              # Command:
+              # ip igmp-snooping querier address <ip>
+              # ==========================================
+
+              querier_address_cmd = (
+                  f"ip igmp-snooping querier address {QUERIER_ADDRESS}"
+              )
+
+              querier_address_output = run_config_cmd(
+                  shell, querier_address_cmd, "Snooping querier address", errors
+              )
+
+              # ==========================================
+              # QUERY INTERVAL
+              #
+              # Command:
+              # ip igmp-snooping querier querier-timer <seconds>
+              # ==========================================
+
+              query_interval_cmd = (
+                  f"ip igmp-snooping querier querier-timer {QUERY_INTERVAL}"
+              )
+
+              query_interval_output = run_config_cmd(
+                  shell, query_interval_cmd, "Query interval", errors
+              )
+
+              # ==========================================
+              # QUERIER EXPIRY INTERVAL (ROUTER AGE)
+              #
+              # Command:
+              # ip igmp-snooping timer router-age <seconds>
+              # ==========================================
+
+              querier_expiry_cmd = (
+                  f"ip igmp-snooping timer router-age {QUERIER_EXPIRY_INTERVAL}"
+              )
+
+              querier_expiry_output = run_config_cmd(
+                  shell, querier_expiry_cmd, "Querier expiry interval", errors
+              )
+
+              if errors:
+                  raise Exception("; ".join(errors))
+
+              # ==========================================
+              # SHOW RUNNING CONFIG
+              # ==========================================
+
+              shell.send("show running-config non-interface\n")
+
+              running_config_output = read_until_prompt(
+                  shell,
+                  r'_config#\s*$',
+                  timeout=5
+              )
+
+              # ==========================================
+              # VERIFY - SHOW IP IGMP-SNOOPING
+              # ==========================================
+
+              shell.send("show ip igmp-snooping\n")
+
+              verify_output = read_until_prompt(
+                  shell,
+                  r'_config#\s*$',
+                  timeout=5
+              )
+
+              # ==========================================
+              # WRITE CONFIGURATION
+              # ==========================================
+
+              shell.send("write\n")
+
+              write_output = read_until_prompt(
+                  shell,
+                  r'[>#]\s*$',
+                  timeout=10
+              )
+
+              # ==========================================
+              # EXIT
+              # ==========================================
+
+              shell.send("exit\n")
+
+              exit_output = read_until_prompt(
+                  shell,
+                  r'[>#]\s*$',
+                  timeout=5
+              )
+
+              # ==========================================
+              # CLEAN ANSI CHARACTERS
+              # ==========================================
+
+              enable_output = ansi_re.sub("", enable_output)
+              config_output = ansi_re.sub("", config_output)
+              igmp_snooping_output = ansi_re.sub("", igmp_snooping_output)
+              dlf_drop_output = ansi_re.sub("", dlf_drop_output)
+              auto_query_output = ansi_re.sub("", auto_query_output)
+              querier_address_output = ansi_re.sub("", querier_address_output)
+              query_interval_output = ansi_re.sub("", query_interval_output)
+              querier_expiry_output = ansi_re.sub("", querier_expiry_output)
+              running_config_output = ansi_re.sub("", running_config_output)
+              verify_output = ansi_re.sub("", verify_output)
+              write_output = ansi_re.sub("", write_output)
+              exit_output = ansi_re.sub("", exit_output)
+
+              # ==========================================
+              # CLOSE SSH
+              # ==========================================
+
+              shell.close()
+              ssh.close()
+
+              # ==========================================
+              # RETURN JSON
+              # ==========================================
+
+              print(json.dumps({
+                  "ip": HOST,
+                  "status": "success"
+              }))
+
+          except Exception as e:
+              try:
+                  if shell:
+                      shell.close()
+
+                  if ssh:
+                      ssh.close()
+              except:
+                  pass
+
+              print(json.dumps({
+                  "ip": HOST,
+                  "status": "failed",
+                  "error": str(e)
+              }))
+
+    # ==========================================
+    # EXECUTE PYTHON SCRIPT
+    # ==========================================
+
+    - name: Execute IGMP snooping config script
+      ansible.builtin.command:
+        cmd: >
+          /opt/librenms/librenms-ansible-inventory-plugin/bin/python3
+          /opt/librenms/librenms-ansible-inventory-plugin/tmp/igmp_snooping_config_exec.py
+      register: igmp_raw
+      changed_when: false
+      failed_when: false
+
+    # ==========================================
+    # CONVERT JSON RESULT
+    # ==========================================
+
+    - name: Convert IGMP snooping result to JSON
+      ansible.builtin.set_fact:
+        igmp_result: "{{ igmp_raw.stdout | from_json }}"
+
+    # ==========================================
+    # DISPLAY RESULT
+    # ==========================================
+
+    - name: Display IGMP snooping config result
+      ansible.builtin.debug:
+        var: igmp_result
+
+    # ==========================================
+    # SAVE RESULT
+    # ==========================================
+
+    - name: Save IGMP snooping config result
+      ansible.builtin.copy:
+        dest: "/opt/librenms/librenms-ansible-inventory-plugin/output/\
+               {{ ansible_host }}_igmp_snooping_config.yml"
+        content: |
+          {{ igmp_result | to_nice_yaml }}
+
+    # ==========================================
+    # FAIL IF IGMP SNOOPING CONFIG FAILED
+    # ==========================================
+
+    - name: Fail if IGMP snooping config failed
+      ansible.builtin.fail:
+        msg: "{{ igmp_result.error }}"
+      when: igmp_result.status == "failed"
+
+    # ==========================================
+    # FINAL MESSAGE
+    # ==========================================
+
+    - name: Display result file
+      ansible.builtin.debug:
+        msg: "IGMP snooping config (igmp_snooping={{ igmp_snooping }},
+          dlf_drop={{ dlf_drop }}, auto_query={{ auto_query }},
+          querier_address={{ querier_address }}, query_interval={{ query_interval }},
+          querier_expiry_interval={{ querier_expiry_interval }}) applied on
+          {{ ansible_host }}. Result saved to
+          output/{{ ansible_host }}_igmp_snooping_config.yml"

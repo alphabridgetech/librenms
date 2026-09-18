@@ -1,0 +1,331 @@
+# ==========================================
+# dhcp_port_list_config.yml
+# Created on Sept 4, 2026 by Vikash Kumar (vikash.kumar@alphabrige.tech).
+#
+# Copyright (c), ALPHA BRIDGE, Inc.
+# 357D, Udyog Vihar Industrial Area Phase VI, Sector 37, Gurugram, Haryana.
+#
+# All rights reserved.
+#
+# This software is the confidential and proprietary information of ALPHA BRIDGE,
+# Inc. ("Confidential Information"). You shall not disclose such Confidential
+# Information and shall use it only in accordance with the terms of the
+# license agreement you entered into with ALPHA BRIDGE.
+#
+# =============================================================================
+# Playbook Name : DHCP Manual Binding Port Configuration
+# =============================================================================
+#
+#Description:
+# Configures DHCP Snooping global settings on AlphaBridge
+# switches over SSH.
+#
+# Input vars:
+#  mac_address	- enter the mac address (eg.f4:ee:08:ea:ea:1d)
+#  ip_address   - enter the ip address  (eg. 192.168.2.10)
+#  port         - enter the port        (eg. g0/1)
+#  vlan_id      - enter vlan id         (eg. 10)
+#
+#Example:
+# ansible-playbook -i inventory/192.168.2.245.yml \
+#   playbooks/dhcp_port_list_config.yml \
+#   -e mac_address="f4:ee:08:ea:ea:1d" -e ip_address=192.168.2.10 \
+#   -e port=g0/2 \
+#   -e vlan_id=100
+#
+# Output:
+# output/<switch_ip>_dhcp_port_list_config.yml
+
+
+- name: Add DHCP port list Entry on network device
+  hosts: alphabridge_devices
+  gather_facts: no
+
+  tasks:
+
+    # ==========================================
+    # Validate IP Address
+    # ==========================================
+
+    - name: Validate IP Address
+      ansible.builtin.assert:
+        that:
+          - ip_address is defined
+          - ip_address is ansible.utils.ipv4
+        fail_msg: "Invalid IPv4 address: {{ ip_address }}"
+
+    # ==========================================
+    # Validate MAC Address
+    # ==========================================
+
+    - name: Validate MAC Address
+      ansible.builtin.assert:
+        that:
+          - mac_address is defined
+          - "mac_address is match('^([0-9A-Fa-f]{2}:){5}[0-9A-Fa-f]{2}$')"
+        fail_msg: "mac_address must be in the format XX:XX:XX:XX:XX:XX"
+
+    # ==========================================
+    # Validate VLAN INTERFACE
+    # ==========================================
+
+    - name: Validate VLAN_ID
+      ansible.builtin.assert:
+        that:
+          - vlan_id is defined
+          - vlan_id | int >= 1
+          - vlan_id | int <= 4094
+        fail_msg: "interface_vlan must be between 1 and 4094"
+
+    # ==========================================
+    # Create Python SSH Script
+    # ==========================================
+
+    - name: Create Python SSH Script for ARP creation
+      ansible.builtin.copy:
+        dest: "/opt/librenms/librenms-ansible-inventory-plugin/tmp/\
+               dhcp_port_list_config_exec.py"
+        mode: '0755'
+        content: |
+          #!/usr/bin/env python3
+
+          import paramiko
+          import time
+          import re
+          import json
+
+          HOST = "{{ ansible_host }}"
+          USER = "{{ ansible_user }}"
+          PASSWORD = "{{ ansible_password }}"
+
+          IP_ADDRESS = "{{ ip_address }}"
+          MAC_ADDRESS = "{{ mac_address }}"
+          VLAN_ID = "{{ vlan_id }}"
+          PORT_ID = "{{port}}"
+
+          def read_until_prompt(shell, prompt_regex, timeout=10):
+              buf = ""
+              end_time = time.time() + timeout
+
+              while time.time() < end_time:
+                  if shell.recv_ready():
+                      chunk = shell.recv(65535).decode(errors="ignore")
+                      buf += chunk
+
+                      if re.search(prompt_regex, buf):
+                          return buf
+                  else:
+                      time.sleep(0.1)
+
+              return buf
+
+
+          ansi_re = re.compile(
+              r'\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])'
+          )
+
+          shell = None
+          ssh = None
+
+          try:
+              # ==========================================
+              # SSH CONNECTION
+              # ==========================================
+
+              ssh = paramiko.SSHClient()
+              ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+
+              ssh.connect(
+                  HOST,
+                  username=USER,
+                  password=PASSWORD,
+                  look_for_keys=False,
+                  allow_agent=False,
+                  timeout=10
+              )
+
+              shell = ssh.invoke_shell()
+              time.sleep(0.5)
+
+              # ==========================================
+              # INITIAL PROMPT
+              # Example:
+              # AS212XTS>
+              # ==========================================
+
+              initial_output = read_until_prompt(
+                  shell,
+                  r'[>#]\s*$',
+                  timeout=5
+              )
+
+              # ==========================================
+              # ENABLE
+              # Example:
+              # AS212XTS#
+              # ==========================================
+
+              shell.send("enable\n")
+
+              enable_output = read_until_prompt(
+                  shell,
+                  r'[>#]\s*$',
+                  timeout=5
+              )
+
+              # ==========================================
+              # CONFIG
+              # Example:
+              # AS212XTS_config#
+              # ==========================================
+
+              shell.send("config\n")
+
+              config_output = read_until_prompt(
+                  shell,
+                  r'_config#\s*$',
+                  timeout=5
+              )
+              # ==========================================
+              # ADD ARP ENTRY
+              #
+              # Command:
+              # arp <IP> <MAC> vlan <VLAN>
+              #
+              # Example:
+              # arp 192.168.2.100 78:18:ec:d9:6c:77 vlan 20
+              # ==========================================
+
+              port_command = (
+                  f"ip source binding {MAC_ADDRESS} "
+                  f"{IP_ADDRESS} interface {PORT_ID} vlan {VLAN_ID}"
+              )
+
+              shell.send(port_command + "\n")
+
+              port_output = read_until_prompt(
+                  shell,
+                  r'_config#\s*$',
+                  timeout=5
+              )
+              # ==========================================
+              # WRITE CONFIGURATION
+              # ==========================================
+
+              shell.send("write\n")
+
+              write_output = read_until_prompt(
+                  shell,
+                  r'[>#]\s*$',
+                  timeout=10
+              )
+              # ==========================================
+              # EXIT
+              # ==========================================
+
+              shell.send("exit\n")
+
+              exit_output = read_until_prompt(
+                  shell,
+                  r'[>#]\s*$',
+                  timeout=5
+              )
+              # ==========================================
+              # CLEAN ANSI CHARACTERS
+              # ==========================================
+
+              enable_output = ansi_re.sub("", enable_output)
+              config_output = ansi_re.sub("", config_output)
+              port_output = ansi_re.sub("", port_output)
+              write_output = ansi_re.sub("", write_output)
+              exit_output = ansi_re.sub("", exit_output)
+
+              # ==========================================
+              # CLOSE SSH
+              # ==========================================
+
+              shell.close()
+              ssh.close()
+
+              # ==========================================
+              # RETURN JSON
+              # ==========================================
+
+              print(json.dumps({
+                  "ip": HOST,
+                  "status": "success"
+              }))
+
+          except Exception as e:
+              try:
+                  if shell:
+                      shell.close()
+
+                  if ssh:
+                      ssh.close()
+              except:
+                  pass
+
+              print(json.dumps({
+                  "ip": HOST,
+                  "status": "failed",
+                  "error": str(e)
+              }))
+    # ==========================================
+    # EXECUTE PYTHON SCRIPT
+    # ==========================================
+
+    - name: Execute PORT List creation script
+      ansible.builtin.command:
+        cmd: >
+          /opt/librenms/librenms-ansible-inventory-plugin/bin/python3
+          /opt/librenms/librenms-ansible-inventory-plugin/tmp/dhcp_port_list_config_exec.py
+      register: port_raw
+      changed_when: false
+      failed_when: false
+
+    # ==========================================
+    # CONVERT JSON RESULT
+    # ==========================================
+
+    - name: Convert PORT List result to JSON
+      ansible.builtin.set_fact:
+        port_result: "{{ port_raw.stdout | from_json }}"
+
+    # ==========================================
+    # DISPLAY RESULT
+    # ==========================================
+
+    - name: Display PORT List creation result
+      ansible.builtin.debug:
+        var: port_result
+
+    # ==========================================
+    # SAVE RESULT
+    # ==========================================
+
+    - name: Save PORT List creation result
+      ansible.builtin.copy:
+        dest: "/opt/librenms/librenms-ansible-inventory-plugin/output/\
+               {{ ansible_host }}_dhcp_port_list_config.yml"
+        content: |
+          {{ port_result | to_nice_yaml }}
+
+    # ==========================================
+    # FAIL IF ARP CREATION FAILED
+    # ==========================================
+
+    - name: Fail if PORT List creation failed
+      ansible.builtin.fail:
+        msg: "{{ port_result.error }}"
+      when: port_result.status == "failed"
+
+    # ==========================================
+    # FINAL MESSAGE
+    # ==========================================
+
+    - name: Display result file
+      ansible.builtin.debug:
+        msg: "PORT List entry {{ ip_address }} -> {{ mac_address }} VLAN_ID
+             {{ vlan_id }} created.
+             Result saved to output/{{ ansible_host }}_dhcp_port_list_config.yml"

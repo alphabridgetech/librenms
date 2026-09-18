@@ -1101,39 +1101,304 @@ public function getmtu($hostname)
     }
 
     #------------------------------------------------------------
-    #                    GET PDP (last applied)
+    #                    GVRP INTERFACE (SHOW)
     #------------------------------------------------------------
-    // setpdp.yml has no corresponding "show pdp" SSH read - the device
-    // doesn't expose a way to read PDP state back through this playbook.
-    // So instead of a live fetch, this returns whatever we ourselves last
-    // successfully pushed via setpdp() below (cached in our own small YAML
-    // file, not written by ansible). "cached" here always means "this is
-    // the last value applied through this page", never "stale, refreshing".
-    public function getpdp($hostname)
+    public function getgvrp($hostname)
     {
-        $yamlFile = "{$this->pluginPath}/output/{$hostname}_pdp_last_applied.yml";
-
         if (!function_exists('yaml_parse_file')) {
             return $this->error("PHP YAML extension missing", null);
         }
 
-        if (!file_exists($yamlFile)) {
+        $ports = $this->getEligibleGvrpPorts($hostname);
+        if (empty($ports)) {
+            return $this->error("No GigaEthernet/TGigaEthernet ports found for this device in LibreNMS");
+        }
+
+        $playbook = "{$this->pluginPath}/playbooks/gvrp/gvrp_interface_config_show.yml";
+        $hosts    = "{$this->pluginPath}/hosts/{$hostname}.yml";
+        $yamlFile = "{$this->pluginPath}/output/{$hostname}_gvrp_interface_config_show.yml";
+        $extraVars = ['interfaces' => implode(',', $ports)];
+
+        // Same cache-then-refresh-in-background pattern as Rate Limit - serve
+        // the last known result immediately, kick off a fresh SSH fetch for
+        // next time instead of making every page load wait on a live round-trip.
+        if (file_exists($yamlFile)) {
+            $cached = yaml_parse_file($yamlFile);
+            $entries = $this->formatGvrpEntries($cached);
+
+            $this->runAnsibleAsync($playbook, $hosts, $extraVars);
+
             return $this->success([
-                "found" => false,
-                "pdp"   => null,
+                "ports"   => $ports,
+                "entries" => $entries,
+                "cached"  => true,
             ]);
+        }
+
+        $output = $this->runAnsiblejs($playbook, $hosts, $extraVars);
+
+        if (!file_exists($yamlFile)) {
+            return $this->error("GVRP output file not found", $output);
+        }
+
+        $data = yaml_parse_file($yamlFile);
+        $entries = $this->formatGvrpEntries($data);
+
+        return $this->success([
+            "ports"   => $ports,
+            "entries" => $entries,
+            "cached"  => false,
+        ]);
+    }
+
+    /**
+     * All of this device's GigaEthernet/TGigaEthernet port names, straight
+     * from LibreNMS's own `ports` table - same convention as Rate Limit.
+     */
+    private function getEligibleGvrpPorts(string $hostname): array
+    {
+        $device = Device::where('hostname', $hostname)->first();
+        if (!$device) {
+            return [];
+        }
+
+        return $device->ports()
+            ->pluck('ifName')
+            ->filter(fn ($name) => is_string($name) && preg_match('/^(GigaEthernet|TGigaEthernet)/i', $name))
+            ->values()
+            ->all();
+    }
+
+    /**
+     * Normalize gvrp_interface_config_show.yml's `gvrp_entries` list (each a
+     * {port, status} dict) into a port-name-keyed status map.
+     */
+    private function formatGvrpEntries(?array $data): array
+    {
+        if (!is_array($data) || empty($data['gvrp_entries']) || !is_array($data['gvrp_entries'])) {
+            return [];
+        }
+
+        $entries = [];
+        foreach ($data['gvrp_entries'] as $row) {
+            if (!is_array($row) || empty($row['port'])) {
+                continue;
+            }
+
+            $entries[$row['port']] = $row['status'] ?? 'Enable';
+        }
+
+        return $entries;
+    }
+
+    #------------------------------------------------------------
+    #                    GVRP INTERFACE (SET)
+    #------------------------------------------------------------
+    public function setgvrp(Request $request, $hostname)
+    {
+        $data = $request->validate([
+            'interface'   => 'required|string',
+            'gvrp_status' => 'required|in:Enable,Disable',
+        ]);
+
+        $playbook = "{$this->pluginPath}/playbooks/gvrp/gvrp_interface_config_set.yml";
+        $hosts    = "{$this->pluginPath}/hosts/{$hostname}.yml";
+
+        $output = $this->runAnsiblejs($playbook, $hosts, [
+            'interface'   => $data['interface'],
+            'gvrp_status' => $data['gvrp_status'],
+        ]);
+
+        // Refresh the GET cache synchronously so the table the frontend
+        // reloads right after this call already reflects the change,
+        // instead of showing stale data until the next background refresh.
+        $ports = $this->getEligibleGvrpPorts($hostname);
+        if (!empty($ports)) {
+            $this->runAnsiblejs(
+                "{$this->pluginPath}/playbooks/gvrp/gvrp_interface_config_show.yml",
+                $hosts,
+                ['interfaces' => implode(',', $ports)]
+            );
+        }
+
+        if (stripos($output, 'FAILED!') !== false || stripos($output, '"status": "failed"') !== false) {
+            $reason = $this->extractPortConfigFailureReason($output);
+            return $this->error($reason ?: "GVRP SET failed", $output);
+        }
+
+        return $this->success([
+            "message" => "GVRP configuration updated for {$data['interface']}",
+            "raw"     => $output,
+        ]);
+    }
+
+    #------------------------------------------------------------
+    #                    GVRP GLOBAL (SHOW)
+    #------------------------------------------------------------
+    public function getgvrpglobal($hostname)
+    {
+        if (!function_exists('yaml_parse_file')) {
+            return $this->error("PHP YAML extension missing", null);
+        }
+
+        $playbook = "{$this->pluginPath}/playbooks/gvrp/gvrp_global_details.yml";
+        $hosts    = "{$this->pluginPath}/hosts/{$hostname}.yml";
+        $yamlFile = "{$this->pluginPath}/output/{$hostname}_gvrp_global_details.yml";
+
+        if (file_exists($yamlFile)) {
+            $cached = yaml_parse_file($yamlFile);
+
+            $this->runAnsibleAsync($playbook, $hosts);
+
+            return $this->success([
+                "gvrp_global"  => $cached['gvrp_global_configuration'] ?? null,
+                "dynamic_vlan" => $cached['dynamic_vlan_pruning'] ?? null,
+                "cached"       => true,
+            ]);
+        }
+
+        $output = $this->runAnsiblejs($playbook, $hosts);
+
+        if (!file_exists($yamlFile)) {
+            return $this->error("GVRP global output file not found", $output);
         }
 
         $data = yaml_parse_file($yamlFile);
 
         return $this->success([
-            "found" => true,
-            "pdp"   => $data ?: null,
+            "gvrp_global"  => $data['gvrp_global_configuration'] ?? null,
+            "dynamic_vlan" => $data['dynamic_vlan_pruning'] ?? null,
+            "cached"       => false,
         ]);
     }
 
     #------------------------------------------------------------
-    #                    SET PDP
+    #                    GVRP GLOBAL (SET)
+    #------------------------------------------------------------
+    public function setgvrpglobal(Request $request, $hostname)
+    {
+        // The global_config playbook asserts BOTH vars are present and
+        // explicitly 'enable'/'disable' (lowercase) - unlike the interface
+        // set playbook's Enable/Disable, so both must always be sent
+        // together even when the user only meant to change one.
+        $data = $request->validate([
+            'gvrp_global'  => 'required|in:enable,disable',
+            'dynamic_vlan' => 'required|in:enable,disable',
+        ]);
+
+        $playbook = "{$this->pluginPath}/playbooks/gvrp/gvrp_global_config.yml";
+        $hosts    = "{$this->pluginPath}/hosts/{$hostname}.yml";
+
+        $output = $this->runAnsiblejs($playbook, $hosts, [
+            'gvrp_global'  => $data['gvrp_global'],
+            'dynamic_vlan' => $data['dynamic_vlan'],
+        ]);
+
+        // Refresh the GET cache synchronously.
+        $this->runAnsiblejs("{$this->pluginPath}/playbooks/gvrp/gvrp_global_details.yml", $hosts);
+
+        if (stripos($output, 'FAILED!') !== false || stripos($output, '"status": "failed"') !== false) {
+            $reason = $this->extractPortConfigFailureReason($output);
+            return $this->error($reason ?: "GVRP Global SET failed", $output);
+        }
+
+        return $this->success([
+            "message" => "Global GVRP configuration updated",
+            "raw"     => $output,
+        ]);
+    }
+
+    #------------------------------------------------------------
+    #                    GET PDP (GLOBAL, live)
+    #------------------------------------------------------------
+    // getpdp.yml now does a genuine "show running-config" SSH read (it
+    // didn't used to - the device had no way to report PDP state back
+    // through this playbook, so this used to serve a self-written
+    // "last applied" cache instead).
+    //
+    // If an output file already exists from a previous read, serve it
+    // immediately and kick off a live refresh in the background, same as
+    // Rate Limit/GVRP - the earlier all-synchronous version made every
+    // tab open/apply wait a full SSH round trip even when a perfectly
+    // good recent value was already sitting on disk. The frontend follows
+    // up with a "peek" request (below) once the background refresh has
+    // had time to finish, so the page still ends up showing the true
+    // live value without the user needing to notice and click Refresh.
+    public function getpdp(Request $request, $hostname)
+    {
+        if (!function_exists('yaml_parse_file')) {
+            return $this->error("PHP YAML extension missing", null);
+        }
+
+        $playbook = "{$this->pluginPath}/playbooks/pdp/getpdp.yml";
+        $hosts    = "{$this->pluginPath}/hosts/{$hostname}.yml";
+        $yamlFile = "{$this->pluginPath}/output/{$hostname}_pdp.yml";
+
+        // "peek": just re-read whatever is currently on disk - never runs
+        // ansible itself. Used by the frontend's automatic follow-up
+        // request after it already triggered a background refresh below,
+        // so reopening/polling the tab doesn't stack up extra SSH runs.
+        if ($request->boolean('peek')) {
+            if (!file_exists($yamlFile)) {
+                return $this->error("PDP output file not found", null);
+            }
+
+            $data = yaml_parse_file($yamlFile);
+
+            return $this->success([
+                "found"  => true,
+                "pdp"    => $this->formatPdpGlobal($data),
+                "cached" => false,
+            ]);
+        }
+
+        if (file_exists($yamlFile)) {
+            $cached = yaml_parse_file($yamlFile);
+
+            $this->runAnsibleAsync($playbook, $hosts);
+
+            return $this->success([
+                "found"  => true,
+                "pdp"    => $this->formatPdpGlobal($cached),
+                "cached" => true,
+            ]);
+        }
+
+        $output = $this->runAnsiblejs($playbook, $hosts);
+
+        if (!file_exists($yamlFile)) {
+            return $this->error("PDP output file not found", $output);
+        }
+
+        $data = yaml_parse_file($yamlFile);
+
+        return $this->success([
+            "found"  => true,
+            "pdp"    => $this->formatPdpGlobal($data),
+            "cached" => false,
+        ]);
+    }
+
+    /**
+     * getpdp.yml reports pdp_state as "Open"/"Close" - lowercase it to
+     * match the <select> values (open/close) the blade already uses.
+     */
+    private function formatPdpGlobal(?array $data): ?array
+    {
+        if (!is_array($data)) {
+            return null;
+        }
+
+        return [
+            'pdp_state'   => strtolower($data['pdp_state'] ?? 'close'),
+            'holdtime'    => $data['holdtime'] ?? null,
+            'tx_interval' => $data['tx_interval'] ?? null,
+            'version'     => $data['version'] ?? null,
+        ];
+    }
+
+    #------------------------------------------------------------
+    #                    SET PDP (GLOBAL)
     #------------------------------------------------------------
     public function setpdp(Request $request, $hostname)
     {
@@ -1152,8 +1417,12 @@ public function getmtu($hostname)
         $playbook = "{$this->pluginPath}/playbooks/pdp/setpdp.yml";
         $hosts    = "{$this->pluginPath}/hosts/{$hostname}.yml";
 
+        // setpdp.yml's assert requires exactly "Open"/"Close" - the
+        // frontend's <select> sends lowercase values (to match what
+        // formatPdpGlobal() shows on GET), so normalize case here rather
+        // than forwarding whatever the client sent as-is.
         $extraVars = array_filter([
-            'pdp_state'   => $data['pdp_state'],
+            'pdp_state'   => ucfirst(strtolower($data['pdp_state'])),
             'holdtime'    => $data['holdtime'] ?? null,
             'tx_interval' => $data['tx_interval'] ?? null,
             'version'     => $data['version'] ?? null,
@@ -1168,23 +1437,107 @@ public function getmtu($hostname)
             return $this->error("PDP configuration failed", $output);
         }
 
-        // No live "show pdp" exists to re-read from the device, so record
-        // what we just successfully applied for getpdp() to serve back.
-        try {
-            $yamlFile = "{$this->pluginPath}/output/{$hostname}_pdp_last_applied.yml";
-            $lastApplied = [
-                'pdp_state'   => strtolower($data['pdp_state']),
-                'holdtime'    => $data['holdtime'] ?? null,
-                'tx_interval' => $data['tx_interval'] ?? null,
-                'version'     => $data['version'] ?? null,
-            ];
-            file_put_contents($yamlFile, yaml_emit($lastApplied));
-        } catch (\Exception $e) {
-            \Log::warning("Failed to cache last-applied PDP config: " . $e->getMessage());
-        }
+        // Refresh the GET cache synchronously so the form the frontend
+        // reloads right after this call already reflects the change.
+        $this->runAnsiblejs("{$this->pluginPath}/playbooks/pdp/getpdp.yml", $hosts);
 
         return $this->success([
             "message" => "PDP configuration updated successfully",
+            "raw"     => $output,
+        ]);
+    }
+
+    #------------------------------------------------------------
+    #                    GET PDP (INTERFACE)
+    #------------------------------------------------------------
+    public function getpdpinterface($hostname)
+    {
+        if (!function_exists('yaml_parse_file')) {
+            return $this->error("PHP YAML extension missing", null);
+        }
+
+        $playbook = "{$this->pluginPath}/playbooks/pdp/getpdpinterfaceconfi.yml";
+        $hosts    = "{$this->pluginPath}/hosts/{$hostname}.yml";
+        $yamlFile = "{$this->pluginPath}/output/{$hostname}_pdp_interface_get.yml";
+
+        // Always fetch live - a stale-first cache confused the GUI into
+        // showing old data with no visible indication it was out of date
+        // (same issue fixed for the global PDP settings tab).
+        $output = $this->runAnsiblejs($playbook, $hosts);
+
+        if (!file_exists($yamlFile)) {
+            return $this->error("PDP interface output file not found", $output);
+        }
+
+        $data = yaml_parse_file($yamlFile);
+        $entries = $this->formatPdpInterfaceEntries($data);
+
+        return $this->success([
+            "entries" => $entries,
+            "cached"  => false,
+        ]);
+    }
+
+    /**
+     * Normalize getpdpinterfaceconfi.yml's `pdp_interfaces` list (each a
+     * {interface, status} dict) into an interface-name-keyed status map.
+     */
+    private function formatPdpInterfaceEntries(?array $data): array
+    {
+        if (!is_array($data) || empty($data['pdp_interfaces']) || !is_array($data['pdp_interfaces'])) {
+            return [];
+        }
+
+        $entries = [];
+        foreach ($data['pdp_interfaces'] as $row) {
+            if (!is_array($row) || empty($row['interface'])) {
+                continue;
+            }
+
+            $entries[$row['interface']] = $row['status'] ?? 'Enable';
+        }
+
+        return $entries;
+    }
+
+    #------------------------------------------------------------
+    #                    SET PDP (INTERFACE)
+    #------------------------------------------------------------
+    public function setpdpinterface(Request $request, $hostname)
+    {
+        $data = $request->validate([
+            'interface' => 'required|string',
+            'status'    => 'required|in:Enable,Disable',
+        ]);
+
+        $playbook = "{$this->pluginPath}/playbooks/pdp/setpdpinterfaceconfi.yml";
+        $hosts    = "{$this->pluginPath}/hosts/{$hostname}.yml";
+        $yamlFile = "{$this->pluginPath}/output/{$hostname}_pdp_interface.yml";
+
+        $output = $this->runAnsiblejs($playbook, $hosts, [
+            'interface' => $data['interface'],
+            'status'    => $data['status'],
+        ]);
+
+        // Refresh the GET cache synchronously so the table the frontend
+        // reloads right after this call already reflects the change.
+        $this->runAnsiblejs(
+            "{$this->pluginPath}/playbooks/pdp/getpdpinterfaceconfi.yml",
+            $hosts
+        );
+
+        // Unlike the other SET playbooks, this one's own script prints
+        // "SUCCESS" without a task that echoes it to the ansible-playbook
+        // console output, so that text is never visible in $output at
+        // default verbosity - check the structured result it wrote to
+        // disk (result: SUCCESS|FAILED) instead of string-matching $output.
+        $result = file_exists($yamlFile) ? yaml_parse_file($yamlFile) : null;
+        if (!is_array($result) || ($result['result'] ?? null) !== 'SUCCESS') {
+            return $this->error("PDP interface configuration failed", $output);
+        }
+
+        return $this->success([
+            "message" => "PDP configuration updated for {$data['interface']}",
             "raw"     => $output,
         ]);
     }

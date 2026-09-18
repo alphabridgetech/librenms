@@ -1,0 +1,411 @@
+---
+- name: Get Voice VLAN MAC Address Configuration
+  hosts: alphabridge_devices
+  gather_facts: false
+
+  vars:
+    output_dir: "/opt/librenms/librenms-ansible-inventory-plugin/output"
+    temp_dir: "/opt/librenms/librenms-ansible-inventory-plugin/tmp"
+
+  tasks:
+
+    # =====================================================
+    # Create temporary directory
+    # =====================================================
+    - name: Create temporary directory
+      ansible.builtin.file:
+        path: "{{ temp_dir }}"
+        state: directory
+        mode: "0755"
+      delegate_to: localhost
+
+    # =====================================================
+    # Create output directory
+    # =====================================================
+    - name: Create output directory
+      ansible.builtin.file:
+        path: "{{ output_dir }}"
+        state: directory
+        mode: "0755"
+      delegate_to: localhost
+
+    # =====================================================
+    # Create Voice VLAN GET Python script
+    # =====================================================
+    - name: Create Voice VLAN GET Python script
+      ansible.builtin.copy:
+        dest: "{{ temp_dir }}/get_voice_vlan.py"
+        mode: "0755"
+        content: |
+          import paramiko
+          import time
+          import re
+          import yaml
+          import os
+          import sys
+
+          # =====================================================
+          # Device details
+          # =====================================================
+          HOST = "{{ ansible_host }}"
+          USERNAME = "{{ ansible_user }}"
+          PASSWORD = "{{ ansible_password }}"
+
+          OUTPUT_FILE = (
+              "/opt/librenms/librenms-ansible-inventory-plugin/output/"
+              + HOST
+              + "_voice_vlan.yml"
+          )
+
+          # =====================================================
+          # Helper function
+          # =====================================================
+          def wait_for_prompt(shell, timeout=10):
+
+              output = ""
+
+              end_time = time.time() + timeout
+
+              while time.time() < end_time:
+
+                  if shell.recv_ready():
+
+                      data = shell.recv(65535)
+
+                      if not data:
+                          raise Exception("Socket is closed")
+
+                      output += data.decode(
+                          "utf-8",
+                          errors="ignore"
+                      )
+
+                      if re.search(
+                          r"(?:>|#)\s*$",
+                          output
+                      ):
+                          return output
+
+                  else:
+                      time.sleep(0.2)
+
+              return output
+
+          # =====================================================
+          # SSH connection
+          # =====================================================
+          client = paramiko.SSHClient()
+          client.set_missing_host_key_policy(
+              paramiko.AutoAddPolicy()
+          )
+
+          try:
+
+              # =================================================
+              # Connect to device
+              # =================================================
+              client.connect(
+                  hostname=HOST,
+                  username=USERNAME,
+                  password=PASSWORD,
+                  look_for_keys=False,
+                  allow_agent=False,
+                  timeout=20,
+                  banner_timeout=20,
+                  auth_timeout=20
+              )
+
+              # =================================================
+              # Open interactive shell
+              # =================================================
+              shell = client.invoke_shell(
+                  term="vt100",
+                  width=200,
+                  height=1000
+              )
+
+              time.sleep(1)
+
+              if shell.closed:
+                  raise Exception(
+                      "SSH interactive shell closed immediately"
+                  )
+
+              # =================================================
+              # Get initial prompt
+              # =================================================
+              shell.send("\n")
+
+              initial_output = wait_for_prompt(
+                  shell,
+                  timeout=10
+              )
+
+              # =================================================
+              # Enter enable mode
+              #
+              # production> -> production#
+              # =================================================
+              if ">" in initial_output:
+
+                  shell.send("enable\n")
+
+                  wait_for_prompt(
+                      shell,
+                      timeout=10
+                  )
+
+              # =================================================
+              # Enter configuration mode
+              #
+              # production# -> production_config#
+              # =================================================
+              shell.send("config\n")
+
+              wait_for_prompt(
+                  shell,
+                  timeout=10
+              )
+
+              # =================================================
+              # Exit configuration mode
+              #
+              # production_config# -> production#
+              # =================================================
+              shell.send("exit\n")
+
+              wait_for_prompt(
+                  shell,
+                  timeout=10
+              )
+
+              # =================================================
+              # Disable paging
+              # =================================================
+              shell.send("terminal length 0\n")
+
+              wait_for_prompt(
+                  shell,
+                  timeout=5
+              )
+
+              # =================================================
+              # Get running configuration
+              # =================================================
+              shell.send("show running-config\n")
+
+              running_config = ""
+
+              end_time = time.time() + 20
+
+              while time.time() < end_time:
+
+                  if shell.recv_ready():
+
+                      data = shell.recv(65535)
+
+                      if not data:
+                          raise Exception(
+                              "Socket is closed while reading "
+                              "running-config"
+                          )
+
+                      running_config += data.decode(
+                          "utf-8",
+                          errors="ignore"
+                      )
+
+                      # Stop after CLI prompt
+                      if re.search(
+                          r"(?:production|production_config)[>#]\s*$",
+                          running_config
+                      ):
+                          break
+
+                  else:
+                      time.sleep(0.2)
+
+              # =================================================
+              # Voice VLAN list
+              # =================================================
+              voice_vlan_mac_addresses = []
+
+              # =================================================
+              # Parse Voice VLAN configuration
+              #
+              # voice-vlan mac-address
+              # 001a.2b3c.4d5e
+              # mask
+              # 0000.0000.0000
+              # =================================================
+              voice_vlan_pattern = re.compile(
+                  r"^\s*voice-vlan\s+mac-address\s+"
+                  r"([0-9A-Fa-f]{4}\.[0-9A-Fa-f]{4}\.[0-9A-Fa-f]{4})"
+                  r"\s+mask\s+"
+                  r"([0-9A-Fa-f]{4}\.[0-9A-Fa-f]{4}\.[0-9A-Fa-f]{4})"
+                  r"\s*$",
+                  re.IGNORECASE
+              )
+
+              # =================================================
+              # Parse running configuration
+              # =================================================
+              for raw_line in running_config.splitlines():
+
+                  line = raw_line.strip()
+
+                  if not line:
+                      continue
+
+                  match = voice_vlan_pattern.match(line)
+
+                  if match:
+
+                      mac_address = match.group(1)
+                      mac_mask = match.group(2)
+
+                      voice_vlan_mac_addresses.append({
+                          "mac_address": mac_address,
+                          "mask": mac_mask
+                      })
+
+              # =================================================
+              # Remove duplicate entries
+              # =================================================
+              unique_entries = []
+              seen = set()
+
+              for item in voice_vlan_mac_addresses:
+
+                  key = (
+                      item["mac_address"].lower(),
+                      item["mask"].lower()
+                  )
+
+                  if key not in seen:
+
+                      unique_entries.append(item)
+                      seen.add(key)
+
+              voice_vlan_mac_addresses = unique_entries
+
+              # =================================================
+              # Final result
+              # =================================================
+              result = {
+                  "status": "SUCCESS",
+                  "device_ip": HOST,
+                  "voice_vlan_mac_addresses":
+                      voice_vlan_mac_addresses
+              }
+
+              # =================================================
+              # Create output directory
+              # =================================================
+              os.makedirs(
+                  os.path.dirname(OUTPUT_FILE),
+                  exist_ok=True
+              )
+
+              # =================================================
+              # Write YAML output
+              # =================================================
+              with open(
+                  OUTPUT_FILE,
+                  "w",
+                  encoding="utf-8"
+              ) as file:
+
+                  yaml.safe_dump(
+                      result,
+                      file,
+                      sort_keys=False,
+                      default_flow_style=False
+                  )
+
+              # =================================================
+              # Print result
+              # =================================================
+              print(
+                  yaml.safe_dump(
+                      result,
+                      sort_keys=False,
+                      default_flow_style=False
+                  )
+              )
+
+              print("SUCCESS")
+
+              client.close()
+
+              sys.exit(0)
+
+          except Exception as exc:
+
+              result = {
+                  "status": "FAILED",
+                  "device_ip": HOST,
+                  "reason": str(exc)
+              }
+
+              try:
+
+                  os.makedirs(
+                      os.path.dirname(OUTPUT_FILE),
+                      exist_ok=True
+                  )
+
+                  with open(
+                      OUTPUT_FILE,
+                      "w",
+                      encoding="utf-8"
+                  ) as file:
+
+                      yaml.safe_dump(
+                          result,
+                          file,
+                          sort_keys=False
+                      )
+
+              except Exception:
+                  pass
+
+              print(
+                  yaml.safe_dump(
+                      result,
+                      sort_keys=False
+                  )
+              )
+
+              print("FAILED")
+
+              try:
+                  client.close()
+              except Exception:
+                  pass
+
+              sys.exit(1)
+
+      delegate_to: localhost
+
+    # =====================================================
+    # Run Voice VLAN GET
+    # =====================================================
+    - name: Run Voice VLAN GET
+      ansible.builtin.command:
+        cmd: >
+          /opt/librenms/librenms-ansible-inventory-plugin/bin/python3
+          {{ temp_dir }}/get_voice_vlan.py
+      register: voice_vlan_result
+      delegate_to: localhost
+      changed_when: false
+      failed_when: >
+        voice_vlan_result.rc != 0 or
+        'SUCCESS' not in (voice_vlan_result.stdout | default(''))
+
+    # =====================================================
+    # Display result
+    # =====================================================
+    - name: Display Voice VLAN GET result
+      ansible.builtin.debug:
+        var: voice_vlan_result.stdout

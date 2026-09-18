@@ -1,0 +1,499 @@
+# ==========================================
+# dhcp_global_config.yml
+# Created on Sept 4, 2026 by Vikash Kumar (vikash.kumar@alphabrige.tech).
+#
+# Copyright (c), ALPHA BRIDGE, Inc.
+# 357D, Udyog Vihar Industrial Area Phase VI, Sector 37, Gurugram, Haryana.
+#
+# All rights reserved.
+#
+# This software is the confidential and proprietary information of ALPHA BRIDGE,
+# Inc. ("Confidential Information"). You shall not disclose such Confidential
+# Information and shall use it only in accordance with the terms of the
+# license agreement you entered into with ALPHA BRIDGE.
+#
+# =============================================================================
+# Playbook Name : DHCP Snooping Global Configuration
+# =============================================================================
+#
+# Description:
+# Configures DHCP Snooping global settings on AlphaBridge
+# switches over SSH.
+#
+# Input vars:
+#   dhcp_snooping          -  "Enable" or "Disable"
+#   update_interval        -  2 to 1440 (minutes) - "Update
+#                             Interval To Save the Port
+#                             Binding Relationship"
+#   filter_upper_interface - "Enable" or "Disable" -
+#                             "Filter Packet Port From
+#                             Upper Interface"
+#   option82_format        - "Disable", "snmp-ifindex",
+#                             "hn-type", "cm-type",
+#                             "hw-type", or "manual" -
+#                             "Option82 Information Format"
+#
+# When dhcp_snooping = Disable, only "no ip dhcp-relay
+# snooping" is sent - the other three fields are skipped
+# since they don't apply with snooping turned off.
+#
+# Example:
+# ansible-playbook -i inventory/192.168.2.245.yml \
+#   playbooks/dhcp_global_config.yml \
+#   -e dhcp_snooping=Enable -e update_interval=50 \
+#   -e filter_upper_interface=Enable \
+#   -e option82_format=hw-type
+#
+# Output:
+# output/<switch_ip>_dhcp_global_config.yml
+# =============================================================================
+
+- name: DHCP snooping global configuration
+  hosts: alphabridge_devices
+  gather_facts: no
+
+  tasks:
+
+    # ==========================================
+    # Validate required input variables are present
+    # ==========================================
+
+    - name: Validate required input variables are provided
+      ansible.builtin.assert:
+        that:
+          - dhcp_snooping is defined
+          - update_interval is defined
+          - filter_upper_interface is defined
+          - option82_format is defined
+        fail_msg: >
+          You must pass dhcp_snooping, update_interval,
+          filter_upper_interface and option82_format.
+
+    # ==========================================
+    # Validate dhcp_snooping
+    # ==========================================
+
+    - name: Normalize dhcp_snooping
+      ansible.builtin.set_fact:
+        dhcp_snooping_normalized: >-
+          {{ dhcp_snooping | lower | trim }}
+
+    - name: Validate dhcp_snooping is Enable or Disable
+      ansible.builtin.assert:
+        that:
+          - dhcp_snooping_normalized in ['enable', 'disable']
+        fail_msg: >
+          dhcp_snooping must be 'Enable' or 'Disable'
+          (got: {{ dhcp_snooping }})
+
+    # ==========================================
+    # Validate update_interval (2-1440)
+    # ==========================================
+
+    - name: Validate update_interval is numeric
+      ansible.builtin.assert:
+        that:
+          - update_interval | string is match('^[0-9]+$')
+        fail_msg: >
+          update_interval must be a whole number
+          (got: {{ update_interval }})
+
+    - name: Validate update_interval is in range 2-1440
+      ansible.builtin.assert:
+        that:
+          - (update_interval | int) >= 2
+          - (update_interval | int) <= 1440
+        fail_msg: >
+          update_interval must be between 2 and 1440
+          (got: {{ update_interval }})
+
+    # ==========================================
+    # Validate filter_upper_interface
+    # ==========================================
+
+    - name: Normalize filter_upper_interface
+      ansible.builtin.set_fact:
+        filter_upper_interface_normalized: >-
+          {{ filter_upper_interface | lower | trim }}
+
+    - name: >-
+        Validate filter_upper_interface is Enable or
+        Disable
+      ansible.builtin.assert:
+        that:
+          - >-
+            filter_upper_interface_normalized in [
+            'enable', 'disable']
+        fail_msg: >
+          filter_upper_interface must be 'Enable' or
+          'Disable' (got: {{ filter_upper_interface }})
+
+    # ==========================================
+    # Validate option82_format
+    # ==========================================
+
+    - name: Normalize option82_format
+      ansible.builtin.set_fact:
+        option82_format_normalized: >-
+          {{ option82_format | lower | trim }}
+
+    - name: Validate option82_format is a recognized value
+      ansible.builtin.assert:
+        that:
+          - >-
+            option82_format_normalized in [
+            'disable', 'snmp-ifindex', 'hn-type',
+            'cm-type', 'hw-type', 'manual']
+        fail_msg: >
+          option82_format must be one of 'Disable',
+          'snmp-ifindex', 'hn-type', 'cm-type',
+          'hw-type', 'manual' (got: {{ option82_format }})
+
+    # ==========================================
+    # Create Python SSH Script
+    # ==========================================
+
+    - name: >-
+        Create Python SSH Script for DHCP global config
+      ansible.builtin.copy:
+        dest: "/opt/librenms/librenms-ansible-inventory-plugin/tmp/dhcp_global_config_exec.py"
+        mode: '0755'
+        content: |
+          #!/usr/bin/env python3
+
+          import paramiko
+          import time
+          import re
+          import json
+
+          HOST = "{{ ansible_host }}"
+          USER = "{{ ansible_user }}"
+          PASSWORD = "{{ ansible_password }}"
+
+          DHCP_SNOOPING = "{{ dhcp_snooping_normalized }}"
+          UPDATE_INTERVAL = "{{ update_interval }}"
+          FILTER_UPPER = (
+              "{{ filter_upper_interface_normalized }}"
+          )
+          OPTION82_FORMAT = "{{ option82_format_normalized }}"
+
+          PROMPT_RE = r'[>#]\s*$'
+
+          VALID_FORMATS = {
+              "disable", "snmp-ifindex", "hn-type",
+              "cm-type", "hw-type", "manual",
+          }
+
+
+          def read_until_prompt(shell, prompt_re, timeout=10):
+              buf = ""
+              end_time = time.time() + timeout
+
+              while time.time() < end_time:
+                  if shell.recv_ready():
+                      chunk = shell.recv(65535).decode(
+                          errors="ignore"
+                      )
+                      buf += chunk
+
+                      if re.search(prompt_re, buf):
+                          return buf
+                  else:
+                      time.sleep(0.1)
+
+              return buf
+
+
+          def send_cmd(
+              shell, cmd, timeout=10, check_errors=True
+          ):
+              """Send a CLI command, wait for the prompt,
+              optionally raise on switch-reported errors.
+              Returns the raw output."""
+              shell.send(
+                  cmd if cmd.endswith("\n") else cmd + "\n"
+              )
+              output = read_until_prompt(
+                  shell, PROMPT_RE, timeout=timeout
+              )
+
+              if check_errors and re.search(
+                  r'%err|invalid|error', output, re.IGNORECASE
+              ):
+                  raise Exception(
+                      f"'{cmd.strip()}' rejected by switch: "
+                      f"{output.strip()}"
+                  )
+
+              return output
+
+
+          shell = None
+          ssh = None
+
+          try:
+              # ==================================
+              # RE-VALIDATE INPUTS (defense in
+              # depth, in case this script is ever
+              # invoked outside the playbook)
+              # ==================================
+
+              if DHCP_SNOOPING not in ("enable", "disable"):
+                  raise Exception(
+                      f"Invalid dhcp_snooping "
+                      f"'{DHCP_SNOOPING}'"
+                  )
+
+              if not (
+                  UPDATE_INTERVAL.isdigit()
+                  and 2 <= int(UPDATE_INTERVAL) <= 1440
+              ):
+                  raise Exception(
+                      f"Invalid update_interval "
+                      f"'{UPDATE_INTERVAL}': must be "
+                      f"2-1440"
+                  )
+
+              if FILTER_UPPER not in ("enable", "disable"):
+                  raise Exception(
+                      f"Invalid filter_upper_interface "
+                      f"'{FILTER_UPPER}'"
+                  )
+
+              if OPTION82_FORMAT not in VALID_FORMATS:
+                  raise Exception(
+                      f"Invalid option82_format "
+                      f"'{OPTION82_FORMAT}'"
+                  )
+
+              # ==================================
+              # SSH CONNECTION
+              # ==================================
+
+              ssh = paramiko.SSHClient()
+              ssh.set_missing_host_key_policy(
+                  paramiko.AutoAddPolicy()
+              )
+
+              ssh.connect(
+                  HOST,
+                  username=USER,
+                  password=PASSWORD,
+                  look_for_keys=False,
+                  allow_agent=False,
+                  timeout=10
+              )
+
+              shell = ssh.invoke_shell()
+              time.sleep(0.5)
+
+              # ==================================
+              # LOGIN BANNER / INITIAL PROMPT
+              # ==================================
+
+              read_until_prompt(shell, PROMPT_RE, timeout=5)
+
+              # ==================================
+              # ENABLE, DISABLE PAGING, ENTER CONFIG
+              # ==================================
+
+              send_cmd(
+                  shell, "enable",
+                  timeout=5, check_errors=False
+              )
+              send_cmd(
+                  shell, "terminal length 0",
+                  timeout=5, check_errors=False
+              )
+              send_cmd(shell, "config", timeout=10)
+
+              # ==================================
+              # APPLY DHCP SNOOPING GLOBAL CONFIG
+              # ==================================
+
+              if DHCP_SNOOPING == "enable":
+                  send_cmd(
+                      shell, "ip dhcp-relay snooping",
+                      timeout=10
+                  )
+
+                  # NOTE: present in the confirmed log but
+                  # not mapped to a UI field - included for
+                  # fidelity, purpose unconfirmed.
+                  send_cmd(
+                      shell,
+                      "no ip dhcp-relay snooping db-file",
+                      timeout=10, check_errors=False
+                  )
+
+                  send_cmd(
+                      shell,
+                      "no ip dhcp-relay snooping "
+                      "write-time",
+                      timeout=10, check_errors=False
+                  )
+                  send_cmd(
+                      shell,
+                      "ip dhcp-relay snooping write-time "
+                      f"{UPDATE_INTERVAL}",
+                      timeout=10
+                  )
+
+                  if FILTER_UPPER == "enable":
+                      send_cmd(
+                          shell,
+                          "ip dhcp-relay snooping "
+                          "upper_filter",
+                          timeout=10
+                      )
+                  else:
+                      # NOTE: disable form not confirmed
+                      # in a device log.
+                      send_cmd(
+                          shell,
+                          "no ip dhcp-relay snooping "
+                          "upper_filter",
+                          timeout=10, check_errors=False
+                      )
+
+                  if OPTION82_FORMAT == "disable":
+                      # NOTE: disable form not confirmed
+                      # in a device log.
+                      send_cmd(
+                          shell,
+                          "no ip dhcp-relay snooping "
+                          "information option format",
+                          timeout=10, check_errors=False
+                      )
+                  else:
+                      send_cmd(
+                          shell,
+                          "ip dhcp-relay snooping "
+                          "information option format "
+                          f"{OPTION82_FORMAT}",
+                          timeout=10
+                      )
+              else:
+                  send_cmd(
+                      shell, "no ip dhcp-relay snooping",
+                      timeout=10
+                  )
+
+              # ==================================
+              # EXIT CONFIG MODE
+              # ==================================
+
+              send_cmd(
+                  shell, "exit",
+                  timeout=5, check_errors=False
+              )
+
+              # ==================================
+              # SAVE CONFIG (persist running-config)
+              # NOTE: "write" was not shown in the
+              # confirmed log for this command;
+              # included for consistency with other
+              # config playbooks. Remove if not
+              # applicable here.
+              # ==================================
+
+              write_output = send_cmd(
+                  shell, "write",
+                  timeout=15, check_errors=False
+              )
+              if re.search(
+                  r'%err|invalid|error|fail',
+                  write_output, re.IGNORECASE
+              ):
+                  raise Exception(
+                      "'write' (save config) rejected "
+                      f"by switch: {write_output.strip()}"
+                  )
+
+              # ==================================
+              # CLOSE SSH / RETURN JSON
+              # ==================================
+
+              shell.close()
+              ssh.close()
+
+              print(json.dumps({
+                  "ip": HOST,
+                  "status": "success",
+              }))
+
+          except Exception as e:
+              try:
+                  if shell:
+                      shell.close()
+                  if ssh:
+                      ssh.close()
+              except:
+                  pass
+
+              print(json.dumps({
+                  "ip": HOST,
+                  "status": "failed",
+                  "error": str(e)
+              }))
+
+    # ==========================================
+    # EXECUTE PYTHON SCRIPT
+    # ==========================================
+
+    - name: Execute DHCP global config script
+      ansible.builtin.command:
+        cmd: >
+          /opt/librenms/librenms-ansible-inventory-plugin/bin/python3
+          /opt/librenms/librenms-ansible-inventory-plugin/tmp/dhcp_global_config_exec.py
+      register: dhcp_raw
+      changed_when: false
+      failed_when: false
+
+    # ==========================================
+    # CONVERT JSON RESULT
+    # ==========================================
+
+    - name: Convert DHCP global config result to JSON
+      ansible.builtin.set_fact:
+        dhcp_result: "{{ dhcp_raw.stdout | from_json }}"
+
+    # ==========================================
+    # DISPLAY RESULT
+    # ==========================================
+
+    - name: Display DHCP global config result
+      ansible.builtin.debug:
+        var: dhcp_result
+
+    # ==========================================
+    # SAVE RESULT
+    # ==========================================
+
+    - name: Save DHCP global config result
+      ansible.builtin.copy:
+        dest: "/opt/librenms/librenms-ansible-inventory-plugin/output/\
+              {{ ansible_host }}_dhcp_global_config.yml"
+        content: |
+          {{ dhcp_result | to_nice_yaml }}
+
+    # ==========================================
+    # FAIL IF COMMAND FAILED
+    # ==========================================
+
+    - name: Fail if DHCP global config failed
+      ansible.builtin.fail:
+        msg: "{{ dhcp_result.error }}"
+      when: dhcp_result.status == "failed"
+
+    # ==========================================
+    # FINAL MESSAGE
+    # ==========================================
+
+    - name: Display result file
+      ansible.builtin.debug:
+        msg: >
+          DHCP snooping global config applied on
+          {{ ansible_host }} (dhcp_snooping=
+          {{ dhcp_snooping }}). Result saved to
+          output/{{ ansible_host }}_dhcp_global_config.yml

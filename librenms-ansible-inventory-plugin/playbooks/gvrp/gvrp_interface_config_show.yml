@@ -1,6 +1,6 @@
 # ==========================================
 # gvrp_interface_config_show.yml
-# Created on Aug 31, 2026 by Vikash Kumar (vikash.kumar@alphabrige.tech).
+# Created on Sep 17, 2026 by Vikash Kumar (vikash.kumar@alphabrige.tech).
 #
 # Copyright (c), ALPHA BRIDGE, Inc.
 # 357D, Udyog Vihar Industrial Area Phase VI, Sector 37, Gurugram, Haryana.
@@ -8,277 +8,287 @@
 # All rights reserved.
 #
 # This software is the confidential and proprietary information of
-# ALPHA BRIDGE, Inc. ("Confidential Information").  You shall not
+# ALPHA BRIDGE, Inc. ("Confidential Information"). You shall not
 # disclose such Confidential Information and shall use it only in
 # accordance with the terms of the license agreement you entered into
 # with ALPHA BRIDGE.
 #
 # =============================================================================
-# Playbook Name : Show GVRP Interface Configuration
+# Playbook Name : Show GVRP Interface Configuration (Selected Interfaces)
 # =============================================================================
 #
 # Description:
-# This playbook retrieves the per-interface GVRP (GARP VLAN Registration
-# Protocol) status from AlphaBridge switches through SSH using a Python
-# helper script, by parsing "show running-config".
+# Read "show running-config" and return the GVRP status of ONLY the interfaces
+# requested by the user. No fixed interface family, port list, or model check.
 #
-# GVRP is enabled by default on every switchport. It only shows up in the
-# running-config when it has been explicitly disabled, e.g.:
+# User inputs:
+#   -e 'interface=g0/1'
+#   -e 'interface=gigaethernet0/1'
+#   -e 'interface=GigaEthernet0/1'
+#   -e 'interface=tg0/1'
+#   -e 'interfaces=g0/1,tg0/1'
 #
-#   interface GigaEthernet0/1
-#    no gvrp
-#    ...
-#   !
+# Name matching (case-insensitive):
+#   1. Match the complete interface name returned by the switch, if possible.
+#   2. Otherwise, split each name before its FIRST digit. Match the port part
+#      exactly and match the user-supplied type as a prefix of the switch type.
+#      Example: g0/1 -> GigaEthernet0/1; tg0/1 -> TGigaEthernet0/1.
+#   3. Reject missing or ambiguous matches instead of returning the wrong port.
+#      An arbitrary unrelated alias cannot be resolved without a switch-defined
+#      mapping; use its actual name or an unambiguous leading abbreviation.
 #
-# So the parsing rule is:
-#   - interface block contains "no gvrp"  -> status: Disable
-#   - interface block has no "gvrp" line  -> status: Enable
+# Status rule:
+#   "no gvrp" inside an interface block -> Disable
+#   No "no gvrp" inside its block       -> Enable (device default)
 #
-# Only switchport-style interfaces (GigaEthernet*) are included; VLAN
-# (SVI), Null0, and Port-aggregator interfaces are skipped since they are
-# not shown on the GVRP GUI configuration page.
-#
-# Features:
-# - Connect to Switch
-# - Execute "show running-config"
-# - Parse per-interface GVRP status
-# - Convert to Structured JSON
-# - Save YAML Report
-# - Return Parsed Results
-#
-# CLI Command:
-# show running-config
+# No regex is used to identify interface blocks, GVRP lines, or port families.
+# The switch's returned interface names determine which types exist.
 #
 # Example:
-# ansible-playbook \
-# -i inventory/192.168.2.245.yml \
-# playbooks/gvrp_interface_config_show.yml
+#   ansible-playbook -i inventory/192.168.3.1.yml \
+#     playbooks/gvrp/gvrp_interface_config_show.yml \
+#     -e 'interfaces=g0/1,tg0/1'
 #
 # Output:
-# output/<switch_ip>_gvrp_interface_config_show.yml
+#   output/<switch_ip>_gvrp_interface_config_show.yml
 # =============================================================================
 
 - name: Show GVRP interface configuration
   hosts: alphabridge_devices
   gather_facts: false
 
+  vars:
+    # Correct when this playbook is located in playbooks/.
+    project_root: "{{ playbook_dir }}/../.."
+    requested_interfaces: "{{ interfaces | default(interface | default('')) }}"
+
+  pre_tasks:
+    - name: Require interface or interfaces input
+      ansible.builtin.assert:
+        that:
+          - interface is defined or interfaces is defined
+          - not (interface is defined and interfaces is defined)
+          - requested_interfaces | string | trim | length > 0
+        fail_msg: "Provide -e 'interface=g0/1' or -e 'interfaces=g0/1,tg0/1'."
+
+    - name: Ensure script and report directories exist
+      ansible.builtin.file:
+        path: "{{ project_root }}/{{ item }}"
+        state: directory
+        mode: '0755'
+      loop:
+        - tmp
+        - output
+
   tasks:
-
     # ==========================================
-    # Create Python SSH Script
+    # Create Python SSH script
     # ==========================================
-
     - name: Create Python SSH Script for GVRP interface show
       ansible.builtin.copy:
-        dest: "//opt/librenms/librenms-ansible-inventory-plugin/tmp/gvrp_interface_config_show_exec.py"
-        mode: '0755'
+        dest: "/opt/librenms/librenms-ansible-inventory-plugin/tmp/gvrp_interface_config_show_exec.py"
+        mode: '0700'
         content: |
           #!/usr/bin/env python3
 
-          import paramiko
-          import time
-          import re
           import json
+          import re
+          import time
+          import paramiko
 
-          HOST = "{{ ansible_host }}"
-          USER = "{{ ansible_user }}"
-          PASSWORD = "{{ ansible_password }}"
+          HOST = {{ ansible_host | to_json }}
+          PORT = int({{ ansible_port | default(22) | to_json }})
+          USER = {{ ansible_user | to_json }}
+          PASSWORD = {{ ansible_password | to_json }}
+          INTERFACE_INPUT = {{ requested_interfaces | to_json }}
 
-
-          def read_until_prompt(shell, prompt_regex, timeout=10):
-              buf = ""
-              end_time = time.time() + timeout
-
-              while time.time() < end_time:
-                  if shell.recv_ready():
-                      chunk = shell.recv(65535).decode(errors="ignore")
-                      buf += chunk
-
-                      if re.search(prompt_regex, buf):
-                          return buf
-                  else:
-                      time.sleep(0.1)
-
-              return buf
-
-
-          ansi_re = re.compile(
-              r'\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])'
+          # Regex is used only for terminal control/prompt handling, not for
+          # interface names, block identification, or GVRP configuration lines.
+          ansi_re = re.compile(r'\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])')
+          prompt_re = re.compile(r'[>#]\s*\Z')
+          cli_error_re = re.compile(
+              r'(?im)^\s*%\s*(?:invalid|error|incomplete|ambiguous|'
+              r'unknown|unrecognized)\b|\b(?:invalid input|unknown command)\b'
           )
 
-          shell = None
+          def read_until_prompt(shell, stage, timeout=30):
+              buffer = ""
+              deadline = time.monotonic() + timeout
+              while time.monotonic() < deadline:
+                  if shell.recv_ready():
+                      buffer += shell.recv(65535).decode(errors="ignore")
+                      cleaned = ansi_re.sub("", buffer).replace("\r", "")
+                      if prompt_re.search(cleaned.rstrip()):
+                          return cleaned
+                  else:
+                      time.sleep(0.1)
+              raise TimeoutError(f"Timed out waiting for prompt during {stage}")
+
+          def run_command(shell, command, timeout=30):
+              shell.send(command + "\n")
+              output = read_until_prompt(shell, command, timeout)
+              if cli_error_re.search(output):
+                  raise RuntimeError(f"Switch rejected {command!r}: {output}")
+              return output
+
+          def parse_interfaces(running_config):
+              """Collect all interface blocks; no type whitelist or name regex."""
+              entries = []
+              current_name = None
+              has_no_gvrp = False
+
+              def finish_block():
+                  if current_name is not None:
+                      entries.append({
+                          "port": current_name,
+                          "status": "Disable" if has_no_gvrp else "Enable",
+                      })
+
+              for raw_line in running_config.splitlines():
+                  line = raw_line.strip()
+                  parts = line.split(maxsplit=1)
+
+                  # Find the literal 'interface' command, whatever follows it.
+                  if len(parts) == 2 and parts[0].casefold() == "interface":
+                      finish_block()
+                      current_name = parts[1].strip()
+                      has_no_gvrp = False
+                      continue
+
+                  if line == "!":
+                      finish_block()
+                      current_name = None
+                      has_no_gvrp = False
+                      continue
+
+                  if current_name is not None and line.casefold() == "no gvrp":
+                      has_no_gvrp = True
+
+              finish_block()  # Also handle output without a final '!'.
+              return entries
+
+          def name_parts(name):
+              """Split an interface name before its first digit, without regex."""
+              for position, char in enumerate(name):
+                  if char.isdigit():
+                      return name[:position].casefold(), name[position:].casefold()
+              return name.casefold(), ""
+
+          def select_interfaces(entries, user_input):
+              requested = [value.strip() for value in user_input.split(",")]
+              if not requested or any(not value for value in requested):
+                  raise ValueError("Provide a non-empty interface name for each entry")
+
+              selected = []
+              for wanted in requested:
+                  # Prefer exact names before considering abbreviated aliases.
+                  exact = [entry for entry in entries
+                           if entry["port"].casefold() == wanted.casefold()]
+                  if exact:
+                      matches = exact
+                  else:
+                      wanted_type, wanted_port = name_parts(wanted)
+                      matches = []
+                      for entry in entries:
+                          actual_type, actual_port = name_parts(entry["port"])
+                          if (wanted_type and wanted_port
+                                  and actual_port == wanted_port
+                                  and actual_type.startswith(wanted_type)):
+                              matches.append(entry)
+
+                  if not matches:
+                      raise ValueError(
+                          f"Interface {wanted!r} was not found in running-config"
+                      )
+                  if len(matches) != 1:
+                      names = [entry["port"] for entry in matches]
+                      raise ValueError(
+                          f"Interface {wanted!r} is ambiguous; matches: {names}"
+                      )
+                  if all(entry["port"] != matches[0]["port"] for entry in selected):
+                      selected.append(matches[0])
+              return selected
+
           ssh = None
+          shell = None
+          stage = "SSH connection"
 
           try:
-              # ==========================================
-              # SSH CONNECTION
-              # ==========================================
-
               ssh = paramiko.SSHClient()
               ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
-
               ssh.connect(
-                  HOST,
-                  username=USER,
-                  password=PASSWORD,
-                  look_for_keys=False,
-                  allow_agent=False,
-                  timeout=10
+                  HOST, port=PORT, username=USER, password=PASSWORD,
+                  look_for_keys=False, allow_agent=False,
+                  timeout=20, auth_timeout=20, banner_timeout=20
               )
-
               shell = ssh.invoke_shell()
-              time.sleep(0.5)
+              read_until_prompt(shell, "initial prompt", timeout=10)
 
-              # ==========================================
-              # INITIAL PROMPT
-              # ==========================================
+              stage = "enable mode"
+              run_command(shell, "enable", timeout=10)
 
-              initial_output = read_until_prompt(shell, r'[>#]\s*$', timeout=5)
+              stage = "disable paging"
+              run_command(shell, "terminal length 0", timeout=10)
 
-              # ==========================================
-              # ENABLE
-              # ==========================================
+              stage = "show running-config"
+              config = run_command(shell, "show running-config", timeout=45)
 
-              shell.send("enable\n")
-              enable_output = read_until_prompt(shell, r'[>#]\s*$', timeout=5)
-
-              # ==========================================
-              # DISABLE PAGING
-              # ==========================================
-
-              shell.send("terminal length 0\n")
-              terminal_output = read_until_prompt(shell, r'[>#]\s*$', timeout=5)
-
-              # ==========================================
-              # SHOW RUNNING-CONFIG
-              # ==========================================
-
-              show_command = "show running-config"
-              shell.send(show_command + "\n")
-              running_config_output = read_until_prompt(
-                  shell, r'[>#]\s*$', timeout=15
-              )
-
-              # ==========================================
-              # EXIT
-              # ==========================================
-
-              shell.send("exit\n")
-              exit_output = read_until_prompt(shell, r'[>#]\s*$', timeout=5)
-
-              # ==========================================
-              # CLEAN ANSI CHARACTERS
-              # ==========================================
-
-              enable_output = ansi_re.sub("", enable_output)
-              running_config_output = ansi_re.sub("", running_config_output)
-              exit_output = ansi_re.sub("", exit_output)
-
-              # ==========================================
-              # PARSE PER-INTERFACE GVRP STATUS
-              #
-              # Walk the running-config line by line. Track the current
-              # "interface <name>" block until the closing "!" line, and
-              # check whether "no gvrp" appears inside that block.
-              # ==========================================
-
-              gvrp_entries = []
-              lines = running_config_output.splitlines()
-
-              current_port = None
-              current_has_no_gvrp = False
-
-              interface_start_re = re.compile(r'^interface\s+(\S+)\s*$')
-              no_gvrp_re = re.compile(r'^\s*no\s+gvrp\s*$', re.IGNORECASE)
-              eligible_port_re = re.compile(
-                  r'^GigaEthernet|TGigaEthernet', re.IGNORECASE
-              )
-
-              for raw_line in lines:
-                  line = raw_line.rstrip()
-                  stripped = line.strip()
-
-                  iface_match = interface_start_re.match(stripped)
-
-                  if iface_match:
-                      current_port = iface_match.group(1)
-                      current_has_no_gvrp = False
-                      continue
-
-                  if stripped == "!":
-                      if current_port and eligible_port_re.match(current_port):
-                          status = (
-                              "Disable" if current_has_no_gvrp else "Enable"
-                          )
-                          gvrp_entries.append({
-                              "port": current_port,
-                              "status": status
-                          })
-
-                      current_port = None
-                      current_has_no_gvrp = False
-                      continue
-
-                  if current_port and no_gvrp_re.match(stripped):
-                      current_has_no_gvrp = True
-
-              # ==========================================
-              # CLOSE SSH
-              # ==========================================
-
-              shell.close()
-              ssh.close()
-
-              # ==========================================
-              # RETURN JSON
-              # ==========================================
+              stage = "parse requested interfaces"
+              all_entries = parse_interfaces(config)
+              gvrp_entries = select_interfaces(all_entries, INTERFACE_INPUT)
 
               print(json.dumps({
                   "ip": HOST,
                   "gvrp_entries": gvrp_entries,
-                  "status": "success"
+                  "status": "success",
               }, indent=4))
 
-          except Exception as e:
-              try:
-                  if shell:
-                      shell.close()
-                  if ssh:
-                      ssh.close()
-              except Exception:
-                  pass
-
+          except Exception as exc:
               print(json.dumps({
                   "ip": HOST,
                   "status": "failed",
-                  "error": str(e)
+                  "stage": stage,
+                  "error": str(exc),
               }))
 
-    # ==========================================
-    # EXECUTE PYTHON SCRIPT
-    # ==========================================
+          finally:
+              if shell is not None:
+                  shell.close()
+              if ssh is not None:
+                  ssh.close()
+      no_log: true
 
+    # ==========================================
+    # Execute Python script and convert JSON
+    # ==========================================
     - name: Execute GVRP interface show script
       ansible.builtin.command:
-        cmd: >
-          //opt/librenms/librenms-ansible-inventory-plugin/bin/python3
-          //opt/librenms/librenms-ansible-inventory-plugin/tmp/gvrp_interface_config_show_exec.py
+        argv:
+          - /opt/librenms/librenms-ansible-inventory-plugin/bin/python3
+          - /opt/librenms/librenms-ansible-inventory-plugin/tmp/gvrp_interface_config_show_exec.py
       register: gvrp_raw
       changed_when: false
       failed_when: false
 
-    # ==========================================
-    # CONVERT JSON RESULT
-    # ==========================================
+    - name: Fail if script returned no JSON
+      ansible.builtin.fail:
+        msg: >-
+          GVRP SHOW script did not return JSON. rc={{ gvrp_raw.rc }};
+          stderr={{ gvrp_raw.stderr }}
+      when: gvrp_raw.stdout | trim | length == 0
 
     - name: Convert GVRP interface result to JSON
       ansible.builtin.set_fact:
         gvrp_result: "{{ gvrp_raw.stdout | from_json }}"
 
-    # ==========================================
-    # DISPLAY RESULT
-    # ==========================================
+    - name: Fail if GVRP interface show failed
+      ansible.builtin.fail:
+        msg: "{{ gvrp_result.stage }}: {{ gvrp_result.error }}"
+      when: gvrp_result.status == 'failed'
 
+    # ==========================================
+    # Display and save only requested interfaces
+    # ==========================================
     - name: Display GVRP interface result
       ansible.builtin.debug:
         msg: |
@@ -287,34 +297,17 @@
           {{ gvrp_result.gvrp_entries | to_nice_yaml(indent=4) | indent(2, True) }}
           status: {{ gvrp_result.status }}
 
-    # ==========================================
-    # SAVE RESULT
-    # ==========================================
-
     - name: Save GVRP interface result
       ansible.builtin.copy:
-        dest: "//opt/librenms/librenms-ansible-inventory-plugin/output/\
-               {{ ansible_host }}_gvrp_interface_config_show.yml"
+        dest: "{{ project_root }}/output/{{ ansible_host }}_gvrp_interface_config_show.yml"
         content: |
           ip: {{ gvrp_result.ip }}
           gvrp_entries:
           {{ gvrp_result.gvrp_entries | to_nice_yaml(indent=4) | indent(2, True) }}
           status: {{ gvrp_result.status }}
 
-    # ==========================================
-    # FAIL IF SCRIPT FAILED
-    # ==========================================
-
-    - name: Fail if GVRP interface show failed
-      ansible.builtin.fail:
-        msg: "{{ gvrp_result.error }}"
-      when: gvrp_result.status == "failed"
-
-    # ==========================================
-    # FINAL MESSAGE
-    # ==========================================
-
     - name: Display result file
       ansible.builtin.debug:
-        msg: "GVRP interface status collected successfully.\
-              Result saved to output/{{ ansible_host }}_gvrp_interface_config_show.yml"
+        msg: >-
+          GVRP interface status collected successfully.
+          Result saved to output/{{ ansible_host }}_gvrp_interface_config_show.yml

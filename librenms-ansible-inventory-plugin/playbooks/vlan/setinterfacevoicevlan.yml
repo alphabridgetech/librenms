@@ -1,0 +1,526 @@
+# ============================================================================
+# File        : setinterfacevoicevlan.yml
+# Feature     : Interface Voice VLAN Configuration
+# Operations  : SET / DELETE
+#
+# SET Example:
+# ansible-playbook -i inventory/192.168.2.245.yml \
+# playbooks/vlan/setinterfacevoicevlan.yml \
+# -e "operation=set interface=g0/1 vlan_id=90 priority_mode=dscp priority=5 mode=vlan"
+#
+# DELETE Example:
+# ansible-playbook -i inventory/192.168.2.245.yml \
+# playbooks/vlan/setinterfacevoicevlan.yml \
+# -e "operation=delete interface=g0/1"
+# ============================================================================
+
+- name: Configure Interface Voice VLAN
+  hosts: alphabridge_devices
+  gather_facts: false
+
+  vars:
+    # ------------------------------------------------------------------------
+    # Paths
+    # ------------------------------------------------------------------------
+    output_dir: "/opt/librenms/librenms-ansible-inventory-plugin/output"
+    temp_dir: "/opt/librenms/librenms-ansible-inventory-plugin/tmp"
+    python_bin: "/opt/librenms/librenms-ansible-inventory-plugin/bin/python3"
+
+    # ------------------------------------------------------------------------
+    # Dynamic input parameters
+    # ------------------------------------------------------------------------
+    operation: "{{ operation | default('') | lower }}"
+    interface: "{{ interface | default('') | lower }}"
+    vlan_id: "{{ vlan_id | default('') }}"
+    priority_mode: "{{ priority_mode | default('') | lower }}"
+    priority: "{{ priority | default('') }}"
+    voice_mode: "{{ mode | default('') | lower }}"
+
+  tasks:
+
+    # ========================================================================
+    # Validate operation
+    # ========================================================================
+
+    - name: Validate operation
+      ansible.builtin.assert:
+        that:
+          - operation in ['set', 'delete']
+        fail_msg: "ERROR: operation must be set or delete"
+
+    # ========================================================================
+    # Validate interface
+    # ========================================================================
+
+    - name: Validate interface format
+      ansible.builtin.assert:
+        that:
+          - interface is match('^(g|tg)[0-9]+/[0-9]+$')
+        fail_msg: "ERROR: Invalid interface. Use g0/1 or tg0/1"
+
+    # ========================================================================
+    # Validate SET parameters
+    # ========================================================================
+
+    - name: Validate SET parameters
+      ansible.builtin.assert:
+        that:
+          - vlan_id | int >= 2
+          - vlan_id | int <= 4094
+          - priority_mode in ['cos', 'dscp']
+          - priority | int >= 0
+          - >
+            (priority_mode == 'cos' and priority | int <= 7)
+            or
+            (priority_mode == 'dscp' and priority | int <= 63)
+          - voice_mode in ['vlan', 'mac-address']
+        fail_msg: "ERROR: Invalid Voice VLAN SET parameters"
+      when: operation == 'set'
+
+    # ========================================================================
+    # Create directories
+    # ========================================================================
+
+    - name: Create output directory
+      ansible.builtin.file:
+        path: "{{ output_dir }}"
+        state: directory
+        mode: '0755'
+      delegate_to: localhost
+
+    - name: Create temporary directory
+      ansible.builtin.file:
+        path: "{{ temp_dir }}"
+        state: directory
+        mode: '0755'
+      delegate_to: localhost
+
+    # ========================================================================
+    # Remove previous output
+    # ========================================================================
+
+    - name: Remove previous output file
+      ansible.builtin.file:
+        path: "{{ output_dir }}/{{ ansible_host }}_interface_voice_vlan.yml"
+        state: absent
+      delegate_to: localhost
+
+    # ========================================================================
+    # Generate Paramiko script
+    # ========================================================================
+
+    - name: Generate Voice VLAN configuration script
+      ansible.builtin.copy:
+        dest: "{{ temp_dir }}/set_interface_voice_vlan.py"
+        mode: '0755'
+        content: |
+          import paramiko
+          import time
+          import re
+          import sys
+          import os
+
+          HOST = "{{ ansible_host }}"
+          USERNAME = "{{ ansible_user }}"
+          PASSWORD = "{{ ansible_password }}"
+          OUTPUT_FILE = "{{ output_dir }}/{{ ansible_host }}_interface_voice_vlan.yml"
+
+          OPERATION = "{{ operation }}"
+          INTERFACE = "{{ interface }}"
+          VLAN_ID = "{{ vlan_id }}"
+          PRIORITY_MODE = "{{ priority_mode }}"
+          PRIORITY = "{{ priority }}"
+          VOICE_MODE = "{{ voice_mode }}"
+
+
+          # ==================================================================
+          # Write final YAML result
+          # ==================================================================
+
+          def write_result(message):
+              with open(OUTPUT_FILE, "w") as f:
+                  f.write("device_ip: " + HOST + "\n")
+                  f.write("message: " + message + "\n")
+
+
+          # ==================================================================
+          # Detect only real CLI errors
+          #
+          # VLAN warning is intentionally NOT treated as failure.
+          # Example:
+          # %VLAN 5-WARNING-TRAP:
+          # configuration will not take effect
+          #
+          # The CLI command itself can still be accepted successfully.
+          # ==================================================================
+
+          def has_real_error(output):
+              error_patterns = [
+                  "Unknown command",
+                  "Invalid input",
+                  "Invalid command",
+                  "Command incomplete",
+                  "Too many parameters",
+                  "Ambiguous command",
+                  "Syntax error",
+                  "%Error:",
+                  "%ERROR:"
+              ]
+
+              output_lower = output.lower()
+
+              for pattern in error_patterns:
+                  if pattern.lower() in output_lower:
+                      return True
+
+              return False
+
+
+          # ==================================================================
+          # Send command
+          # ==================================================================
+
+          def send_command(shell, command, wait=1.0):
+              shell.send(command + "\n")
+              time.sleep(wait)
+
+              output = ""
+
+              while shell.recv_ready():
+                  output += shell.recv(65535).decode(
+                      "utf-8",
+                      errors="ignore"
+                  )
+
+              return output
+
+
+          # ==================================================================
+          # Convert Ansible interface to device interface
+          #
+          # g0/1  -> gigaEthernet 0/1
+          # tg0/1 -> tGigaEthernet 0/1
+          # ==================================================================
+
+          def interface_name(interface):
+
+              if interface.startswith("tg"):
+                  return "tGigaEthernet " + interface[2:]
+
+              return "gigaEthernet " + interface[1:]
+
+
+          # ==================================================================
+          # Main
+          # ==================================================================
+
+          client = None
+
+          try:
+
+              client = paramiko.SSHClient()
+              client.set_missing_host_key_policy(
+                  paramiko.AutoAddPolicy()
+              )
+
+              # --------------------------------------------------------------
+              # Connect
+              # --------------------------------------------------------------
+
+              client.connect(
+                  HOST,
+                  username=USERNAME,
+                  password=PASSWORD,
+                  look_for_keys=False,
+                  allow_agent=False,
+                  timeout=15,
+                  banner_timeout=15,
+                  auth_timeout=15
+              )
+
+              shell = client.invoke_shell()
+              shell.settimeout(5)
+
+              time.sleep(1)
+
+              while shell.recv_ready():
+                  shell.recv(65535)
+
+              # --------------------------------------------------------------
+              # Enter enable mode
+              # --------------------------------------------------------------
+
+              output = send_command(shell, "enable")
+
+              if has_real_error(output):
+                  print(output, file=sys.stderr)
+                  write_result("FAILED")
+                  sys.exit(1)
+
+              # --------------------------------------------------------------
+              # Enter configuration mode
+              #
+              # Device accepts:
+              #
+              # kunal#config
+              # kunal_config#
+              #
+              # Do not depend on prompt parsing here.
+              # --------------------------------------------------------------
+
+              output = send_command(shell, "config")
+
+              if has_real_error(output):
+                  print(output, file=sys.stderr)
+                  write_result("FAILED")
+                  sys.exit(1)
+
+              # --------------------------------------------------------------
+              # Convert interface name
+              # --------------------------------------------------------------
+
+              device_interface = interface_name(INTERFACE)
+
+              # --------------------------------------------------------------
+              # Enter interface mode
+              #
+              # IMPORTANT:
+              # Device expects:
+              #
+              # interface gigaEthernet 0/1
+              #
+              # NOT:
+              #
+              # interface GigaEthernet0/1
+              # --------------------------------------------------------------
+
+              interface_command = "interface " + device_interface
+
+              output = send_command(
+                  shell,
+                  interface_command,
+                  wait=1.0
+              )
+
+              if has_real_error(output):
+                  print(
+                      "ERROR: Unable to enter interface "
+                      + device_interface,
+                      file=sys.stderr
+                  )
+                  print(output, file=sys.stderr)
+
+                  write_result("FAILED")
+                  sys.exit(1)
+
+              # ==============================================================
+              # SET
+              # ==============================================================
+
+              if OPERATION == "set":
+
+                  # ----------------------------------------------------------
+                  # Set Voice VLAN mode
+                  #
+                  # Example:
+                  # switchport voice-vlan mode vlan
+                  # switchport voice-vlan mode mac-address
+                  # ----------------------------------------------------------
+
+                  command = (
+                      "switchport voice-vlan mode "
+                      + VOICE_MODE
+                  )
+
+                  output = send_command(shell, command)
+
+                  if has_real_error(output):
+                      print(output, file=sys.stderr)
+                      write_result("FAILED")
+                      sys.exit(1)
+
+                  # ----------------------------------------------------------
+                  # Configure Voice VLAN
+                  #
+                  # Example:
+                  # switchport voice-vlan 90 dscp 5
+                  # switchport voice-vlan 90 cos 5
+                  # ----------------------------------------------------------
+
+                  command = (
+                      "switchport voice-vlan "
+                      + VLAN_ID
+                      + " "
+                      + PRIORITY_MODE
+                      + " "
+                      + PRIORITY
+                  )
+
+                  output = send_command(shell, command)
+
+                  if has_real_error(output):
+                      print(output, file=sys.stderr)
+                      write_result("FAILED")
+                      sys.exit(1)
+
+                  # ----------------------------------------------------------
+                  # Command accepted by switch
+                  # VLAN warning is intentionally non-fatal.
+                  # ----------------------------------------------------------
+
+                  write_result("SUCCESS")
+
+              # ==============================================================
+              # DELETE
+              # ==============================================================
+
+              elif OPERATION == "delete":
+
+                  # ----------------------------------------------------------
+                  # Get current interface configuration.
+                  #
+                  # This is only used to discover the existing Voice VLAN ID.
+                  # ----------------------------------------------------------
+
+                  show_command = (
+                      "show running-config interface "
+                      + device_interface
+                  )
+
+                  output = send_command(
+                      shell,
+                      show_command,
+                      wait=1.0
+                  )
+
+                  if has_real_error(output):
+                      print(output, file=sys.stderr)
+                      write_result("FAILED")
+                      sys.exit(1)
+
+                  # ----------------------------------------------------------
+                  # Find existing Voice VLAN command
+                  #
+                  # Example:
+                  # switchport voice-vlan 90 dscp 5
+                  # ----------------------------------------------------------
+
+                  match = re.search(
+                      r"switchport\s+voice-vlan\s+"
+                      r"([0-9]+)\s+"
+                      r"(?:cos|dscp)\s+[0-9]+",
+                      output,
+                      re.IGNORECASE
+                  )
+
+                  if match:
+
+                      old_vlan_id = match.group(1)
+
+                      delete_vlan_command = (
+                          "no switchport voice-vlan "
+                          + old_vlan_id
+                      )
+
+                      output = send_command(
+                          shell,
+                          delete_vlan_command
+                      )
+
+                      if has_real_error(output):
+                          print(output, file=sys.stderr)
+                          write_result("FAILED")
+                          sys.exit(1)
+
+                  # ----------------------------------------------------------
+                  # Remove Voice VLAN mode
+                  # ----------------------------------------------------------
+
+                  output = send_command(
+                      shell,
+                      "no switchport voice-vlan mode"
+                  )
+
+                  if has_real_error(output):
+                      print(output, file=sys.stderr)
+                      write_result("FAILED")
+                      sys.exit(1)
+
+                  write_result("SUCCESS")
+
+              else:
+
+                  write_result("FAILED")
+                  sys.exit(1)
+
+          except Exception as e:
+
+              print(
+                  "ERROR: " + str(e),
+                  file=sys.stderr
+              )
+
+              write_result("FAILED")
+              sys.exit(1)
+
+          finally:
+
+              if client:
+                  client.close()
+
+    # ========================================================================
+    # Execute generated Python script
+    # ========================================================================
+
+    - name: Execute Voice VLAN configuration
+      ansible.builtin.command:
+        cmd: "{{ python_bin }} {{ temp_dir }}/set_interface_voice_vlan.py"
+      delegate_to: localhost
+      register: voice_vlan_result
+      changed_when: false
+      failed_when: false
+
+    # ========================================================================
+    # Display actual CLI error
+    # ========================================================================
+
+    - name: Display CLI error
+      ansible.builtin.debug:
+        msg: "{{ voice_vlan_result.stderr }}"
+      when:
+        - voice_vlan_result.rc != 0
+        - voice_vlan_result.stderr | length > 0
+
+    # ========================================================================
+    # Fail Ansible task when Python script fails
+    # ========================================================================
+
+    - name: Fail if Voice VLAN configuration failed
+      ansible.builtin.fail:
+        msg: "Voice VLAN configuration failed. Check the CLI error above."
+      when: voice_vlan_result.rc != 0
+
+    # ========================================================================
+    # Display command output
+    # ========================================================================
+
+    - name: Display Voice VLAN CLI output
+      ansible.builtin.debug:
+        msg: "{{ voice_vlan_result.stdout }}"
+      when: voice_vlan_result.stdout | length > 0
+
+    # ========================================================================
+    # Display final output file
+    # ========================================================================
+
+    - name: Read Voice VLAN result
+      ansible.builtin.slurp:
+        src: "{{ output_dir }}/{{ ansible_host }}_interface_voice_vlan.yml"
+      register: voice_vlan_output
+      delegate_to: localhost
+
+    - name: Display final Voice VLAN result
+      ansible.builtin.debug:
+        msg: "{{ voice_vlan_output.content | b64decode }}"
+
+

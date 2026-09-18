@@ -1,0 +1,638 @@
+# ==========================================
+# dhcp_option82_interface_config.yml
+# Created on Sept 4, 2026 by Vikash Kumar (vikash.kumar@alphabrige.tech).
+#
+# Copyright (c), ALPHA BRIDGE, Inc.
+# 357D, Udyog Vihar Industrial Area Phase VI, Sector 37, Gurugram, Haryana.
+#
+# All rights reserved.
+#
+# This software is the confidential and proprietary information of ALPHA BRIDGE,
+# Inc. ("Confidential Information"). You shall not disclose such Confidential
+# Information and shall use it only in accordance with the terms of the license
+# agreement you entered into with ALPHA BRIDGE.
+#
+# =============================================================================
+# Playbook Name : DHCP Snooping Interface Option82 Config
+# =============================================================================
+#
+# Description:
+# Configures DHCP Snooping Option82 settings on a single port on AlphaBridge
+# switches over SSH.
+#
+# Input vars:
+#   port                  - g0/1 through g0/10 (required -
+#                            confirmed log uses the SHORT
+#                            interface form "g0/1", not the
+#                            full "GigaEthernet0/1" used by
+#                            the port-aggregation commands)
+#   circuit_id_type       - (optional) "string" or "hex"
+#   circuit_id_value      - (optional) required together
+#                            with circuit_id_type
+#   remote_id_type        - (optional) "string" or "hex"
+#   remote_id_value       - (optional) required together
+#                            with remote_id_type
+#   vendor_specific_type  - (optional) "string" or "hex"
+#   vendor_specific_value - (optional) required together
+#                            with vendor_specific_type
+#   drop                  - "Enable" or "Disable" (required)
+#   replace               - "Enable" or "Disable" (required)
+#   transmit              - "Enable" or "Disable" (required)
+#
+# Each of Circuit ID / Remote ID / Vendor Specific is
+# optional as a PAIR - if you supply the value you must also
+# supply the type, and vice versa. Leaving both blank for a
+# given field skips it entirely these fields can be left unset).
+#
+# hex-type values must look like hyphen-separated hex byte
+# pairs, e.g. "aa-bb-cc-dd" - this is the format the
+# switch's own browser error message describes when you
+# enter a non-hex string with type=hex
+# ("Circuit ID:Invalid string non-hexadecimal character!
+# <aa-bb-cc-dd...>").
+#
+# Command sequence sent (confirmed order/form from device
+# logs for the string-type, all-enabled case):
+#   config
+#   interface <port>
+#   [dhcp snooping information circuit-id <type> <value>]
+#     (only if circuit_id_type/value supplied)
+#   [dhcp snooping information remote-id <type> <value>]
+#     (only if remote_id_type/value supplied)
+#   [dhcp snooping information vendor-specific <type>
+#   <value>]
+#     (only if vendor_specific_type/value supplied)
+#   [dhcp snooping information drop | no dhcp snooping
+#   information drop]
+#   [dhcp snooping information replace | no dhcp snooping
+#   information replace]
+#   [dhcp snooping information transmit | no dhcp snooping
+#   information transmit]
+#   exit
+#   write
+#
+# Example:
+# ansible-playbook -i inventory/192.168.2.245.yml \
+#   playbooks/dhcp_option82_interface_config.yml \
+#   -e port=g0/1 -e circuit_id_type=string \
+#   -e circuit_id_value=5 -e remote_id_type=string \
+#   -e remote_id_value=5 \
+#   -e vendor_specific_type=string \
+#   -e vendor_specific_value=5 \
+#   -e drop=Enable -e replace=Enable -e transmit=Enable
+#
+# Output:
+# output/<switch_ip>_dhcp_option82_interface_config.yml
+# =============================================================================
+
+- name: DHCP snooping interface Option82 config
+  hosts: alphabridge_devices
+  gather_facts: no
+
+  tasks:
+
+    # ==========================================
+    # Validate required input variables are present
+    # ==========================================
+
+    - name: Validate required input variables are provided
+      ansible.builtin.assert:
+        that:
+          - port is defined
+          - drop is defined
+          - replace is defined
+          - transmit is defined
+        fail_msg: >
+          You must pass port, drop, replace and transmit.
+
+    # ==========================================
+    # Validate port (g0/1-g0/10)
+    # ==========================================
+
+    - name: Normalize port
+      ansible.builtin.set_fact:
+        port_normalized: "{{ port | lower | trim }}"
+
+    - name: Validate port is g0/1 through g0/10
+      ansible.builtin.assert:
+        that:
+          - >-
+            port_normalized in [
+            'g0/1', 'g0/2', 'g0/3', 'g0/4', 'g0/5',
+            'g0/6', 'g0/7', 'g0/8', 'g0/9', 'g0/10']
+        fail_msg: >
+          port must be g0/1 through g0/10 (got: {{ port }})
+
+    # ==========================================
+    # Validate drop / replace / transmit
+    # ==========================================
+
+    - name: Normalize drop / replace / transmit
+      ansible.builtin.set_fact:
+        drop_normalized: "{{ drop | lower | trim }}"
+        replace_normalized: "{{ replace | lower | trim }}"
+        transmit_normalized: >-
+          {{ transmit | lower | trim }}
+
+    - name: Validate drop / replace / transmit values
+      ansible.builtin.assert:
+        that:
+          - item.value in ['enable', 'disable']
+        fail_msg: >
+          {{ item.name }} must be 'Enable' or 'Disable'
+          (got: {{ item.value }})
+      loop:
+        - { name: "drop", value: "{{ drop_normalized }}" }
+        - { name: "replace",
+            value: "{{ replace_normalized }}" }
+        - { name: "transmit",
+            value: "{{ transmit_normalized }}" }
+      loop_control:
+        label: "{{ item.name }}"
+
+    # ==========================================
+    # Validate circuit_id / remote_id / vendor_specific
+    # (each optional as a type+value pair)
+    # ==========================================
+
+    - name: >-
+        Validate type/value are supplied together for
+        each Option82 field
+      ansible.builtin.assert:
+        that:
+          - >-
+            ((item.type | default('')) == '') ==
+            ((item.value | default('')) == '')
+        fail_msg: >
+          {{ item.name }}_type and {{ item.name }}_value
+          must be supplied together, or both left blank.
+      loop:
+        - name: "circuit_id"
+          type: "{{ circuit_id_type | default('') }}"
+          value: "{{ circuit_id_value | default('') }}"
+        - name: "remote_id"
+          type: "{{ remote_id_type | default('') }}"
+          value: "{{ remote_id_value | default('') }}"
+        - name: "vendor_specific"
+          type: "{{ vendor_specific_type | default('') }}"
+          value: "{{ vendor_specific_value | default('') }}"
+      loop_control:
+        label: "{{ item.name }}"
+
+    - name: Normalize Option82 field types
+      ansible.builtin.set_fact:
+        circuit_id_type_normalized: >-
+          {{ (circuit_id_type | default(''))
+          | lower | trim }}
+        remote_id_type_normalized: >-
+          {{ (remote_id_type | default(''))
+          | lower | trim }}
+        vendor_specific_type_normalized: >-
+          {{ (vendor_specific_type | default(''))
+          | lower | trim }}
+
+    - name: Validate Option82 field types (when supplied)
+      ansible.builtin.assert:
+        that:
+          - item.type in ['string', 'hex']
+        fail_msg: >
+          {{ item.name }}_type must be 'string' or 'hex'
+          (got: {{ item.type }})
+      loop:
+        - name: "circuit_id"
+          type: "{{ circuit_id_type_normalized }}"
+        - name: "remote_id"
+          type: "{{ remote_id_type_normalized }}"
+        - name: "vendor_specific"
+          type: "{{ vendor_specific_type_normalized }}"
+      loop_control:
+        label: "{{ item.name }}"
+      when: item.type != ""
+
+    - name: >-
+        Validate hex-type Option82 values look like
+        hyphen-separated hex byte pairs
+      ansible.builtin.assert:
+        that:
+          - >-
+            item.value is match(
+            '^[0-9a-fA-F]{2}(-[0-9a-fA-F]{2})*$')
+        fail_msg: >
+          {{ item.name }}_value must look like
+          hyphen-separated hex byte pairs, e.g.
+          "aa-bb-cc-dd" (got: {{ item.value }})
+      loop:
+        - name: "circuit_id"
+          type: "{{ circuit_id_type_normalized }}"
+          value: "{{ circuit_id_value | default('') }}"
+        - name: "remote_id"
+          type: "{{ remote_id_type_normalized }}"
+          value: "{{ remote_id_value | default('') }}"
+        - name: "vendor_specific"
+          type: "{{ vendor_specific_type_normalized }}"
+          value: "{{ vendor_specific_value | default('') }}"
+      loop_control:
+        label: "{{ item.name }}"
+      when: item.type == "hex"
+
+    # ==========================================
+    # Create Python SSH Script
+    # ==========================================
+
+    - name: >-
+        Create Python SSH Script for DHCP Option82
+        interface config
+      ansible.builtin.copy:
+        dest: "/opt/librenms/librenms-ansible-inventory-plugin/tmp/\
+               dhcp_option82_interface_config_exec.py"
+        mode: '0755'
+        content: |
+          #!/usr/bin/env python3
+
+          import paramiko
+          import time
+          import re
+          import json
+
+          HOST = "{{ ansible_host }}"
+          USER = "{{ ansible_user }}"
+          PASSWORD = "{{ ansible_password }}"
+
+          PORT = "{{ port_normalized }}"
+          CIRCUIT_ID_TYPE = (
+              "{{ circuit_id_type_normalized }}"
+          )
+          CIRCUIT_ID_VALUE = (
+              "{{ circuit_id_value | default('') }}"
+          )
+          REMOTE_ID_TYPE = "{{ remote_id_type_normalized }}"
+          REMOTE_ID_VALUE = (
+              "{{ remote_id_value | default('') }}"
+          )
+          VENDOR_SPECIFIC_TYPE = (
+              "{{ vendor_specific_type_normalized }}"
+          )
+          VENDOR_SPECIFIC_VALUE = (
+              "{{ vendor_specific_value | default('') }}"
+          )
+          DROP = "{{ drop_normalized }}"
+          REPLACE = "{{ replace_normalized }}"
+          TRANSMIT = "{{ transmit_normalized }}"
+
+          PROMPT_RE = r'[>#]\s*$'
+
+          VALID_PORTS = [f"g0/{n}" for n in range(1, 11)]
+          HEX_RE = re.compile(
+              r'^[0-9a-fA-F]{2}(-[0-9a-fA-F]{2})*$'
+          )
+
+
+          def read_until_prompt(shell, prompt_re, timeout=10):
+              buf = ""
+              end_time = time.time() + timeout
+
+              while time.time() < end_time:
+                  if shell.recv_ready():
+                      chunk = shell.recv(65535).decode(
+                          errors="ignore"
+                      )
+                      buf += chunk
+
+                      if re.search(prompt_re, buf):
+                          return buf
+                  else:
+                      time.sleep(0.1)
+
+              return buf
+
+
+          def send_cmd(
+              shell, cmd, timeout=10, check_errors=True
+          ):
+              """Send a CLI command, wait for the prompt,
+              optionally raise on switch-reported errors.
+              Returns the raw output."""
+              shell.send(
+                  cmd if cmd.endswith("\n") else cmd + "\n"
+              )
+              output = read_until_prompt(
+                  shell, PROMPT_RE, timeout=timeout
+              )
+
+              if check_errors and re.search(
+                  r'%err|invalid|error', output, re.IGNORECASE
+              ):
+                  raise Exception(
+                      f"'{cmd.strip()}' rejected by switch: "
+                      f"{output.strip()}"
+                  )
+
+              return output
+
+
+          shell = None
+          ssh = None
+
+          try:
+              # ==================================
+              # RE-VALIDATE INPUTS (defense in
+              # depth, in case this script is ever
+              # invoked outside the playbook)
+              # ==================================
+
+              if PORT not in VALID_PORTS:
+                  raise Exception(
+                      f"Invalid port '{PORT}': must be "
+                      f"g0/1 through g0/10"
+                  )
+
+              for label, dtype, value in (
+                  ("circuit_id", CIRCUIT_ID_TYPE,
+                   CIRCUIT_ID_VALUE),
+                  ("remote_id", REMOTE_ID_TYPE,
+                   REMOTE_ID_VALUE),
+                  ("vendor_specific", VENDOR_SPECIFIC_TYPE,
+                   VENDOR_SPECIFIC_VALUE),
+              ):
+                  if bool(dtype) != bool(value):
+                      raise Exception(
+                          f"{label}_type and {label}_value "
+                          f"must be supplied together"
+                      )
+                  if dtype and dtype not in (
+                      "string", "hex"
+                  ):
+                      raise Exception(
+                          f"Invalid {label}_type '{dtype}'"
+                      )
+                  if dtype == "hex" and not HEX_RE.match(
+                      value
+                  ):
+                      raise Exception(
+                          f"Invalid {label}_value "
+                          f"'{value}': must be "
+                          f"hyphen-separated hex byte "
+                          f"pairs"
+                      )
+
+              for label, value in (
+                  ("drop", DROP),
+                  ("replace", REPLACE),
+                  ("transmit", TRANSMIT),
+              ):
+                  if value not in ("enable", "disable"):
+                      raise Exception(
+                          f"Invalid {label} '{value}'"
+                      )
+
+              # ==================================
+              # SSH CONNECTION
+              # ==================================
+
+              ssh = paramiko.SSHClient()
+              ssh.set_missing_host_key_policy(
+                  paramiko.AutoAddPolicy()
+              )
+
+              ssh.connect(
+                  HOST,
+                  username=USER,
+                  password=PASSWORD,
+                  look_for_keys=False,
+                  allow_agent=False,
+                  timeout=10
+              )
+
+              shell = ssh.invoke_shell()
+              time.sleep(0.5)
+
+              # ==================================
+              # LOGIN BANNER / INITIAL PROMPT
+              # ==================================
+
+              read_until_prompt(shell, PROMPT_RE, timeout=5)
+
+              # ==================================
+              # ENABLE, DISABLE PAGING, ENTER CONFIG
+              # ==================================
+
+              send_cmd(
+                  shell, "enable",
+                  timeout=5, check_errors=False
+              )
+              send_cmd(
+                  shell, "terminal length 0",
+                  timeout=5, check_errors=False
+              )
+              send_cmd(shell, "config", timeout=10)
+
+              # ==================================
+              # SELECT THE PORT
+              # NOTE: confirmed log uses the SHORT
+              # form ("interface g0/1"), not the full
+              # GigaEthernet name used elsewhere.
+              # ==================================
+
+              send_cmd(
+                  shell, f"interface {PORT}", timeout=10
+              )
+
+              # ==================================
+              # CIRCUIT ID / REMOTE ID /
+              # VENDOR SPECIFIC (each optional)
+              # ==================================
+
+              if CIRCUIT_ID_TYPE:
+                  send_cmd(
+                      shell,
+                      "dhcp snooping information "
+                      f"circuit-id {CIRCUIT_ID_TYPE} "
+                      f"{CIRCUIT_ID_VALUE}",
+                      timeout=10
+                  )
+
+              if REMOTE_ID_TYPE:
+                  send_cmd(
+                      shell,
+                      "dhcp snooping information "
+                      f"remote-id {REMOTE_ID_TYPE} "
+                      f"{REMOTE_ID_VALUE}",
+                      timeout=10
+                  )
+
+              if VENDOR_SPECIFIC_TYPE:
+                  send_cmd(
+                      shell,
+                      "dhcp snooping information "
+                      f"vendor-specific "
+                      f"{VENDOR_SPECIFIC_TYPE} "
+                      f"{VENDOR_SPECIFIC_VALUE}",
+                      timeout=10
+                  )
+
+              # ==================================
+              # DROP / REPLACE / TRANSMIT
+              # NOTE: disable ("no ...") forms are
+              # not confirmed by a device log.
+              # ==================================
+
+              if DROP == "enable":
+                  send_cmd(
+                      shell,
+                      "dhcp snooping information drop",
+                      timeout=10
+                  )
+              else:
+                  send_cmd(
+                      shell,
+                      "no dhcp snooping information drop",
+                      timeout=10, check_errors=False
+                  )
+
+              if REPLACE == "enable":
+                  send_cmd(
+                      shell,
+                      "dhcp snooping information replace",
+                      timeout=10
+                  )
+              else:
+                  send_cmd(
+                      shell,
+                      "no dhcp snooping information "
+                      "replace",
+                      timeout=10, check_errors=False
+                  )
+
+              if TRANSMIT == "enable":
+                  send_cmd(
+                      shell,
+                      "dhcp snooping information "
+                      "transmit",
+                      timeout=10
+                  )
+              else:
+                  send_cmd(
+                      shell,
+                      "no dhcp snooping information "
+                      "transmit",
+                      timeout=10, check_errors=False
+                  )
+
+              # ==================================
+              # EXIT CONFIG MODE
+              # ==================================
+
+              send_cmd(
+                  shell, "exit",
+                  timeout=5, check_errors=False
+              )
+
+              # ==================================
+              # SAVE CONFIG (persist running-config)
+              # NOTE: "write" was not shown in the
+              # confirmed log for this command;
+              # included for consistency with other
+              # config playbooks. Remove if not
+              # applicable here.
+              # ==================================
+
+              write_output = send_cmd(
+                  shell, "write",
+                  timeout=15, check_errors=False
+              )
+              if re.search(
+                  r'%err|invalid|error|fail',
+                  write_output, re.IGNORECASE
+              ):
+                  raise Exception(
+                      "'write' (save config) rejected "
+                      f"by switch: {write_output.strip()}"
+                  )
+
+              # ==================================
+              # CLOSE SSH / RETURN JSON
+              # ==================================
+
+              shell.close()
+              ssh.close()
+
+              print(json.dumps({
+                  "ip": HOST,
+                  "status": "success",
+              }))
+
+          except Exception as e:
+              try:
+                  if shell:
+                      shell.close()
+                  if ssh:
+                      ssh.close()
+              except:
+                  pass
+
+              print(json.dumps({
+                  "ip": HOST,
+                  "status": "failed",
+                  "error": str(e)
+              }))
+
+    # ==========================================
+    # EXECUTE PYTHON SCRIPT
+    # ==========================================
+
+    - name: Execute DHCP Option82 interface config script
+      ansible.builtin.command:
+        cmd: >
+          /opt/librenms/librenms-ansible-inventory-plugin/bin/python3
+          /opt/librenms/librenms-ansible-inventory-plugin/\
+          tmp/dhcp_option82_interface_config_exec.py
+      register: option82_raw
+      changed_when: false
+      failed_when: false
+
+    # ==========================================
+    # CONVERT JSON RESULT
+    # ==========================================
+
+    - name: Convert DHCP Option82 result to JSON
+      ansible.builtin.set_fact:
+        option82_result: "{{ option82_raw.stdout | from_json }}"
+
+    # ==========================================
+    # DISPLAY RESULT
+    # ==========================================
+
+    - name: Display DHCP Option82 result
+      ansible.builtin.debug:
+        var: option82_result
+
+    # ==========================================
+    # SAVE RESULT
+    # ==========================================
+
+    - name: Save DHCP Option82 result
+      ansible.builtin.copy:
+        dest: "/opt/librenms/librenms-ansible-inventory-plugin/output/\
+              {{ ansible_host }}_dhcp_option82_interface_config.yml"
+        content: |
+          {{ option82_result | to_nice_yaml }}
+
+    # ==========================================
+    # FAIL IF COMMAND FAILED
+    # ==========================================
+
+    - name: Fail if DHCP Option82 config failed
+      ansible.builtin.fail:
+        msg: "{{ option82_result.error }}"
+      when: option82_result.status == "failed"
+
+    # ==========================================
+    # FINAL MESSAGE
+    # ==========================================
+
+    - name: Display result file
+      ansible.builtin.debug:
+        msg: >
+          DHCP Option82 config applied to {{ port }} on
+          {{ ansible_host }}. Result saved to
+          output/{{ ansible_host }}_dhcp_option82_interface_config.yml

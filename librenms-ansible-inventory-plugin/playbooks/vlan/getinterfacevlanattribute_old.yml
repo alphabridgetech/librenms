@@ -6,6 +6,7 @@
   vars:
     output_dir: "/opt/librenms/librenms-ansible-inventory-plugin/output"
     temp_dir: "/opt/librenms/librenms-ansible-inventory-plugin/tmp"
+    python_bin: "/opt/librenms/librenms-ansible-inventory-plugin/bin/python3"
 
   tasks:
 
@@ -21,12 +22,6 @@
 
     # =====================================================
     # Create output directory
-    #
-    # This must be the base output directory itself (state: directory),
-    # not a per-host path - the embedded Python script below writes the
-    # actual per-host result as a FILE via its own os.makedirs(), so a
-    # directory task pointed at that same per-host path would create a
-    # bogus <ip>_getinterfacevlanattribute.yml *folder* instead.
     # =====================================================
     - name: Create output directory
       ansible.builtin.file:
@@ -57,7 +52,11 @@
           USERNAME = "{{ ansible_user }}"
           PASSWORD = "{{ ansible_password }}"
 
-          OUTPUT_FILE = "/opt/librenms/librenms-ansible-inventory-plugin/output/" + HOST + "_interface_vlan_attribute.yml"
+          OUTPUT_FILE = (
+              "{{ output_dir }}/"
+              + HOST
+              + "_interface_vlan_attribute.yml"
+          )
 
           # =====================================================
           # Helper function to wait for device prompt
@@ -82,7 +81,6 @@
                           errors="ignore"
                       )
 
-                      # Detect device CLI prompt
                       if re.search(
                           r"(?:>|#)\s*$",
                           output
@@ -98,6 +96,7 @@
           # SSH connection
           # =====================================================
           client = paramiko.SSHClient()
+
           client.set_missing_host_key_policy(
               paramiko.AutoAddPolicy()
           )
@@ -129,9 +128,6 @@
 
               time.sleep(1)
 
-              # =================================================
-              # Check whether shell is open
-              # =================================================
               if shell.closed:
                   raise Exception(
                       "SSH interactive shell closed immediately"
@@ -172,8 +168,6 @@
 
               # =================================================
               # Enter enable mode
-              #
-              # production> -> production#
               # =================================================
               if ">" in initial_output:
 
@@ -186,8 +180,6 @@
 
               # =================================================
               # Enter configuration mode
-              #
-              # production# -> production_config#
               # =================================================
               shell.send("config\n")
 
@@ -198,8 +190,6 @@
 
               # =================================================
               # Exit configuration mode
-              #
-              # production_config# -> production#
               # =================================================
               shell.send("exit\n")
 
@@ -243,7 +233,6 @@
                           errors="ignore"
                       )
 
-                      # Stop after receiving CLI prompt
                       if re.search(
                           r"(?:production|production_config)[>#]\s*$",
                           running_config
@@ -294,7 +283,6 @@
                   if current_interface is None:
                       return
 
-                  # Only physical interfaces and port aggregators
                   if not (
                       physical_interface_pattern.match(
                           current_interface
@@ -307,23 +295,19 @@
                       return
 
                   # =================================================
-                  # Access mode:
-                  # PVID and VLAN Allowed are same.
-                  # VLAN Untagged can be different.
+                  # Access mode
                   # =================================================
                   if mode.lower() == "access":
                       vlan_allowed = pvid
 
                   # =================================================
-                  # If VLAN allowed is not configured,
-                  # use PVID as default.
+                  # Default VLAN allowed
                   # =================================================
                   if not vlan_allowed:
                       vlan_allowed = pvid
 
                   # =================================================
-                  # If VLAN untagged is not configured,
-                  # use PVID as default.
+                  # Default VLAN untagged
                   # =================================================
                   if not vlan_untagged:
                       vlan_untagged = pvid
@@ -365,8 +349,9 @@
                           + match.group(2)
                       )
 
-                  # Port-aggregator names remain unchanged.
-
+                  # =================================================
+                  # Append interface data
+                  # =================================================
                   interface_vlan_attribute.append({
                       "port_name": port_name,
                       "interface": current_interface,
@@ -392,14 +377,12 @@
                   # =================================================
                   if line.startswith("interface "):
 
-                      # Save previous interface
                       save_interface()
 
                       current_interface = (
                           line[len("interface "):].strip()
                       )
 
-                      # Reset values
                       pvid = "1"
                       mode = "Access"
                       vlan_allowed = ""
@@ -430,8 +413,6 @@
 
                   # =================================================
                   # PVID
-                  #
-                  # switchport pvid 120
                   # =================================================
                   match = re.match(
                       r"switchport\s+pvid\s+(\d+)",
@@ -447,9 +428,6 @@
 
                   # =================================================
                   # Mode
-                  #
-                  # switchport mode access
-                  # switchport mode trunk
                   # =================================================
                   match = re.match(
                       r"switchport\s+mode\s+(access|trunk)\s*$",
@@ -465,9 +443,6 @@
 
                   # =================================================
                   # VLAN Allowed
-                  #
-                  # switchport trunk vlan-allowed 111
-                  # switchport trunk vlan-allowed 1-4094
                   # =================================================
                   match = re.match(
                       r"switchport\s+trunk\s+vlan-allowed\s+(.+)$",
@@ -483,8 +458,6 @@
 
                   # =================================================
                   # VLAN Untagged
-                  #
-                  # switchport trunk vlan-untagged 132
                   # =================================================
                   match = re.match(
                       r"switchport\s+trunk\s+vlan-untagged\s+(.+)$",
@@ -636,11 +609,13 @@
     - name: Run Interface VLAN Attribute GET
       ansible.builtin.command:
         cmd: >
-          /opt/librenms/librenms-ansible-inventory-plugin/bin/python3
+          {{ python_bin }}
           {{ temp_dir }}/get_interface_vlan_attribute.py
       register: interface_vlan_result
       delegate_to: localhost
+
       changed_when: "'SUCCESS' in (interface_vlan_result.stdout | default(''))"
+
       failed_when: >
         interface_vlan_result.rc != 0 or
         'SUCCESS' not in (interface_vlan_result.stdout | default(''))
@@ -651,3 +626,4 @@
     - name: Display Interface VLAN Attribute GET result
       ansible.builtin.debug:
         var: interface_vlan_result.stdout
+

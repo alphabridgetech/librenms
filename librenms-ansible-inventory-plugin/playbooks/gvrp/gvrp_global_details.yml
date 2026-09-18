@@ -1,0 +1,509 @@
+# ==========================================
+# gvrp_global_details.yml
+# Created on Sep 17, 2026 by Vikash Kumar.
+#
+# Copyright (c), ALPHA BRIDGE, Inc.
+# 357D, Udyog Vihar Industrial Area Phase VI, Sector 37, Gurugram, Haryana.
+#
+# All rights reserved.
+#
+# This software is the confidential and proprietary information of
+# ALPHA BRIDGE, Inc. ("Confidential Information"). You shall not
+# disclose such Confidential Information and shall use it only in
+# accordance with the terms of the license agreement you entered into
+# with ALPHA BRIDGE.
+#
+# =============================================================================
+# Playbook Name : Show GVRP Global Configuration Details
+# =============================================================================
+#
+# Description:
+# This playbook retrieves two global GVRP configuration settings from an
+# AlphaBridge switch through SSH using a Python/Paramiko helper script.
+# It executes the non-interface running-config command and checks for two
+# independent, complete configuration lines.
+#
+# GUI Setting 1: GVRP Global configuration
+#   Exact line "gvrp" present                 -> Enable
+#   Exact line "gvrp" absent                  -> Disable
+#
+# GUI Setting 2: Set Dynamic VLAN to Take Effect Only On Registration Ports
+#   Exact line "gvrp dynamic-vlan-pruning" present -> Enable
+#   Exact line "gvrp dynamic-vlan-pruning" absent  -> Disable
+#
+# IMPORTANT: These settings are evaluated separately. The command
+# "gvrp dynamic-vlan-pruning" MUST NOT be mistaken for the standalone
+# "gvrp" command. The parser compares complete lines, not substrings.
+#
+# Examples of parsed configurations:
+#   gvrp + gvrp dynamic-vlan-pruning -> Enable / Enable
+#   gvrp only                       -> Enable / Disable
+#   gvrp dynamic-vlan-pruning only  -> Disable / Enable
+#   neither command                 -> Disable / Disable
+#
+# Features:
+# - Connect to the switch over SSH.
+# - Enter privileged EXEC mode using "enable".
+# - Disable paging using "terminal length 0".
+# - Execute "show running-config non-interface".
+# - Parse both global GVRP settings independently.
+# - Return structured JSON, display a YAML result, and save a YAML report.
+# - Report SSH, timeout, and recognized CLI command errors as failures.
+#
+# CLI command:
+#   show running-config non-interface
+#
+# Example (from the Ansible project root):
+#   ansible-playbook -i inventory/192.168.3.1.yml \
+#     playbooks/port_config/gvrp_global_details.yml
+#
+# Expected output:
+#   ip: 192.168.3.1
+#   gvrp_global_configuration: Enable
+#   dynamic_vlan_pruning: Enable
+#   status: success
+#
+# Output file:
+#   output/<switch_ip>_gvrp_global_details.yml
+#
+# Note: This playbook is read-only. It does not modify switch configuration.
+# =============================================================================
+
+- name: Show GVRP global configuration details
+  hosts: alphabridge_devices
+  gather_facts: false
+
+  tasks:
+
+    # ==========================================
+    # 1. Create Python SSH helper
+    # ==========================================
+
+    - name: Create Python SSH script for GVRP global details
+      ansible.builtin.copy:
+        dest: "/opt/librenms/librenms-ansible-inventory-plugin/tmp/gvrp_global_details_exec.py"
+        mode: '0700'
+
+        content: |
+          #!/usr/bin/env python3
+
+          import json
+          import re
+          import time
+
+          import paramiko
+
+
+          # ==========================================
+          # Switch connection details
+          # ==========================================
+
+          HOST = {{ ansible_host | to_json }}
+
+          PORT = int({{ ansible_port | default(22) | to_json }})
+
+          USER = {{ ansible_user | to_json }}
+
+          PASSWORD = {{ ansible_password | to_json }}
+
+
+          # ==========================================
+          # ANSI character cleanup
+          # ==========================================
+
+          ansi_re = re.compile(
+              r'\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])'
+          )
+
+
+          # ==========================================
+          # CLI prompt detection
+          # ==========================================
+
+          prompt_re = re.compile(
+              r'[>#]\s*\Z'
+          )
+
+
+          # ==========================================
+          # CLI error detection
+          # ==========================================
+
+          cli_error_re = re.compile(
+              r'(?im)^\s*%\s*(?:invalid|error|incomplete|ambiguous|'
+              r'unknown|unrecognized)\b|'
+              r'\b(?:invalid input|unknown command|incomplete command)\b'
+          )
+
+
+          # ==========================================
+          # Read output until switch prompt
+          # ==========================================
+
+          def read_until_prompt(shell, stage, timeout=30):
+
+              """
+              Receive the full response.
+
+              Raise an error instead of parsing
+              incomplete output when a timeout occurs.
+              """
+
+              buffer = ""
+
+              deadline = time.monotonic() + timeout
+
+              while time.monotonic() < deadline:
+
+                  if shell.recv_ready():
+
+                      buffer += shell.recv(
+                          65535
+                      ).decode(
+                          errors="ignore"
+                      )
+
+                      clean = ansi_re.sub(
+                          "",
+                          buffer
+                      ).replace(
+                          "\r",
+                          ""
+                      )
+
+                      if prompt_re.search(clean.rstrip()):
+                          return clean
+
+                  else:
+                      time.sleep(0.1)
+
+              raise TimeoutError(
+                  f"Timed out waiting for switch prompt during {stage}"
+              )
+
+
+          # ==========================================
+          # Execute one switch command
+          # ==========================================
+
+          def run_command(shell, command, timeout=30):
+
+              shell.send(
+                  command + "\n"
+              )
+
+              output = read_until_prompt(
+                  shell,
+                  command,
+                  timeout=timeout
+              )
+
+              if cli_error_re.search(output):
+
+                  raise RuntimeError(
+                      f"Switch rejected {command!r}: {output}"
+                  )
+
+              return output
+
+
+          # ==========================================
+          # Parse GVRP global configuration
+          # ==========================================
+          #
+          # Example running-config:
+          #
+          #   !
+          #   gvrp
+          #   gvrp dynamic-vlan-pruning
+          #   !
+          #
+          # Parsing rules:
+          #
+          # 1. Exact "gvrp" line:
+          #      present -> Enable
+          #      absent  -> Disable
+          #
+          # 2. Exact "gvrp dynamic-vlan-pruning" line:
+          #      present -> Enable
+          #      absent  -> Disable
+          #
+          # Both values are calculated separately.
+          # ==========================================
+
+          def parse_gvrp_global(output):
+
+              """
+              Check exact lines.
+
+              The dynamic-vlan-pruning command
+              must not imply that the standalone
+              gvrp command is present.
+              """
+
+              lines = {
+                  line.strip().lower()
+                  for line in output.splitlines()
+              }
+
+              return {
+
+                  "gvrp_global_configuration": (
+                      "Enable"
+                      if "gvrp" in lines
+                      else "Disable"
+                  ),
+
+                  "dynamic_vlan_pruning": (
+                      "Enable"
+                      if "gvrp dynamic-vlan-pruning" in lines
+                      else "Disable"
+                  )
+
+              }
+
+
+          # ==========================================
+          # Initialize SSH objects
+          # ==========================================
+
+          ssh = None
+
+          shell = None
+
+          stage = "SSH connection"
+
+
+          try:
+
+              # ==========================================
+              # 2. Connect to switch
+              # ==========================================
+
+              ssh = paramiko.SSHClient()
+
+              ssh.set_missing_host_key_policy(
+                  paramiko.AutoAddPolicy()
+              )
+
+              ssh.connect(
+                  HOST,
+                  port=PORT,
+                  username=USER,
+                  password=PASSWORD,
+                  look_for_keys=False,
+                  allow_agent=False,
+                  timeout=20,
+                  auth_timeout=20,
+                  banner_timeout=20
+              )
+
+
+              # ==========================================
+              # 3. Open interactive SSH shell
+              # ==========================================
+
+              stage = "open SSH shell"
+
+              shell = ssh.invoke_shell()
+
+              read_until_prompt(
+                  shell,
+                  "initial prompt",
+                  timeout=10
+              )
+
+
+              # ==========================================
+              # 4. Enter enable mode
+              # ==========================================
+
+              stage = "enable mode"
+
+              run_command(
+                  shell,
+                  "enable",
+                  timeout=10
+              )
+
+
+              # ==========================================
+              # 5. Disable terminal paging
+              # ==========================================
+
+              stage = "disable terminal paging"
+
+              run_command(
+                  shell,
+                  "terminal length 0",
+                  timeout=10
+              )
+
+
+              # ==========================================
+              # 6. Execute SHOW command
+              # ==========================================
+
+              stage = "show running-config non-interface"
+
+              running_config = run_command(
+                  shell,
+                  "show running-config non-interface",
+                  timeout=45
+              )
+
+
+              # ==========================================
+              # 7. Parse global GVRP settings
+              # ==========================================
+
+              settings = parse_gvrp_global(
+                  running_config
+              )
+
+
+              # ==========================================
+              # 8. Return success JSON
+              # ==========================================
+
+              print(
+                  json.dumps(
+                      {
+                          "ip": HOST,
+
+                          **settings,
+
+                          "status": "success"
+                      },
+                      indent=4
+                  )
+              )
+
+
+          except Exception as exc:
+
+              # ==========================================
+              # Return failure JSON
+              # ==========================================
+
+              print(
+                  json.dumps(
+                      {
+                          "ip": HOST,
+
+                          "status": "failed",
+
+                          "stage": stage,
+
+                          "error": str(exc)
+                      }
+                  )
+              )
+
+
+          finally:
+
+              # ==========================================
+              # Close SSH connection
+              # ==========================================
+
+              if shell is not None:
+                  shell.close()
+
+              if ssh is not None:
+                  ssh.close()
+
+      no_log: true
+
+
+    # ==========================================
+    # 9. Execute Python helper
+    # ==========================================
+
+    - name: Execute GVRP global details script
+      ansible.builtin.command:
+        cmd: >
+          /opt/librenms/librenms-ansible-inventory-plugin/bin/python3
+          /opt/librenms/librenms-ansible-inventory-plugin/tmp/gvrp_global_details_exec.py
+
+      register: gvrp_global_raw
+
+      changed_when: false
+
+      failed_when: false
+
+
+    # ==========================================
+    # 10. Check for empty script output
+    # ==========================================
+
+    - name: Fail if GVRP global details script returned no JSON
+      ansible.builtin.fail:
+        msg: >-
+          GVRP global details script failed before returning JSON.
+          rc={{ gvrp_global_raw.rc }};
+          stderr={{ gvrp_global_raw.stderr }}
+
+      when: gvrp_global_raw.stdout | trim | length == 0
+
+
+    # ==========================================
+    # 11. Convert JSON result
+    # ==========================================
+
+    - name: Convert GVRP global result to JSON
+      ansible.builtin.set_fact:
+        gvrp_global_result: "{{ gvrp_global_raw.stdout | from_json }}"
+
+
+    # ==========================================
+    # 12. Fail if script reported an error
+    # ==========================================
+
+    - name: Fail if GVRP global details failed
+      ansible.builtin.fail:
+        msg: >-
+          GVRP global details failed during {{ gvrp_global_result.stage }}:
+          {{ gvrp_global_result.error }}
+
+      when: gvrp_global_result.status == 'failed'
+
+
+    # ==========================================
+    # 13. Display GVRP global configuration
+    # ==========================================
+
+    - name: Display GVRP global configuration details
+      ansible.builtin.debug:
+        msg: |
+          ip: {{ gvrp_global_result.ip }}
+          gvrp_global_configuration: {{ gvrp_global_result.gvrp_global_configuration }}
+          dynamic_vlan_pruning: {{ gvrp_global_result.dynamic_vlan_pruning }}
+          status: {{ gvrp_global_result.status }}
+
+
+    # ==========================================
+    # 14. Save YAML report
+    # ==========================================
+
+    - name: Save GVRP global configuration details
+      ansible.builtin.copy:
+
+        dest: "/opt/librenms/librenms-ansible-inventory-plugin/output/{{ ansible_host }}_gvrp_global_details.yml"
+
+        content: |
+          ip: {{ gvrp_global_result.ip }}
+          gvrp_global_configuration: {{ gvrp_global_result.gvrp_global_configuration }}
+          dynamic_vlan_pruning: {{ gvrp_global_result.dynamic_vlan_pruning }}
+          status: {{ gvrp_global_result.status }}
+
+
+    # ==========================================
+    # 15. Display result file
+    # ==========================================
+
+    - name: Display result file
+      ansible.builtin.debug:
+        msg: >-
+          GVRP global configuration collected successfully.
+          Result saved to output/{{ ansible_host }}_gvrp_global_details.yml

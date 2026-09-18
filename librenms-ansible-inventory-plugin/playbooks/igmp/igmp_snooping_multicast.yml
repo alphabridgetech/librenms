@@ -1,0 +1,479 @@
+# ==========================================
+# igmp_snooping_multicast.yml
+# Created on Sept 1, 2026 by Vikash Kumar (vikash.kumar@alphabrige.tech).
+#
+# Copyright (c), ALPHA BRIDGE, Inc.
+# 357D, Udyog Vihar Industrial Area Phase VI, Sector 37, Gurugram, Haryana.
+#
+# All rights reserved.
+#
+# This software is the confidential and proprietary information of
+# ALPHA BRIDGE, Inc. ("Confidential Information").  You shall not
+# disclose such Confidential Information and shall use it only in
+# accordance with the terms of the license agreement you entered into
+# with ALPHA BRIDGE.
+#
+# =============================================================================
+# Playbook Name : IGMP Snooping Multicast Static Assignment
+# =============================================================================
+#
+# Description:
+# This playbook enables or disables a static IGMP snooping multicast group
+# assignment on a VLAN/port on AlphaBridge switches over SSH, using:
+#
+#   Enable  : ip igmp-snooping vlan <vlan_id> static <ip_address> interface <port>
+#   Disable : no ip igmp-snooping vlan <vlan_id> static <ip_address> interface <port>
+#
+# Input vars:
+#   vlan_id     - VLAN number, 1-4094
+#   ip_address  - IPv4 multicast address, 224.0.0.0 - 239.255.255.255
+#                 (e.g. 224.1.0.1)
+#   port        - Interface, one of g0/1 through g0/10
+#   action      - "Enable" or "Disable"
+#
+# All inputs are validated in Ansible BEFORE any SSH connection is
+# attempted, and re-checked inside the Python helper as a second layer
+# of defense. The running config is saved with "write" after the change.
+#
+# Example (enable):
+# ansible-playbook -i inventory/192.168.2.245.yml \
+#   playbooks/igmp_snooping_multicast.yml \
+#   -e "vlan_id=3 ip_address=224.1.0.1 port=g0/6 action=Enable"
+#
+# Example (disable):
+# ansible-playbook -i inventory/192.168.2.245.yml \
+#   playbooks/igmp_snooping_multicast.yml \
+#   -e "vlan_id=3 ip_address=224.1.0.1 port=g0/6 action=Disable"
+#
+# Output:
+# output/<switch_ip>_igmp_snooping_multicast.yml
+# =============================================================================
+
+- name: IGMP snooping multicast static assignment
+  hosts: alphabridge_devices
+  gather_facts: no
+
+  tasks:
+
+    # ==========================================
+    # Validate required input variables are present
+    # ==========================================
+
+    - name: Validate required input variables are provided
+      ansible.builtin.assert:
+        that:
+          - vlan_id is defined
+          - ip_address is defined
+          - port is defined
+          - action is defined
+        fail_msg: >
+          You must pass vlan_id, ip_address, port and action, e.g.
+          -e "vlan_id=3 ip_address=224.1.0.1 port=g0/6 action=Enable"
+
+    # ==========================================
+    # Validate VLAN ID
+    # ==========================================
+
+    - name: Validate VLAN ID is numeric
+      ansible.builtin.assert:
+        that:
+          - vlan_id | string is match('^[0-9]+$')
+        fail_msg: "vlan_id must be a whole number (got: {{ vlan_id }})"
+
+    - name: Validate VLAN ID is in range 1-4094
+      ansible.builtin.assert:
+        that:
+          - (vlan_id | int) >= 1
+          - (vlan_id | int) <= 4094
+        fail_msg: "vlan_id must be between 1 and 4094 (got: {{ vlan_id }})"
+
+    # ==========================================
+    # Validate IP address format
+    # ==========================================
+
+    - name: Validate ip_address has dotted-decimal IPv4 format
+      ansible.builtin.assert:
+        that:
+          - ip_address | string is match('^([0-9]{1,3}\\.){3}[0-9]{1,3}$')
+        fail_msg: >
+          ip_address must be a valid IPv4 address in dotted-decimal
+          form, e.g. 224.1.0.1 (got: {{ ip_address }})
+
+    - name: Split ip_address into octets
+      ansible.builtin.set_fact:
+        ip_octets: "{{ ip_address.split('.') }}"
+
+    - name: Validate every octet is between 0 and 255
+      ansible.builtin.assert:
+        that:
+          - (item | int) >= 0
+          - (item | int) <= 255
+        fail_msg: >
+          Each octet of ip_address must be between 0 and 255
+          (got: {{ ip_address }})
+      loop: "{{ ip_octets }}"
+
+    # ==========================================
+    # Validate IP address is multicast (224.0.0.0 - 239.255.255.255)
+    # ==========================================
+
+    - name: Validate ip_address is a multicast address
+      ansible.builtin.assert:
+        that:
+          - (ip_octets[0] | int) >= 224
+          - (ip_octets[0] | int) <= 239
+        fail_msg: >
+          ip_address must be a multicast address in the range
+          224.0.0.0 - 239.255.255.255 (got: {{ ip_address }})
+
+    # ==========================================
+    # Validate port
+    # ==========================================
+
+    - name: Validate port is g0/1 through g0/10
+      ansible.builtin.assert:
+        that:
+          - port in ['g0/1', 'g0/2', 'g0/3', 'g0/4', 'g0/5', 'g0/6', 'g0/7', 'g0/8', 'g0/9', 'g0/10']
+        fail_msg: >
+          port must be one of g0/1 through g0/10 (got: {{ port }})
+
+    # ==========================================
+    # Validate action
+    # ==========================================
+
+    - name: Validate action is Enable or Disable
+      ansible.builtin.assert:
+        that:
+          - action | lower in ['enable', 'disable']
+        fail_msg: "action must be 'Enable' or 'Disable' (got: {{ action }})"
+
+    # ==========================================
+    # Create Python SSH Script
+    # ==========================================
+
+    - name: Create Python SSH Script for IGMP snooping multicast
+      ansible.builtin.copy:
+        dest: "/opt/librenms/librenms-ansible-inventory-plugin/tmp/\
+               igmp_snooping_multicast_exec.py"
+        mode: '0755'
+        content: |
+          #!/usr/bin/env python3
+
+          import paramiko
+          import time
+          import re
+          import json
+
+          HOST = "{{ ansible_host }}"
+          USER = "{{ ansible_user }}"
+          PASSWORD = "{{ ansible_password }}"
+          VLAN_ID = "{{ vlan_id }}"
+          IP_ADDRESS = "{{ ip_address }}"
+          PORT = "{{ port }}"
+          ACTION = "{{ action }}"
+
+          VALID_PORTS = {f"g0/{n}" for n in range(1, 11)}
+
+
+          def read_until_prompt(shell, prompt_regex, timeout=10):
+              buf = ""
+              end_time = time.time() + timeout
+
+              while time.time() < end_time:
+                  if shell.recv_ready():
+                      chunk = shell.recv(65535).decode(errors="ignore")
+                      buf += chunk
+
+                      if re.search(prompt_regex, buf):
+                          return buf
+                  else:
+                      time.sleep(0.1)
+
+              return buf
+
+
+          def is_valid_vlan_id(value):
+              if not re.match(r'^\d+$', value):
+                  return False
+              num = int(value)
+              return 1 <= num <= 4094
+
+
+          def is_valid_multicast_ip(value):
+              octet_re = re.match(
+                  r'^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$', value
+              )
+              if not octet_re:
+                  return False
+
+              octets = [int(g) for g in octet_re.groups()]
+
+              if any(o < 0 or o > 255 for o in octets):
+                  return False
+
+              return 224 <= octets[0] <= 239
+
+
+          def is_valid_port(value):
+              return value in VALID_PORTS
+
+
+          def is_enabled(value):
+              return value.strip().lower() in ("enable", "enabled", "true", "yes")
+
+
+          ansi_re = re.compile(
+              r'\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])'
+          )
+
+          shell = None
+          ssh = None
+
+          try:
+              # ==========================================
+              # RE-VALIDATE INPUTS (defense in depth, in case
+              # this script is ever invoked outside the playbook)
+              # ==========================================
+
+              if not is_valid_vlan_id(VLAN_ID):
+                  raise Exception(
+                      f"Invalid vlan_id '{VLAN_ID}': must be a number between 1 and 4094"
+                  )
+
+              if not is_valid_multicast_ip(IP_ADDRESS):
+                  raise Exception(
+                      f"Invalid ip_address '{IP_ADDRESS}': must be a multicast "
+                      f"address between 224.0.0.0 and 239.255.255.255"
+                  )
+
+              if not is_valid_port(PORT):
+                  raise Exception(
+                      f"Invalid port '{PORT}': must be one of g0/1 through g0/10"
+                  )
+
+              # ==========================================
+              # SSH CONNECTION
+              # ==========================================
+
+              ssh = paramiko.SSHClient()
+              ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+
+              ssh.connect(
+                  HOST,
+                  username=USER,
+                  password=PASSWORD,
+                  look_for_keys=False,
+                  allow_agent=False,
+                  timeout=10
+              )
+
+              shell = ssh.invoke_shell()
+              time.sleep(0.5)
+
+              # ==========================================
+              # INITIAL PROMPT
+              # ==========================================
+
+              initial_output = read_until_prompt(
+                  shell,
+                  r'[>#]\s*$',
+                  timeout=5
+              )
+
+              # ==========================================
+              # ENABLE
+              # ==========================================
+
+              shell.send("enable\n")
+
+              enable_output = read_until_prompt(
+                  shell,
+                  r'[>#]\s*$',
+                  timeout=5
+              )
+
+              # ==========================================
+              # DISABLE PAGING
+              # ==========================================
+
+              shell.send("terminal length 0\n")
+
+              terminal_output = read_until_prompt(
+                  shell,
+                  r'[>#]\s*$',
+                  timeout=5
+              )
+
+              # ==========================================
+              # ENTER CONFIG MODE
+              # ==========================================
+
+              shell.send("config\n")
+
+              config_output = read_until_prompt(
+                  shell,
+                  r'[>#]\s*$',
+                  timeout=10
+              )
+
+              # ==========================================
+              # APPLY / REMOVE STATIC MULTICAST ASSIGNMENT
+              # ==========================================
+
+              if is_enabled(ACTION):
+                  multicast_cmd = (
+                      f"ip igmp-snooping vlan {VLAN_ID} static {IP_ADDRESS} "
+                      f"interface {PORT}\n"
+                  )
+              else:
+                  multicast_cmd = (
+                      f"no ip igmp-snooping vlan {VLAN_ID} static {IP_ADDRESS} "
+                      f"interface {PORT}\n"
+                  )
+
+              shell.send(multicast_cmd)
+
+              multicast_output = read_until_prompt(
+                  shell,
+                  r'[>#]\s*$',
+                  timeout=10
+              )
+
+              if re.search(r'%err|invalid|error', multicast_output, re.IGNORECASE):
+                  raise Exception(
+                      f"'{multicast_cmd.strip()}' rejected by switch: "
+                      f"{multicast_output.strip()}"
+                  )
+
+              # ==========================================
+              # EXIT CONFIG MODE
+              # ==========================================
+
+              shell.send("exit\n")
+
+              exit_output = read_until_prompt(
+                  shell,
+                  r'[>#]\s*$',
+                  timeout=5
+              )
+
+              # ==========================================
+              # SAVE CONFIG (persist running-config)
+              # NOTE: assumes "write" is the correct save command for
+              # AlphaBridge switches. Change to "write memory",
+              # "copy running-config startup-config", "save", etc. if
+              # your switch uses different syntax.
+              # ==========================================
+
+              shell.send("write\n")
+
+              write_output = read_until_prompt(
+                  shell,
+                  r'[>#]\s*$',
+                  timeout=15
+              )
+
+              if re.search(r'%err|invalid|error|fail', write_output, re.IGNORECASE):
+                  raise Exception(
+                      f"'write' (save config) rejected by switch: "
+                      f"{write_output.strip()}"
+                  )
+
+              # ==========================================
+              # CLEAN ANSI CHARACTERS
+              # ==========================================
+
+              multicast_output = ansi_re.sub("", multicast_output)
+              write_output = ansi_re.sub("", write_output)
+
+              # ==========================================
+              # CLOSE SSH
+              # ==========================================
+
+              shell.close()
+              ssh.close()
+
+              # ==========================================
+              # RETURN JSON
+              # ==========================================
+
+              print(json.dumps({
+                  "ip": HOST,
+                  "status": "success",
+              }))
+
+          except Exception as e:
+              try:
+                  if shell:
+                      shell.close()
+
+                  if ssh:
+                      ssh.close()
+              except:
+                  pass
+
+              print(json.dumps({
+                  "ip": HOST,
+                  "status": "failed",
+                  "error": str(e)
+              }))
+
+    # ==========================================
+    # EXECUTE PYTHON SCRIPT
+    # ==========================================
+
+    - name: Execute IGMP snooping multicast script
+      ansible.builtin.command:
+        cmd: >
+          /opt/librenms/librenms-ansible-inventory-plugin/bin/python3
+          /opt/librenms/librenms-ansible-inventory-plugin/tmp/igmp_snooping_multicast_exec.py
+      register: igmp_raw
+      changed_when: false
+      failed_when: false
+
+    # ==========================================
+    # CONVERT JSON RESULT
+    # ==========================================
+
+    - name: Convert IGMP snooping result to JSON
+      ansible.builtin.set_fact:
+        igmp_result: "{{ igmp_raw.stdout | from_json }}"
+
+    # ==========================================
+    # DISPLAY RESULT
+    # ==========================================
+
+    - name: Display IGMP snooping result
+      ansible.builtin.debug:
+        var: igmp_result
+
+    # ==========================================
+    # SAVE RESULT
+    # ==========================================
+
+    - name: Save IGMP snooping result
+      ansible.builtin.copy:
+        dest: "/opt/librenms/librenms-ansible-inventory-plugin/output/\
+               {{ ansible_host }}_igmp_snooping_multicast.yml"
+        content: |
+          {{ igmp_result | to_nice_yaml }}
+
+    # ==========================================
+    # FAIL IF COMMAND FAILED
+    # ==========================================
+
+    - name: Fail if IGMP snooping multicast config failed
+      ansible.builtin.fail:
+        msg: "{{ igmp_result.error }}"
+      when: igmp_result.status == "failed"
+
+    # ==========================================
+    # FINAL MESSAGE
+    # ==========================================
+
+    - name: Display result file
+      ansible.builtin.debug:
+        msg: >
+          IGMP snooping static multicast entry ({{ ip_address }}, {{ port }})
+          on VLAN {{ vlan_id }} set to {{ action }} on {{ ansible_host }}.
+          Result saved to output/{{ ansible_host }}_igmp_snooping_multicast.yml

@@ -1,0 +1,511 @@
+---
+# ============================================================
+# Voice VLAN MAC Address SET / DELETE
+#
+# SET:
+# voice-vlan mac-address <MAC> mask <MASK>
+#
+# DELETE:
+# no voice-vlan mac-address <MAC> mask <MASK>
+#
+# SET example:
+# ansible-playbook -i inventory/192.168.10.1.yml \
+# playbooks/vlan/setvoicevlan.yml \
+# -e "operation=set mac_address=001A.2B3C.4D5A mac_mask=0000.0000.0000"
+#
+# DELETE example:
+# ansible-playbook -i inventory/192.168.10.1.yml \
+# playbooks/vlan/setvoicevlan.yml \
+# -e "operation=delete mac_address=001A.2B3C.4D5A mac_mask=0000.0000.0000"
+# ============================================================
+
+- name: Voice VLAN MAC Address SET / DELETE
+  hosts: alphabridge_devices
+  gather_facts: false
+
+  vars:
+
+    # --------------------------------------------------------
+    # Output and temporary directories
+    # --------------------------------------------------------
+    output_dir: "/opt/librenms/librenms-ansible-inventory-plugin/output"
+    temp_dir: "/opt/librenms/librenms-ansible-inventory-plugin/tmp"
+
+    # --------------------------------------------------------
+    # Operation details
+    # --------------------------------------------------------
+    operation: "set"
+    mac_address: ""
+    mac_mask: ""
+
+  tasks:
+
+    # ========================================================
+    # Validate operation
+    # ========================================================
+    - name: Validate operation
+      ansible.builtin.assert:
+        that:
+          - operation | lower in ['set', 'delete']
+        fail_msg: "operation must be either set or delete."
+
+    # ========================================================
+    # Validate MAC address
+    # ========================================================
+    - name: Validate MAC address
+      ansible.builtin.assert:
+        that:
+          - mac_address is match('^[0-9A-Fa-f]{4}\\.[0-9A-Fa-f]{4}\\.[0-9A-Fa-f]{4}$')
+        fail_msg: "MAC address must be in xxxx.xxxx.xxxx format."
+
+    # ========================================================
+    # Validate MAC mask
+    # ========================================================
+    - name: Validate MAC mask
+      ansible.builtin.assert:
+        that:
+          - mac_mask is match('^[0-9A-Fa-f]{4}\\.[0-9A-Fa-f]{4}\\.[0-9A-Fa-f]{4}$')
+        fail_msg: "MAC mask must be in xxxx.xxxx.xxxx format."
+
+    # ========================================================
+    # Create output directory
+    # ========================================================
+    - name: Create output directory
+      ansible.builtin.file:
+        path: "{{ output_dir }}"
+        state: directory
+        mode: "0755"
+      delegate_to: localhost
+
+    # ========================================================
+    # Create temporary directory
+    # ========================================================
+    - name: Create temporary directory
+      ansible.builtin.file:
+        path: "{{ temp_dir }}"
+        state: directory
+        mode: "0755"
+      delegate_to: localhost
+
+    # ========================================================
+    # Create Paramiko Python script
+    # ========================================================
+    - name: Create Voice VLAN SET DELETE Python script
+      ansible.builtin.copy:
+        dest: "{{ temp_dir }}/set_voice_vlan.py"
+        mode: "0755"
+        content: |
+          import paramiko
+          import time
+          import re
+          import os
+
+          # =====================================================
+          # Device details
+          # =====================================================
+          HOST = "{{ ansible_host | default(inventory_hostname) }}"
+          USERNAME = "{{ ansible_user }}"
+          PASSWORD = "{{ ansible_password }}"
+
+          OPERATION = "{{ operation | lower }}"
+          MAC_ADDRESS = "{{ mac_address }}"
+          MAC_MASK = "{{ mac_mask }}"
+
+          OUTPUT_FILE = os.path.join(
+              "{{ output_dir }}",
+              f"{HOST}_voice_vlan.yml"
+          )
+
+          # =====================================================
+          # Generic prompt detection
+          #
+          # Works with any prompt ending in:
+          # >
+          # #
+          #
+          # Examples:
+          # production>
+          # production#
+          # production12#
+          # AS212XTS>
+          # AS212XTS#
+          # switch#
+          # switch_config#
+          # =====================================================
+          def get_prompt(output):
+
+              # Remove ANSI escape sequences
+              output = re.sub(
+                  r"\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])",
+                  "",
+                  output
+              )
+
+              lines = output.splitlines()
+
+              for line in reversed(lines):
+
+                  line = line.strip()
+
+                  if not line:
+                      continue
+
+                  # Any CLI prompt ending in > or #
+                  if re.search(r"[>#]$", line):
+                      return line
+
+              return ""
+
+          # =====================================================
+          # Read all available shell data
+          # =====================================================
+          def read_available(shell):
+
+              output = ""
+
+              while shell.recv_ready():
+
+                  try:
+                      data = shell.recv(65535).decode(
+                          "utf-8",
+                          errors="ignore"
+                      )
+
+                      output += data
+
+                  except Exception:
+                      break
+
+              return output
+
+          # =====================================================
+          # Wait for any CLI prompt
+          # =====================================================
+          def wait_for_prompt(shell, timeout=15):
+
+              output = ""
+              start_time = time.time()
+
+              while time.time() - start_time < timeout:
+
+                  output += read_available(shell)
+
+                  if get_prompt(output):
+                      return output
+
+                  time.sleep(0.2)
+
+              return output
+
+          # =====================================================
+          # Send command and wait for prompt
+          # =====================================================
+          def send_command(shell, command, timeout=15):
+
+              # Clear old data
+              read_available(shell)
+
+              # Send command
+              shell.send(command + "\n")
+
+              # Wait for response
+              return wait_for_prompt(
+                  shell,
+                  timeout
+              )
+
+          # =====================================================
+          # Get initial device prompt
+          # =====================================================
+          def get_initial_prompt(shell):
+
+              # First attempt
+              output = wait_for_prompt(
+                  shell,
+                  5
+              )
+
+              if get_prompt(output):
+                  return output
+
+              # If prompt is not displayed, send newline
+              shell.send("\n")
+
+              output = wait_for_prompt(
+                  shell,
+                  10
+              )
+
+              return output
+
+          # =====================================================
+          # Main
+          # =====================================================
+          client = None
+          shell = None
+
+          try:
+
+              # -------------------------------------------------
+              # SSH connection
+              # -------------------------------------------------
+              client = paramiko.SSHClient()
+
+              client.set_missing_host_key_policy(
+                  paramiko.AutoAddPolicy()
+              )
+
+              client.connect(
+                  hostname=HOST,
+                  username=USERNAME,
+                  password=PASSWORD,
+                  look_for_keys=False,
+                  allow_agent=False,
+                  timeout=30,
+                  banner_timeout=30,
+                  auth_timeout=30
+              )
+
+              # -------------------------------------------------
+              # Open interactive shell
+              # -------------------------------------------------
+              shell = client.invoke_shell(
+                  term="vt100",
+                  width=200,
+                  height=1000
+              )
+
+              time.sleep(2)
+
+              # -------------------------------------------------
+              # Get initial prompt
+              # -------------------------------------------------
+              initial_output = get_initial_prompt(shell)
+
+              current_prompt = get_prompt(
+                  initial_output
+              )
+
+              if not current_prompt:
+
+                  raise Exception(
+                      "Unable to detect initial device prompt"
+                  )
+
+              # -------------------------------------------------
+              # Enter enable mode
+              # -------------------------------------------------
+              if current_prompt.endswith(">"):
+
+                  enable_output = send_command(
+                      shell,
+                      "enable",
+                      15
+                  )
+
+                  enable_prompt = get_prompt(
+                      enable_output
+                  )
+
+                  if not enable_prompt:
+
+                      shell.send("\n")
+
+                      enable_output += wait_for_prompt(
+                          shell,
+                          5
+                      )
+
+                      enable_prompt = get_prompt(
+                          enable_output
+                      )
+
+                  if not enable_prompt:
+
+                      raise Exception(
+                          "Unable to enter enable mode"
+                      )
+
+                  current_prompt = enable_prompt
+
+              # -------------------------------------------------
+              # Enter configuration mode
+              #
+              # Do not depend on the exact prompt name.
+              # -------------------------------------------------
+              if "config" not in current_prompt.lower():
+
+                  config_output = send_command(
+                      shell,
+                      "config",
+                      15
+                  )
+
+                  config_prompt = get_prompt(
+                      config_output
+                  )
+
+                  if not config_prompt:
+
+                      shell.send("\n")
+
+                      config_output += wait_for_prompt(
+                          shell,
+                          5
+                      )
+
+                      config_prompt = get_prompt(
+                          config_output
+                      )
+
+                  if not config_prompt:
+
+                      raise Exception(
+                          "Unable to enter configuration mode"
+                      )
+
+                  current_prompt = config_prompt
+
+              # -------------------------------------------------
+              # Build Voice VLAN command
+              # -------------------------------------------------
+              if OPERATION == "set":
+
+                  command = (
+                      "voice-vlan mac-address "
+                      + MAC_ADDRESS
+                      + " mask "
+                      + MAC_MASK
+                  )
+
+              elif OPERATION == "delete":
+
+                  command = (
+                      "no voice-vlan mac-address "
+                      + MAC_ADDRESS
+                      + " mask "
+                      + MAC_MASK
+                  )
+
+              else:
+
+                  raise Exception(
+                      "Invalid operation. Use set or delete."
+                  )
+
+              # -------------------------------------------------
+              # Execute Voice VLAN command
+              # -------------------------------------------------
+              command_output = send_command(
+                  shell,
+                  command,
+                  15
+              )
+
+              # -------------------------------------------------
+              # Check command response
+              # -------------------------------------------------
+              if re.search(
+                  r"(%Error:|% Invalid|Invalid input|"
+                  r"Unknown command|Unknown Command|"
+                  r"Error:|ERROR|failed|Failed|FAILED)",
+                  command_output,
+                  re.IGNORECASE
+              ):
+
+                  raise Exception(
+                      "Command failed: "
+                      + command_output.strip()
+                  )
+
+              # -------------------------------------------------
+              # Exit configuration mode
+              # -------------------------------------------------
+              send_command(
+                  shell,
+                  "exit",
+                  10
+              )
+
+              # -------------------------------------------------
+              # SUCCESS
+              # -------------------------------------------------
+              result_status = "SUCCESS"
+
+          except Exception as e:
+
+              # -------------------------------------------------
+              # FAILED
+              # -------------------------------------------------
+              result_status = "FAILED"
+              error_reason = str(e)
+
+          finally:
+
+              if shell:
+
+                  try:
+                      shell.close()
+                  except Exception:
+                      pass
+
+              if client:
+
+                  try:
+                      client.close()
+                  except Exception:
+                      pass
+
+          # =====================================================
+          # Output file
+          #
+          # Only SUCCESS / FAILED is written.
+          # =====================================================
+          with open(
+              OUTPUT_FILE,
+              "w"
+          ) as f:
+
+              f.write(
+                  result_status + "\n"
+              )
+
+          # =====================================================
+          # Console output
+          # =====================================================
+          print(result_status)
+
+          if result_status == "FAILED":
+              print(error_reason)
+
+    # ========================================================
+    # Run Voice VLAN SET / DELETE
+    # ========================================================
+    - name: Run Voice VLAN SET / DELETE
+      ansible.builtin.command:
+        cmd: >
+          /opt/librenms/librenms-ansible-inventory-plugin/bin/python3
+          {{ temp_dir }}/set_voice_vlan.py
+      register: voice_vlan_result
+      delegate_to: localhost
+      changed_when: "'SUCCESS' in (voice_vlan_result.stdout | default(''))"
+      failed_when: >
+        voice_vlan_result.rc != 0 or
+        'SUCCESS' not in (voice_vlan_result.stdout | default(''))
+
+    # ========================================================
+    # Display result
+    # ========================================================
+    - name: Display Voice VLAN result
+      ansible.builtin.debug:
+        var: voice_vlan_result.stdout
+
+    # ========================================================
+    # Final failure check
+    # ========================================================
+    - name: Fail if Voice VLAN operation failed
+      ansible.builtin.fail:
+        msg: "{{ voice_vlan_result.stdout }}"
+      when: >
+        voice_vlan_result.rc != 0 or
+        'SUCCESS' not in (voice_vlan_result.stdout | default(''))

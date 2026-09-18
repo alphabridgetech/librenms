@@ -1,0 +1,371 @@
+# ==========================================
+# dhcp_binding_details.yml
+# Created on Sept 4, 2026 by Vikash Kumar (vikash.kumar@alphabrige.tech).
+#
+# Copyright (c), ALPHA BRIDGE, Inc.
+# 357D, Udyog Vihar Industrial Area Phase VI, Sector 37, Gurugram, Haryana.
+#
+# All rights reserved.
+#
+# This software is the confidential and proprietary information of ALPHA BRIDGE,
+# Inc. ("Confidential Information"). You shall not disclose such Confidential
+# Information and shall use it only in accordance with the
+# terms of the license agreement you entered into with
+# ALPHA BRIDGE.
+#
+# =============================================================================
+# Playbook Name : DHCP Binding Details (Show)
+# =============================================================================
+#
+# Description:
+# This playbook only READS the DHCP snooping binding table
+# from an AlphaBridge switch over SSH by running:
+#   show ip dhcp-relay snooping binding
+#
+# It does not change any configuration.
+#
+# Raw device output looks like:
+#   Total Entries:1
+#   Hardware Address  IP Address      Surplus Time Type
+#   VLAN Intf
+#   ----------------- --------------- ------------ -------
+#   ---- ----------
+#   60:dd:8e:1c:3d:d3 192.168.2.45    infinite     MANUAL
+#   100  g0/6
+#
+# The device output includes a "Surplus Time" column between
+# IP Address and Type - it's parsed (so the row regex
+# actually matches) but deliberately left out of the final
+# output, per your request.
+#
+# Output produced:
+#   total_entries - the count from the "Total Entries:" line
+#   bindings      - list of {mac_address, ip_address, type,
+#                   vlan_id, interface} for every row
+#
+# Input vars (all optional - filters applied after parsing):
+#   vlan_id     - only return bindings on this VLAN
+#   mac_address - only return the binding for this MAC
+#                 (case-insensitive)
+#
+# Example:
+# ansible-playbook -i inventory/192.168.2.245.yml \
+#   playbooks/dhcp_binding_details.yml
+#
+# Output:
+# output/<switch_ip>_dhcp_binding_details.yml
+# =============================================================================
+
+- name: DHCP binding details (show)
+  hosts: alphabridge_devices
+  gather_facts: no
+
+  tasks:
+
+    # ==========================================
+    # Validate vlan_id if provided
+    # ==========================================
+
+    - name: Validate vlan_id is numeric (when provided)
+      ansible.builtin.assert:
+        that:
+          - vlan_id | string is match('^[0-9]+$')
+        fail_msg: "vlan_id must be a whole number (got: {{ vlan_id }})"
+      when: vlan_id is defined
+
+    # ==========================================
+    # Create Python SSH Script
+    # ==========================================
+
+    - name: >-
+        Create Python SSH Script for DHCP binding details
+      ansible.builtin.copy:
+        dest: "/opt/librenms/librenms-ansible-inventory-plugin/tmp/
+               dhcp_binding_details_exec.py"
+        mode: '0755'
+        content: |
+          #!/usr/bin/env python3
+
+          import paramiko
+          import time
+          import re
+          import json
+
+          HOST = "{{ ansible_host }}"
+          USER = "{{ ansible_user }}"
+          PASSWORD = "{{ ansible_password }}"
+          VLAN_FILTER = "{{ vlan_id | default('') }}"
+          MAC_FILTER = "{{ mac_address | default('') }}"
+
+          PROMPT_RE = r'[>#]\s*$'
+
+
+          def read_until_prompt(shell, prompt_re, timeout=10):
+              buf = ""
+              end_time = time.time() + timeout
+
+              while time.time() < end_time:
+                  if shell.recv_ready():
+                      chunk = shell.recv(65535).decode(
+                          errors="ignore"
+                      )
+                      buf += chunk
+
+                      if re.search(prompt_re, buf):
+                          return buf
+                  else:
+                      time.sleep(0.1)
+
+              return buf
+
+
+          def send_cmd(
+              shell, cmd, timeout=10, check_errors=True
+          ):
+              """Send a CLI command, wait for the prompt,
+              optionally raise on switch-reported errors.
+              Returns the raw output."""
+              shell.send(
+                  cmd if cmd.endswith("\n") else cmd + "\n"
+              )
+              output = read_until_prompt(
+                  shell, PROMPT_RE, timeout=timeout
+              )
+
+              if check_errors and re.search(
+                  r'%err|invalid|error', output, re.IGNORECASE
+              ):
+                  raise Exception(
+                      f"'{cmd.strip()}' rejected by switch: "
+                      f"{output.strip()}"
+                  )
+
+              return output
+
+
+          ansi_re = re.compile(
+              r'\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])'
+          )
+
+          total_entries_re = re.compile(
+              r'^Total\s+Entries\s*:\s*(\d+)', re.IGNORECASE
+          )
+
+          # "60:dd:8e:1c:3d:d3 192.168.2.45  infinite
+          #  MANUAL  100  g0/6"
+          # Columns: MAC, IP, Surplus Time, Type, VLAN,
+          # Intf. Surplus Time is captured so the row
+          # actually matches, but is dropped from the
+          # output below (not needed).
+          row_re = re.compile(
+              r'^(\S+)\s+(\S+)\s+(\S+)\s+(\S+)\s+(\S+)'
+              r'\s+(\S+)\s*$'
+          )
+
+          shell = None
+          ssh = None
+
+          try:
+              # ==================================
+              # SSH CONNECTION
+              # ==================================
+
+              ssh = paramiko.SSHClient()
+              ssh.set_missing_host_key_policy(
+                  paramiko.AutoAddPolicy()
+              )
+
+              ssh.connect(
+                  HOST,
+                  username=USER,
+                  password=PASSWORD,
+                  look_for_keys=False,
+                  allow_agent=False,
+                  timeout=10
+              )
+
+              shell = ssh.invoke_shell()
+              time.sleep(0.5)
+
+              # ==================================
+              # LOGIN BANNER / INITIAL PROMPT
+              # ==================================
+
+              read_until_prompt(shell, PROMPT_RE, timeout=5)
+
+              # ==================================
+              # ENABLE, DISABLE PAGING, RUN SHOW
+              # ==================================
+
+              send_cmd(
+                  shell, "enable",
+                  timeout=5, check_errors=False
+              )
+              send_cmd(
+                  shell, "terminal length 0",
+                  timeout=5, check_errors=False
+              )
+
+              show_output = send_cmd(
+                  shell,
+                  "show ip dhcp-relay snooping binding",
+                  timeout=10, check_errors=False
+              )
+
+              # ==================================
+              # CLEAN ANSI CHARACTERS
+              # ==================================
+
+              show_output = ansi_re.sub("", show_output)
+
+              # ==================================
+              # PARSE OUTPUT
+              # ==================================
+
+              total_entries = ""
+              bindings = []
+
+              for raw_line in show_output.splitlines():
+                  line = raw_line.strip()
+
+                  if not line:
+                      continue
+
+                  if line.lower().startswith(
+                      "show ip dhcp-relay snooping"
+                  ):
+                      continue
+
+                  total_match = total_entries_re.match(line)
+                  if total_match:
+                      total_entries = total_match.group(1)
+                      continue
+
+                  if line.lower().startswith(
+                      "hardware address"
+                  ):
+                      continue
+
+                  if line.startswith("---"):
+                      continue
+
+                  row_match = row_re.match(line)
+                  if row_match:
+                      (
+                          mac, ip, surplus_time,
+                          entry_type, vlan, intf
+                      ) = row_match.groups()
+
+                      bindings.append({
+                          "mac_address": mac,
+                          "ip_address": ip,
+                          "type": entry_type,
+                          "vlan_id": vlan,
+                          "interface": intf
+                      })
+
+              # ==================================
+              # APPLY OPTIONAL FILTERS
+              # ==================================
+
+              if VLAN_FILTER.strip():
+                  bindings = [
+                      b for b in bindings
+                      if b["vlan_id"] == VLAN_FILTER.strip()
+                  ]
+
+              if MAC_FILTER.strip():
+                  mac_lower = MAC_FILTER.strip().lower()
+                  bindings = [
+                      b for b in bindings
+                      if b["mac_address"].lower() == mac_lower
+                  ]
+
+              # ==================================
+              # CLOSE SSH / RETURN JSON
+              # ==================================
+
+              shell.close()
+              ssh.close()
+
+              print(json.dumps({
+                  "ip": HOST,
+                  "status": "success",
+                  "total_entries": total_entries,
+                  "bindings": bindings
+              }))
+
+          except Exception as e:
+              try:
+                  if shell:
+                      shell.close()
+                  if ssh:
+                      ssh.close()
+              except:
+                  pass
+
+              print(json.dumps({
+                  "ip": HOST,
+                  "status": "failed",
+                  "error": str(e)
+              }))
+
+    # ==========================================
+    # EXECUTE PYTHON SCRIPT
+    # ==========================================
+
+    - name: Execute DHCP binding details script
+      ansible.builtin.command:
+        cmd: >
+          /opt/librenms/librenms-ansible-inventory-plugin/bin/python3
+          /opt/librenms/librenms-ansible-inventory-plugin/tmp/dhcp_binding_details_exec.py
+      register: dhcp_raw
+      changed_when: false
+      failed_when: false
+
+    # ==========================================
+    # CONVERT JSON RESULT
+    # ==========================================
+
+    - name: Convert DHCP binding details result to JSON
+      ansible.builtin.set_fact:
+        dhcp_result: "{{ dhcp_raw.stdout | from_json }}"
+
+    # ==========================================
+    # DISPLAY RESULT
+    # ==========================================
+
+    - name: Display DHCP binding details result
+      ansible.builtin.debug:
+        var: dhcp_result
+
+    # ==========================================
+    # SAVE RESULT
+    # ==========================================
+
+    - name: Save DHCP binding details result
+      ansible.builtin.copy:
+        dest: "/opt/librenms/librenms-ansible-inventory-plugin/output/\
+              {{ ansible_host }}_dhcp_binding_details.yml"
+        content: |
+          {{ dhcp_result | to_nice_yaml }}
+
+    # ==========================================
+    # FAIL IF SHOW COMMAND FAILED
+    # ==========================================
+
+    - name: Fail if DHCP binding details show failed
+      ansible.builtin.fail:
+        msg: "{{ dhcp_result.error }}"
+      when: dhcp_result.status == "failed"
+
+    # ==========================================
+    # FINAL MESSAGE
+    # ==========================================
+
+    - name: Display result file
+      ansible.builtin.debug:
+        msg: >
+          DHCP binding details retrieved from
+          {{ ansible_host }}. Result saved to
+          output/{{ ansible_host }}_dhcp_binding_details.yml
