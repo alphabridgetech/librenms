@@ -604,49 +604,119 @@ public function getmtu($hostname)
     #------------------------------------------------------------
     #                   GET LLDP INTERFACE
     #------------------------------------------------------------
+    // getlldpinterface.yml requires an explicit comma-separated `interface`
+    // list (it doesn't auto-discover like the PDP/VLAN interface playbooks
+    // do) - source that list from LibreNMS's own port table rather than
+    // hardcoding or requiring the frontend to supply it.
     public function getlldpinterface($hostname)
-{
-    $playbook = "{$this->pluginPath}/playbooks/lldp/getlldpinterface.yml";
-    $hosts    = "{$this->pluginPath}/hosts/{$hostname}.yml";
-    $yamlFile = "{$this->pluginPath}/output/{$hostname}_getlldpinterface.yml";
+    {
+        if (!function_exists('yaml_parse_file')) {
+            return $this->error("PHP YAML extension missing", null);
+        }
 
-    // If we already have a result from a previous run, serve it immediately
-    // and kick off a fresh SSH fetch in the background for next time -
-    // avoids making every page load wait on a live SSH round-trip.
-    if (file_exists($yamlFile)) {
-        $cached = yaml_parse_file($yamlFile);
+        $interfaces = $this->getEligibleLldpPorts($hostname);
+        if (empty($interfaces)) {
+            return $this->error("No eligible LLDP interfaces (GigaEthernet0/1-10) found for this device in LibreNMS", null);
+        }
 
-        if (!empty($cached['lldp_interfaces'])) {
-            $this->runAnsibleAsync($playbook, $hosts);
+        $playbook = "{$this->pluginPath}/playbooks/lldp/getlldpinterface.yml";
+        $hosts    = "{$this->pluginPath}/hosts/{$hostname}.yml";
+        $yamlFile = "{$this->pluginPath}/output/{$hostname}_lldp_interface_configuration.yml";
+        $extraVars = ['interface' => implode(',', $interfaces)];
+
+        // If we already have a result from a previous run, serve it immediately
+        // and kick off a fresh SSH fetch in the background for next time -
+        // avoids making every page load wait on a live SSH round-trip.
+        if (file_exists($yamlFile)) {
+            $cached = yaml_parse_file($yamlFile);
+
+            $this->runAnsibleAsync($playbook, $hosts, $extraVars);
 
             return $this->success([
                 "ip"              => $cached['ip'] ?? $hostname,
-                "lldp"            => $cached['lldp'] ?? [],
-                "lldp_interfaces" => $cached['lldp_interfaces'],
-                "raw"             => $cached,
+                "lldp_interfaces" => is_array($cached['lldp_interfaces'] ?? null) ? $cached['lldp_interfaces'] : [],
                 "cached"          => true,
             ]);
         }
+
+        // No usable cached result yet (first load) - fetch synchronously.
+        $output = $this->runAnsiblejs($playbook, $hosts, $extraVars);
+
+        if (!file_exists($yamlFile)) {
+            return $this->error("LLDP Interface output file not found", $output);
+        }
+
+        $data = yaml_parse_file($yamlFile);
+
+        return $this->success([
+            "ip"              => $data['ip'] ?? $hostname,
+            "lldp_interfaces" => is_array($data['lldp_interfaces'] ?? null) ? $data['lldp_interfaces'] : [],
+            "cached"          => false,
+        ]);
     }
 
-    // No usable cached result yet (first load) - fetch synchronously.
-    $output = $this->runAnsible($playbook, $hosts);
+    /**
+     * All of this device's GigaEthernet0/1-10 port names, straight from
+     * LibreNMS's own `ports` table - setlldpinterfaceconfiguration.yml only
+     * accepts interfaces in that exact range, so both GET and SET are
+     * scoped to the same eligible list.
+     */
+    private function getEligibleLldpPorts(string $hostname): array
+    {
+        $device = Device::where('hostname', $hostname)->first();
+        if (!$device) {
+            return [];
+        }
 
-    if (!file_exists($yamlFile)) {
-        return $this->error("LLDP Interface output file not found", $output);
+        return $device->ports()
+            ->pluck('ifName')
+            ->filter(fn ($name) => is_string($name) && preg_match('/^GigaEthernet0\/([1-9]|10)$/i', $name))
+            ->values()
+            ->all();
     }
-    $data = yaml_parse_file($yamlFile);
-    if (empty($data['lldp_interfaces'])) {
-        return $this->error("LLDP Interface data not found in YAML", $data);
+
+    #------------------------------------------------------------
+    #                   SET LLDP INTERFACE
+    #------------------------------------------------------------
+    public function setlldpinterface(Request $request, $hostname)
+    {
+        $data = $request->validate([
+            'interface'    => ['required', 'string', 'regex:/^GigaEthernet0\/([1-9]|10)$/i'],
+            'admin_status' => 'required|string|in:enable,disable',
+            'tlv'          => 'required|string|in:enable,disable',
+        ]);
+
+        $playbook = "{$this->pluginPath}/playbooks/lldp/setlldpinterfaceconfiguration.yml";
+        $hosts    = "{$this->pluginPath}/hosts/{$hostname}.yml";
+
+        $output = $this->runAnsiblejs($playbook, $hosts, [
+            'interface'    => $data['interface'],
+            'admin_status' => strtolower($data['admin_status']),
+            'tlv'          => strtolower($data['tlv']),
+        ]);
+
+        if (stripos($output, 'FAILED!') !== false) {
+            return $this->error("LLDP interface configuration failed", $output);
+        }
+
+        // Refresh the full interface list synchronously so the frontend's
+        // reload afterward reflects the change - getlldpinterface.yml needs
+        // the complete interface list (it doesn't auto-discover), so pull
+        // it from LibreNMS the same way the initial GET does.
+        $interfaces = $this->getEligibleLldpPorts($hostname);
+        if (!empty($interfaces)) {
+            $this->runAnsiblejs(
+                "{$this->pluginPath}/playbooks/lldp/getlldpinterface.yml",
+                $hosts,
+                ['interface' => implode(',', $interfaces)]
+            );
+        }
+
+        return $this->success([
+            "message" => "LLDP interface configuration updated for {$data['interface']}",
+            "raw"     => $output,
+        ]);
     }
-    return $this->success([
-        "ip"              => $data['ip'] ?? $hostname,
-        "lldp"            => $data['lldp'] ?? [],
-        "lldp_interfaces" => $data['lldp_interfaces'],
-        "raw"             => $data,
-        "cached"          => false,
-    ]);
-}
 
     #------------------------------------------------------------
     #                     CHANGE LLDP
@@ -671,8 +741,17 @@ public function getmtu($hostname)
         // Refresh both getlldp caches synchronously - the global protocol
         // state also drives the interface table's enable/disable toggles,
         // so both need to be fresh before the frontend reloads them.
+        // getlldpinterface.yml requires an explicit interface list (it
+        // doesn't auto-discover), sourced from LibreNMS's own port table.
         $this->runAnsible("{$this->pluginPath}/playbooks/lldp/getlldp.yml", $hosts);
-        $this->runAnsible("{$this->pluginPath}/playbooks/lldp/getlldpinterface.yml", $hosts);
+        $lldpInterfaces = $this->getEligibleLldpPorts($hostname);
+        if (!empty($lldpInterfaces)) {
+            $this->runAnsiblejs(
+                "{$this->pluginPath}/playbooks/lldp/getlldpinterface.yml",
+                $hosts,
+                ['interface' => implode(',', $lldpInterfaces)]
+            );
+        }
 
         return $this->success([
             "message" => "LLDP configuration changed successfully",

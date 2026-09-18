@@ -120,52 +120,80 @@
         </div>
 
         <div class="tab-pane" id="lldp_interface_config">
-            <button class="btn btn-primary" id="btnAddVlan">
-                <i class="glyphicon glyphicon-plus"></i> Add
-            </button>
-            <div class="row" style="margin-top:15px;">
-                <div class="col-sm-6">
-                    <p id="pagingInfo" class="small-muted">Loading...</p>
-                </div>
-                <div class="col-sm-6 text-right">
-                    <span id="lldp_interface_cache_note" class="text-muted" style="display:none;">
-                        <i class="fa fa-spinner fa-spin"></i> showing last known data, refreshing in background...
-                    </span>
-                </div>
+            <div id="lldp_protocol_closed_note" class="alert alert-warning" style="display:none;">
+                LLDP is currently <strong>closed</strong> globally - interface settings shown below won't take effect until it's enabled on the LLDP Global Configuration tab. Editing is disabled until then.
             </div>
+            <span id="lldp_interface_cache_note" class="text-muted" style="display:none;">
+                <i class="fa fa-spinner fa-spin"></i> showing last known data, refreshing in background...
+            </span>
+            <button type="button" class="btn btn-xs btn-default pull-right" onclick="lldpinterfaceTable.ajax.reload(null, false)">
+                <i class="fa fa-refresh"></i> Refresh
+            </button>
 
             <div class="table-responsive">
                 <table id="lldpinterfaceTable" class="table table-striped table-bordered table-condensed" style="width:100%;">
                     <thead>
                         <tr>
-                            <th width="40">
-                                <input type="checkbox" id="selectAll">
-                            </th>
-                            <th>Port</th>
-                            <th>Receive LLDP Packet</th>
-                            <th>Send LLDP Packet</th>
-                            <th>Management-IP</th>
+                            <th width="120">Port</th>
+                            <th width="150">Receive LLDP Packet</th>
+                            <th width="150">Send LLDP Packet</th>
+                            <th width="90">Actions</th>
                         </tr>
                     </thead>
                 </table>
             </div>
 
-
-            <div class="row" style="margin-top:10px;">
-                <div class="col-sm-6">
-                    <label><input id="selectAllLabel" type="checkbox"> Select All / None</label>
-                </div>
-                <div class="col-sm-6 text-right">
-                    <button id="batchDeleteBtn" class="btn btn-danger btn-sm">Batch Delete</button>
-                </div>
-            </div>
-
             <div class="alert alert-info" style="margin-top:20px;">
                 <ul>
-                    {{-- <li>lldp interface configuration</li> --}}
+                    <li>Only GigaEthernet0/1-10 interfaces are supported.</li>
+                    <li>The device's own interface list comes from LibreNMS's port table for this device.</li>
+                    <li>Interface-level settings only take effect while LLDP is enabled globally.</li>
                 </ul>
             </div>
 
+        </div>
+    </div>
+</div>
+
+<!-- Edit LLDP Interface Modal -->
+<div id="editLldpInterfaceModal" class="modal fade" tabindex="-1" role="dialog">
+    <div class="modal-dialog">
+        <div class="modal-content">
+            <div class="modal-header">
+                <button type="button" class="close" data-dismiss="modal">&times;</button>
+                <h4 class="modal-title">LLDP Interface - <span id="lldp_if_edit_port"></span></h4>
+            </div>
+            <div class="modal-body">
+                <form id="editLldpInterfaceForm" class="form-horizontal">
+                    <input type="hidden" id="lldp_if_interface">
+                    <div class="form-group">
+                        <label class="col-sm-4 control-label">Receive LLDP Packet</label>
+                        <div class="col-sm-8">
+                            <select id="lldp_if_admin_status" class="form-control">
+                                <option value="enable">Enable</option>
+                                <option value="disable">Disable</option>
+                            </select>
+                        </div>
+                    </div>
+                    <div class="form-group">
+                        <label class="col-sm-4 control-label">Send LLDP Packet</label>
+                        <div class="col-sm-8">
+                            <select id="lldp_if_tlv" class="form-control">
+                                <option value="enable">Enable</option>
+                                <option value="disable">Disable</option>
+                            </select>
+                        </div>
+                    </div>
+                    <div id="lldp_if_edit_error" class="text-danger" style="display:none;"></div>
+                </form>
+            </div>
+            <div class="modal-footer">
+                <button class="btn btn-default" data-dismiss="modal">Close</button>
+                <button id="saveLldpInterfaceBtn" class="btn btn-success">
+                    <span class="spinner-border" style="display:none;"></span>
+                    Save
+                </button>
+            </div>
         </div>
     </div>
 </div>
@@ -210,6 +238,21 @@
     /* -----------------------
        LOAD LLDP CONFIG
     ----------------------- */
+    // Interface-level LLDP settings don't take effect (and can't be
+    // verified) while LLDP is globally closed - default to treating it as
+    // closed/unknown until the global config actually confirms it's open,
+    // so the Edit buttons never briefly appear enabled before we know.
+    let lldpProtocolState = null;
+
+    function applyLldpProtocolStateToInterfaceTab() {
+        const closed = lldpProtocolState !== 'open';
+        document.getElementById('lldp_protocol_closed_note').style.display = closed ? 'block' : 'none';
+
+        if (typeof lldpinterfaceTable !== 'undefined') {
+            lldpinterfaceTable.rows().invalidate().draw(false);
+        }
+    }
+
     function loadLldpConfig() {
         fetch(`/api/v0/getlldp/${DEVICE_IP}`, {
                 headers: {
@@ -231,85 +274,106 @@
                 document.getElementById("timer").value = res.lldp.timer;
 
                 setCookie(COOKIE_PREFIX + "lldp", JSON.stringify(res.lldp));
+
+                lldpProtocolState = protocolState === "close" ? "close" : "open";
+                applyLldpProtocolStateToInterfaceTab();
             });
     }
 
 
-    var globalLLDP = false;
-
-var lldpinterfaceTable = $('#lldpinterfaceTable').DataTable({
-    processing: true,
-    serverSide: false,
-    autoWidth: false,
-    ajax: {
-        url: "/api/v0/getlldpinterface/" + DEVICE_IP,
-        type: "GET",
-        headers: {
-            "Authorization": "Bearer " + API_TOKEN,
-            "Accept": "application/json"
-        },
-        dataSrc: function (json) {
-            // 🔥 capture global lldp status
-            globalLLDP = json.lldp === true;
-
-            document.getElementById('lldp_interface_cache_note').style.display = json.cached ? "inline" : "none";
-
-            if (json.lldp_interfaces) {
-                return json.lldp_interfaces;
-            }
-            return json;
-        }
-    },
-    columns: [
-        {
-            data: "id",
-            orderable: false,
-            render: function (data) {
-                return '<input type="checkbox" class="row-check" value="' + data + '">';
-            }
-        },
-        { data: "port" },
-
-        /* RECEIVE LLDP */
-        {
-            data: "receive",
-            render: function (data, type, row) {
-                let disabled = globalLLDP ? "" : "disabled";
-
-                return `
-                    <select class="form-select form-select-sm lldp-receive"
-                            data-id="${row.id}" ${disabled}>
-                        <option value="Enable" ${data === "Enable" ? "selected" : ""}>Enable</option>
-                        <option value="Disable" ${data === "Disable" ? "selected" : ""}>Disable</option>
-                    </select>
-                `;
-            }
-        },
-
-        /* SEND LLDP */
-        {
-            data: "send",
-            render: function (data, type, row) {
-                let disabled = globalLLDP ? "" : "disabled";
-
-                return `
-                    <select class="form-select form-select-sm lldp-send"
-                            data-id="${row.id}" ${disabled}>
-                        <option value="Enable" ${data === "Enable" ? "selected" : ""}>Enable</option>
-                        <option value="Disable" ${data === "Disable" ? "selected" : ""}>Disable</option>
-                    </select>
-                `;
-            }
-        },
-
-        { data: "management_ip" }
-    ],
-    order: [[1, "asc"]],
-    lengthMenu: [10, 25, 50, 100],
-    language: {
-        emptyTable: "No LLDP interfaces found"
+    function lldpFormatStatus(status) {
+        return status === 'enabled'
+            ? '<span class="label label-success">Enabled</span>'
+            : '<span class="label label-default">Disabled</span>';
     }
-});
+
+    var lldpinterfaceTable = $('#lldpinterfaceTable').DataTable({
+        processing: true,
+        serverSide: false,
+        autoWidth: false,
+        ajax: {
+            url: "/api/v0/getlldpinterface/" + DEVICE_IP,
+            type: "GET",
+            headers: {
+                "Authorization": "Bearer " + API_TOKEN,
+                "Accept": "application/json"
+            },
+            dataSrc: function (json) {
+                document.getElementById('lldp_interface_cache_note').style.display = json.cached ? "inline" : "none";
+                return json.lldp_interfaces || [];
+            }
+        },
+        columns: [
+            { data: "interface" },
+            { data: null, render: row => lldpFormatStatus(row.rx) },
+            { data: null, render: row => lldpFormatStatus(row.tx) },
+            {
+                data: null,
+                orderable: false,
+                searchable: false,
+                render: function () {
+                    if (lldpProtocolState !== 'open') {
+                        return '<button type="button" class="btn btn-xs btn-warning" disabled title="Enable LLDP globally first">Edit</button>';
+                    }
+                    return '<button type="button" class="btn btn-xs btn-warning btn-edit-lldp-if">Edit</button>';
+                }
+            }
+        ],
+        order: [[0, "asc"]],
+        lengthMenu: [10, 25, 50, 100],
+        language: {
+            emptyTable: "No LLDP interfaces found"
+        }
+    });
+
+    $('#lldpinterfaceTable tbody').on('click', '.btn-edit-lldp-if', function () {
+        const row = lldpinterfaceTable.row($(this).closest('tr')).data();
+        document.getElementById('lldp_if_edit_port').innerText = row.interface;
+        document.getElementById('lldp_if_interface').value = row.interface;
+        document.getElementById('lldp_if_admin_status').value = row.rx === 'enabled' ? 'enable' : 'disable';
+        document.getElementById('lldp_if_tlv').value = row.tx === 'enabled' ? 'enable' : 'disable';
+        document.getElementById('lldp_if_edit_error').style.display = 'none';
+        $('#editLldpInterfaceModal').modal('show');
+    });
+
+    $('#saveLldpInterfaceBtn').on('click', function () {
+        const btn = this;
+        const errorBox = document.getElementById('lldp_if_edit_error');
+        errorBox.style.display = 'none';
+
+        const payload = {
+            interface: document.getElementById('lldp_if_interface').value,
+            admin_status: document.getElementById('lldp_if_admin_status').value,
+            tlv: document.getElementById('lldp_if_tlv').value
+        };
+
+        $(btn).find('.spinner-border').show();
+        $(btn).prop('disabled', true);
+
+        $.ajax({
+            url: "/api/v0/lldp/interface/set/" + DEVICE_IP,
+            method: "POST",
+            headers: {
+                "Authorization": "Bearer " + API_TOKEN,
+                "Accept": "application/json"
+            },
+            contentType: "application/json",
+            data: JSON.stringify(payload),
+            success: function (res) {
+                $(btn).find('.spinner-border').hide();
+                $(btn).prop('disabled', false);
+                $('#editLldpInterfaceModal').modal('hide');
+                alert(res.message || "LLDP interface configuration updated");
+                lldpinterfaceTable.ajax.reload(null, false);
+            },
+            error: function (xhr) {
+                $(btn).find('.spinner-border').hide();
+                $(btn).prop('disabled', false);
+                errorBox.innerText = xhr.responseJSON?.message || "Failed to update LLDP interface configuration";
+                errorBox.style.display = 'block';
+            }
+        });
+    });
 
 
 
