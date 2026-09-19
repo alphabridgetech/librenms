@@ -48,6 +48,28 @@
 <script src="//cdn.datatables.net/1.10.25/js/dataTables.bootstrap.min.js"></script>
 
 <div class="container-fluid" style="margin-top:30px; padding-left:0; padding-right:0;">
+    @php
+        // Short-form port list for the VLAN Edit modal's Interface select -
+        // editvlanconfiguration.yml accepts GigaEthernet/TGigaEthernet
+        // (short or full form) and Port-aggregatorN.
+        $vlanEditPorts = collect($data['interfaces'] ?? [])
+            ->map(function ($ifName) {
+                if (preg_match('/^GigaEthernet(\d+\/\d+)$/i', $ifName, $m)) {
+                    return 'g' . $m[1];
+                }
+                if (preg_match('/^TGigaEthernet(\d+\/\d+)$/i', $ifName, $m)) {
+                    return 'tg' . $m[1];
+                }
+                if (preg_match('/^Port-?[Aa]ggregator(\d+)$/i', $ifName, $m)) {
+                    return 'Port-aggregator' . $m[1];
+                }
+                return null;
+            })
+            ->filter()
+            ->unique()
+            ->sort()
+            ->values();
+    @endphp
     <!-- Tabs -->
     <ul class="nav nav-tabs">
         <li class="active"><a href="#vlan_config" data-toggle="tab">VLAN Configuration</a></li>
@@ -74,7 +96,7 @@
                             </th>
                             <th width="100">VLAN ID</th>
                             <th width="200">VLAN Name</th>
-                            {{-- <th width="80">Operate</th> --}}
+                            <th width="90">Actions</th>
                         </tr>
                     </thead>
                 </table>
@@ -325,6 +347,88 @@
     </div>
 </div>
 
+<!-- Edit VLAN Configuration Modal -->
+<div id="editVlanConfigModal" class="modal fade" tabindex="-1" role="dialog">
+    <div class="modal-dialog" style="width:800px;">
+        <div class="modal-content">
+            <div class="modal-header">
+                <button type="button" class="close" data-dismiss="modal">&times;</button>
+                <h4 class="modal-title">Edit VLAN</h4>
+            </div>
+            <div class="modal-body">
+                <input type="hidden" id="evc_vlan_id">
+                <table class="table table-bordered" style="margin-bottom:20px;">
+                    <tbody>
+                        <tr>
+                            <th width="200" class="bg-gray" style="background:#f5f5f5;">VLAN ID</th>
+                            <td><input type="text" id="evc_vlan_id_display" class="form-control" style="max-width:200px;" readonly></td>
+                        </tr>
+                        <tr>
+                            <th class="bg-gray" style="background:#f5f5f5;">VLAN Name</th>
+                            <td><input type="text" id="evc_vlan_name" class="form-control" style="max-width:200px;"></td>
+                        </tr>
+                    </tbody>
+                </table>
+
+                <span id="evc_loading_note" class="text-muted" style="display:none;">
+                    <i class="fa fa-spinner fa-spin"></i> reading live port configuration from device...
+                </span>
+                <span id="evc_error" class="text-danger" style="display:none;"></span>
+
+                <div class="table-responsive">
+                    <table class="table table-condensed" id="evc_ports_table">
+                        <thead>
+                            <tr>
+                                <th>Port</th>
+                                <th>Default VLAN</th>
+                                <th>Mode</th>
+                                <th>Untag or not</th>
+                                <th>Allow or not</th>
+                            </tr>
+                        </thead>
+                        <tbody id="evc_ports_tbody">
+                            @foreach($vlanEditPorts as $port)
+                                <tr data-port="{{ $port }}">
+                                    <td><strong>{{ $port }}</strong></td>
+                                    <td>
+                                        <input type="number" class="form-control evc-row-pvid" min="1" max="4094" style="width:90px;">
+                                    </td>
+                                    <td>
+                                        <select class="form-control evc-row-mode" style="width:100px;">
+                                            <option value="Access">Access</option>
+                                            <option value="Trunk">Trunk</option>
+                                        </select>
+                                    </td>
+                                    <td>
+                                        <select class="form-control evc-row-untagged" style="width:90px;">
+                                            <option value="No">No</option>
+                                            <option value="Yes">Yes</option>
+                                        </select>
+                                    </td>
+                                    <td>
+                                        <select class="form-control evc-row-allowed" style="width:90px;">
+                                            <option value="No">No</option>
+                                            <option value="Yes">Yes</option>
+                                        </select>
+                                    </td>
+                                </tr>
+                            @endforeach
+                        </tbody>
+                    </table>
+                </div>
+                <p class="text-muted">Untag/Allow only apply to Trunk ports and are disabled for Access. Only rows you change are saved.</p>
+            </div>
+            <div class="modal-footer">
+                <button class="btn btn-default" data-dismiss="modal">Close</button>
+                <button id="saveEditVlanConfigBtn" class="btn btn-success">
+                    <span class="spinner-border" style="display:none;"></span>
+                    <span id="saveEditVlanConfigBtnLabel">Apply</span>
+                </button>
+            </div>
+        </div>
+    </div>
+</div>
+
 <!-- Edit Interface VLAN Attribute Modal -->
 <div id="editInterfaceVlanModal" class="modal fade" tabindex="-1" role="dialog">
     <div class="modal-dialog">
@@ -530,19 +634,14 @@
             {
                 data: "name"
             },
-            // {
-            //     data: null,
-            //     orderable: false,
-            //     render: function(row) {
-            //         return `
-            //         <button class="btn btn-xs btn-info edit-vlan"
-            //             data-id="${row.id}"
-            //             data-name="${row.name}">
-            //             Edit
-            //         </button>
-            //     `;
-            //     }
-            // }
+            {
+                data: null,
+                orderable: false,
+                searchable: false,
+                render: function(row) {
+                    return `<button type="button" class="btn btn-xs btn-info btn-edit-vlan" data-id="${row.id}" data-name="${row.name}">Edit</button>`;
+                }
+            }
         ],
         order: [
             [1, "asc"]
@@ -1040,6 +1139,183 @@
                 $(".spinner-border").hide();
                 $("#saveVlanBtn").prop("disabled", false);
                 alert("Request Failed: " + xhr.responseText);
+            }
+        });
+    });
+
+    /* -----------------------
+       EDIT VLAN CONFIGURATION (editvlanconfiguration.yml)
+       Shows every port at once, prefilled from the Interface VLAN
+       Attribute data, and only submits rows the user actually changed -
+       editvlanconfiguration.yml only edits one interface per call, so
+       Apply loops sequentially over the changed rows.
+    ----------------------- */
+    function vlanRangeContains(rangeStr, vlanId) {
+        if (!rangeStr) return false;
+        const id = parseInt(vlanId, 10);
+        return String(rangeStr).split(',').some(function (part) {
+            part = part.trim();
+            if (!part) return false;
+            if (part.indexOf('-') !== -1) {
+                const bounds = part.split('-').map(function (n) { return parseInt(n, 10); });
+                return id >= bounds[0] && id <= bounds[1];
+            }
+            return parseInt(part, 10) === id;
+        });
+    }
+
+    function toggleEvcRowTrunkFields(row) {
+        const isTrunk = row.find('.evc-row-mode').val() === 'Trunk';
+        row.find('.evc-row-untagged, .evc-row-allowed').prop('disabled', !isTrunk);
+    }
+
+    $('#evc_ports_tbody').on('change', '.evc-row-mode', function () {
+        toggleEvcRowTrunkFields($(this).closest('tr'));
+    });
+
+    let evcInitialState = {};
+
+    $('#vlanTable tbody').on('click', '.btn-edit-vlan', function () {
+        const vlanId = $(this).data('id');
+        const vlanName = $(this).data('name');
+
+        document.getElementById('evc_vlan_id').value = vlanId;
+        document.getElementById('evc_vlan_id_display').value = vlanId;
+        document.getElementById('evc_vlan_name').value = vlanName;
+        document.getElementById('evc_error').style.display = 'none';
+        document.getElementById('evc_loading_note').style.display = 'inline';
+        $('#evc_ports_tbody tr').hide();
+
+        $('#editVlanConfigModal').modal('show');
+
+        fetch(`/api/v0/vlan/interface/attribute/show/${DEVICE_IP}`, {
+            headers: { "Authorization": "Bearer " + API_TOKEN, "Accept": "application/json" }
+        })
+            .then(r => r.json())
+            .then(res => {
+                document.getElementById('evc_loading_note').style.display = 'none';
+                $('#evc_ports_tbody tr').show();
+
+                const byPort = {};
+                (res.entries || []).forEach(function (e) { byPort[e.port_name] = e; });
+
+                evcInitialState = {};
+
+                $('#evc_ports_tbody tr').each(function () {
+                    const port = $(this).data('port');
+                    const entry = byPort[port];
+
+                    const pvid = entry ? entry.pvid : 1;
+                    const mode = entry && entry.mode === 'Trunk' ? 'Trunk' : 'Access';
+                    const untagged = entry && vlanRangeContains(entry.vlan_untagged_range, vlanId) ? 'Yes' : 'No';
+                    const allowed = entry && vlanRangeContains(entry.vlan_allowed_range, vlanId) ? 'Yes' : 'No';
+
+                    $(this).find('.evc-row-pvid').val(pvid);
+                    $(this).find('.evc-row-mode').val(mode);
+                    $(this).find('.evc-row-untagged').val(untagged);
+                    $(this).find('.evc-row-allowed').val(allowed);
+                    toggleEvcRowTrunkFields($(this));
+
+                    evcInitialState[port] = { pvid: String(pvid), mode: mode, untagged: untagged, allowed: allowed };
+                });
+            })
+            .catch(() => {
+                document.getElementById('evc_loading_note').style.display = 'none';
+                $('#evc_ports_tbody tr').show();
+                document.getElementById('evc_error').innerText = "Failed to read current port configuration - showing defaults";
+                document.getElementById('evc_error').style.display = 'block';
+            });
+    });
+
+    $('#saveEditVlanConfigBtn').on('click', function () {
+        const btn = this;
+        const btnLabel = document.getElementById('saveEditVlanConfigBtnLabel');
+        const errorBox = document.getElementById('evc_error');
+        errorBox.style.display = 'none';
+
+        const vlanId = document.getElementById('evc_vlan_id').value;
+        const vlanName = document.getElementById('evc_vlan_name').value;
+
+        const changedRows = [];
+
+        $('#evc_ports_tbody tr').each(function () {
+            const port = $(this).data('port');
+            const current = {
+                pvid: $(this).find('.evc-row-pvid').val(),
+                mode: $(this).find('.evc-row-mode').val(),
+                untagged: $(this).find('.evc-row-untagged').val(),
+                allowed: $(this).find('.evc-row-allowed').val()
+            };
+            const initial = evcInitialState[port];
+
+            const changed = !initial ||
+                initial.pvid !== current.pvid ||
+                initial.mode !== current.mode ||
+                (current.mode === 'Trunk' && (initial.untagged !== current.untagged || initial.allowed !== current.allowed));
+
+            if (changed) {
+                changedRows.push({ port: port, ...current });
+            }
+        });
+
+        if (!changedRows.length) {
+            errorBox.innerText = "No changes to apply";
+            errorBox.style.display = 'block';
+            return;
+        }
+
+        $(btn).prop('disabled', true).find('.spinner-border').show();
+        btnLabel.innerText = `Applying 0/${changedRows.length}...`;
+
+        let done = 0;
+        let failures = [];
+        let chain = Promise.resolve();
+
+        changedRows.forEach(row => {
+            const payload = {
+                vlan_id: vlanId,
+                vlan_name: vlanName,
+                interface: row.port,
+                pvid: row.pvid,
+                mode: row.mode
+            };
+            if (row.mode === 'Trunk') {
+                payload.untagged = row.untagged;
+                payload.allowed = row.allowed;
+            }
+
+            chain = chain
+                .then(() => $.ajax({
+                    url: "/api/v0/vlan/edit/" + DEVICE_IP,
+                    method: "POST",
+                    headers: { "Authorization": "Bearer " + API_TOKEN, "Accept": "application/json" },
+                    contentType: "application/json",
+                    data: JSON.stringify(payload)
+                }))
+                .catch((xhr) => {
+                    failures.push(`${row.port} (${xhr.responseJSON?.message || 'failed'})`);
+                })
+                .then(() => {
+                    done++;
+                    btnLabel.innerText = `Applying ${done}/${changedRows.length}...`;
+                });
+        });
+
+        chain.then(() => {
+            $(btn).prop('disabled', false).find('.spinner-border').hide();
+            btnLabel.innerText = 'Apply';
+
+            if (failures.length) {
+                errorBox.innerText = "Failed for: " + failures.join(', ');
+                errorBox.style.display = 'block';
+            } else {
+                $('#editVlanConfigModal').modal('hide');
+                alert(`VLAN ${vlanId} configuration updated for ${changedRows.length} port(s)`);
+            }
+
+            vlanTable.ajax.reload(null, false);
+            if (typeof interfaceVlanTable !== 'undefined') {
+                interfaceVlanTable.ajax.reload(null, false);
             }
         });
     });

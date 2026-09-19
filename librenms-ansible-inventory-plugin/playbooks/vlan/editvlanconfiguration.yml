@@ -1,0 +1,1156 @@
+---
+# ============================================================
+# VLAN CONFIGURATION - EDIT 1
+# ============================================================
+#
+# UI:
+#
+# VLAN ID
+# VLAN Name
+# Port
+# Default VLAN (PVID)
+# Mode       : Access / Trunk
+# Untag      : No / Yes   -> Trunk only
+# Allow      : No / Yes   -> Trunk only
+#
+# Supported Interfaces:
+#   GigaEthernet
+#   TGigaEthernet
+#   Port-aggregator
+#
+# ============================================================
+# ACCESS MODE
+# ============================================================
+#
+# interface <interface>
+# switchport pvid <pvid>
+# switchport mode access
+#
+# Allow and Untag are NOT editable in Access mode.
+#
+# ============================================================
+# TRUNK MODE
+# ============================================================
+#
+# interface <interface>
+# switchport pvid <pvid>
+# switchport mode trunk
+#
+# Allow = Yes:
+#   switchport trunk vlan-allowed add <vlan_id>
+#
+# Allow = No:
+#   switchport trunk vlan-allowed remove <vlan_id>
+#
+# Untag = Yes:
+#   switchport trunk vlan-untagged add <vlan_id>
+#
+# Untag = No:
+#   switchport trunk vlan-untagged remove <vlan_id>
+#
+# command =ansible-playbook -i inventory/192.168.10.1.yml playbooks/vlan/editvlanconfiguration.yml -e "vlan_id=12 vlan_name=TestVLAN12 interface=Port-aggregator1 pvid=5 mode=Trunk untagged=Yes allowed=No"
+#
+#
+# ============================================================
+
+- name: VLAN Configuration - EDIT
+  hosts: alphabridge_devices
+  gather_facts: false
+
+  vars:
+
+    # ========================================================
+    # OUTPUT DIRECTORIES
+    # ========================================================
+
+    output_dir: "/opt/librenms/librenms-ansible-inventory-plugin/output"
+    temp_dir: "/opt/librenms/librenms-ansible-inventory-plugin/tmp"
+
+    device_ip: "{{ ansible_host | default(inventory_hostname) }}"
+
+  tasks:
+
+    # ========================================================
+    # 1. VALIDATE INPUT
+    # ========================================================
+
+    - name: Validate VLAN parameters
+      ansible.builtin.assert:
+        that:
+
+          # --------------------------------------------------
+          # VLAN ID
+          # --------------------------------------------------
+
+          - vlan_id is defined
+          - vlan_id | string is match('^[0-9]+$')
+          - vlan_id | int >= 1
+          - vlan_id | int <= 4094
+
+          # --------------------------------------------------
+          # VLAN NAME
+          # --------------------------------------------------
+
+          - vlan_name is defined
+          - vlan_name | string | trim | length > 0
+
+          # --------------------------------------------------
+          # INTERFACE
+          # --------------------------------------------------
+
+          - interface is defined
+          - interface | string | trim | length > 0
+
+          # --------------------------------------------------
+          # PVID
+          # --------------------------------------------------
+
+          - pvid is defined
+          - pvid | string is match('^[0-9]+$')
+          - pvid | int >= 1
+          - pvid | int <= 4094
+
+          # --------------------------------------------------
+          # MODE
+          # --------------------------------------------------
+
+          - mode is defined
+          - mode | lower in ['access', 'trunk']
+
+        fail_msg: "Invalid VLAN parameters"
+
+        success_msg: "All VLAN parameters are valid"
+
+
+    # ========================================================
+    # 2. CREATE OUTPUT DIRECTORY
+    # ========================================================
+
+    - name: Create output directory
+      ansible.builtin.file:
+        path: "{{ output_dir }}"
+        state: directory
+        mode: "0755"
+      delegate_to: localhost
+
+
+    # ========================================================
+    # 3. CREATE TEMPORARY DIRECTORY
+    # ========================================================
+
+    - name: Create temporary directory
+      ansible.builtin.file:
+        path: "{{ temp_dir }}"
+        state: directory
+        mode: "0755"
+      delegate_to: localhost
+
+
+    # ========================================================
+    # 4. NORMALIZE GIGAETHERNET
+    # ========================================================
+
+    - name: Normalize GigaEthernet interface
+      ansible.builtin.set_fact:
+        normalized_interface: >-
+          GigaEthernet {{
+            interface
+            | regex_replace('(?i)^gigaethernet\s*', '')
+            | regex_replace('(?i)^g\s*', '')
+            | trim
+          }}
+
+      when:
+        - interface | lower is match(
+            '^(gigaethernet|g)\s*[0-9]+/[0-9]+$'
+          )
+
+
+    # ========================================================
+    # 5. NORMALIZE TGIGAETHERNET
+    # ========================================================
+
+    - name: Normalize TGigaEthernet interface
+      ansible.builtin.set_fact:
+        normalized_interface: >-
+          TGigaEthernet {{
+            interface
+            | regex_replace('(?i)^tgigaethernet\s*', '')
+            | regex_replace('(?i)^tg\s*', '')
+            | trim
+          }}
+
+      when:
+        - interface | lower is match(
+            '^(tgigaethernet|tg)\s*[0-9]+/[0-9]+$'
+          )
+
+
+    # ========================================================
+    # 6. NORMALIZE PORT-AGGREGATOR
+    # ========================================================
+
+    - name: Normalize Port-aggregator interface
+      ansible.builtin.set_fact:
+        normalized_interface: >-
+          Port-aggregator{{
+            interface
+            | regex_replace('(?i)^port-aggregator\s*', '')
+            | regex_replace('(?i)^portaggregator\s*', '')
+            | regex_replace('(?i)^pa\s*', '')
+            | trim
+          }}
+
+      when:
+        - interface | lower is match(
+            '^(port-aggregator|portaggregator|pa)\s*[0-9]+$'
+          )
+
+
+    # ========================================================
+    # 7. VALIDATE NORMALIZED INTERFACE
+    # ========================================================
+
+    - name: Validate normalized interface
+      ansible.builtin.assert:
+        that:
+          - normalized_interface is defined
+          - normalized_interface | length > 0
+
+        fail_msg: "Invalid interface format: {{ interface }}"
+
+        success_msg: "Normalized interface: {{ normalized_interface }}"
+
+
+    # ========================================================
+    # 8. NORMALIZE MODE
+    # ========================================================
+
+    - name: Normalize VLAN mode
+      ansible.builtin.set_fact:
+        mode_value: "{{ mode | lower | trim }}"
+
+
+    # ========================================================
+    # 9. VALIDATE TRUNK VALUES
+    # ========================================================
+    #
+    # Allow and Untag are required ONLY for Trunk.
+    #
+    # They are not used for Access.
+    #
+    # ========================================================
+
+    - name: Validate Trunk Allow and Untag values
+      ansible.builtin.assert:
+        that:
+
+          - allowed is defined
+          - untagged is defined
+
+          - allowed | string | lower in ['yes', 'no']
+          - untagged | string | lower in ['yes', 'no']
+
+        fail_msg: >-
+          For Trunk mode, allowed and untagged must be
+          Yes or No.
+
+      when:
+        - mode_value == 'trunk'
+
+
+    # ========================================================
+    # 10. DISPLAY PARAMETERS
+    # ========================================================
+
+    - name: Display VLAN EDIT parameters
+      ansible.builtin.debug:
+        msg:
+
+          vlan_id: "{{ vlan_id }}"
+
+          vlan_name: "{{ vlan_name }}"
+
+          interface: "{{ normalized_interface }}"
+
+          pvid: "{{ pvid }}"
+
+          mode: "{{ mode_value }}"
+
+          allowed: >-
+            {{
+              allowed
+              if mode_value == 'trunk'
+              else 'Not Editable'
+            }}
+
+          untagged: >-
+            {{
+              untagged
+              if mode_value == 'trunk'
+              else 'Not Editable'
+            }}
+
+
+    # ========================================================
+    # 11. GENERATE PYTHON SCRIPT
+    # ========================================================
+
+    - name: Generate VLAN EDIT Python script
+      ansible.builtin.copy:
+
+        dest: "{{ temp_dir }}/edit_vlan_{{ inventory_hostname }}.py"
+
+        mode: "0755"
+
+        content: |
+          #!/usr/bin/env python3
+
+          import paramiko
+          import time
+          import sys
+          import re
+
+
+          # ==================================================
+          # CONNECTION DETAILS
+          # ==================================================
+
+          HOST = "{{ ansible_host | default(inventory_hostname) }}"
+
+          USERNAME = "{{ ansible_user }}"
+
+          PASSWORD = "{{ ansible_password }}"
+
+
+          # ==================================================
+          # VLAN PARAMETERS
+          # ==================================================
+
+          VLAN_ID = "{{ vlan_id }}"
+
+          VLAN_NAME = {{ vlan_name | to_json }}
+
+          INTERFACE = "{{ normalized_interface }}"
+
+          PVID = "{{ pvid }}"
+
+          MODE = "{{ mode_value }}"
+
+          ALLOWED = "{{ allowed | default('') | lower }}"
+
+          UNTAGGED = "{{ untagged | default('') | lower }}"
+
+
+          # ==================================================
+          # DEBUG FILE
+          # ==================================================
+
+          DEBUG_FILE = (
+              "{{ output_dir }}/"
+              "{{ ansible_host | default(inventory_hostname) }}"
+              "_vlan_edit_debug.txt"
+          )
+
+
+          # ==================================================
+          # ERROR PATTERNS
+          # ==================================================
+
+          ERROR_PATTERNS = [
+
+              r'invalid',
+
+              r'error',
+
+              r'failed',
+
+              r'failure',
+
+              r'incomplete command',
+
+              r'too many parameters',
+
+              r'unknown command',
+
+              r'unknown parameter',
+
+              r'command rejected',
+
+              r'unable',
+
+              r'cannot',
+
+              r'can not',
+
+              r'please use another',
+
+              r'invalid vlan',
+
+              r'vlan .* has the name',
+
+              r'already exists',
+
+              r'already in use',
+
+              r'not allowed',
+
+              r'not permitted',
+
+              r'unsupported'
+
+          ]
+
+
+          # ==================================================
+          # SSH CONNECTION
+          # ==================================================
+
+          client = paramiko.SSHClient()
+
+          client.set_missing_host_key_policy(
+              paramiko.AutoAddPolicy()
+          )
+
+
+          # ==================================================
+          # DEBUG DATA
+          # ==================================================
+
+          debug_lines = []
+
+
+          # ==================================================
+          # ERROR STORAGE
+          # ==================================================
+
+          configuration_success = True
+
+          configuration_error = ""
+
+
+          # ==================================================
+          # WRITE DEBUG FILE
+          # ==================================================
+
+          def write_debug():
+
+              try:
+
+                  with open(
+                      DEBUG_FILE,
+                      "w",
+                      encoding="utf-8"
+                  ) as debug:
+
+                      debug.write(
+                          "\n".join(debug_lines)
+                      )
+
+                      debug.write("\n")
+
+              except Exception:
+                  pass
+
+
+          # ==================================================
+          # OPEN SSH CONNECTION
+          # ==================================================
+
+          try:
+
+              client.connect(
+
+                  hostname=HOST,
+
+                  username=USERNAME,
+
+                  password=PASSWORD,
+
+                  look_for_keys=False,
+
+                  allow_agent=False,
+
+                  timeout=15,
+
+                  banner_timeout=15,
+
+                  auth_timeout=15
+
+              )
+
+          except Exception as exc:
+
+              debug_lines.append(
+                  "CONNECTION ERROR"
+              )
+
+              debug_lines.append(
+                  str(exc)
+              )
+
+              write_debug()
+
+              print("STATUS=FAILED")
+
+              print(
+                  "ERROR=SSH connection failed: "
+                  + str(exc)
+              )
+
+              sys.exit(1)
+
+
+          # ==================================================
+          # OPEN INTERACTIVE SHELL
+          # ==================================================
+
+          try:
+
+              shell = client.invoke_shell()
+
+              shell.settimeout(5)
+
+              time.sleep(1)
+
+          except Exception as exc:
+
+              debug_lines.append(
+                  "SHELL ERROR"
+              )
+
+              debug_lines.append(
+                  str(exc)
+              )
+
+              write_debug()
+
+              client.close()
+
+              print("STATUS=FAILED")
+
+              print(
+                  "ERROR=Unable to open SSH shell: "
+                  + str(exc)
+              )
+
+              sys.exit(1)
+
+
+          # ==================================================
+          # RECEIVE DEVICE OUTPUT
+          # ==================================================
+
+          def receive_output():
+
+              output = ""
+
+              time.sleep(1)
+
+              try:
+
+                  while shell.recv_ready():
+
+                      data = shell.recv(
+                          65535
+                      ).decode(
+                          "utf-8",
+                          errors="ignore"
+                      )
+
+                      if not data:
+
+                          break
+
+                      output += data
+
+                      time.sleep(0.1)
+
+              except Exception:
+                  pass
+
+              return output
+
+
+          # ==================================================
+          # SEND COMMAND
+          # ==================================================
+
+          def send_command(command):
+
+              shell.send(
+                  command + "\n"
+              )
+
+              return receive_output()
+
+
+          # ==================================================
+          # CHECK DEVICE ERROR
+          # ==================================================
+
+          def find_error(output):
+
+              if not output:
+
+                  return None
+
+
+              for line in output.splitlines():
+
+                  clean_line = line.strip()
+
+                  if not clean_line:
+
+                      continue
+
+
+                  for pattern in ERROR_PATTERNS:
+
+                      if re.search(
+                          pattern,
+                          clean_line,
+                          re.IGNORECASE
+                      ):
+
+                          return clean_line
+
+
+              return None
+
+
+          # ==================================================
+          # EXECUTE COMMAND
+          # ==================================================
+
+          def execute(command):
+
+              global configuration_success
+              global configuration_error
+
+              output = send_command(
+                  command
+              )
+
+
+              # ------------------------------------------------
+              # Save complete command and response
+              # ------------------------------------------------
+
+              debug_lines.append("")
+
+              debug_lines.append(
+                  "COMMAND: " + command
+              )
+
+              debug_lines.append(
+                  command
+              )
+
+              debug_lines.append(
+                  output.rstrip()
+              )
+
+
+              # ------------------------------------------------
+              # Check for device rejection
+              # ------------------------------------------------
+
+              error_message = find_error(
+                  output
+              )
+
+
+              if error_message:
+
+                  configuration_success = False
+
+                  configuration_error = (
+                      error_message
+                  )
+
+                  return False
+
+
+              return True
+
+
+          # ==================================================
+          # ENABLE
+          # ==================================================
+
+          execute(
+              "enable"
+          )
+
+
+          # ==================================================
+          # DISABLE PAGING
+          # ==================================================
+
+          if configuration_success:
+
+              execute(
+                  "terminal length 0"
+              )
+
+
+          # ==================================================
+          # CONFIGURATION MODE
+          # ==================================================
+
+          if configuration_success:
+
+              execute(
+                  "config"
+              )
+
+
+          # ==================================================
+          # VLAN CONFIGURATION MODE
+          # ==================================================
+
+          if configuration_success:
+
+              execute(
+                  "vlan " + VLAN_ID
+              )
+
+
+          # ==================================================
+          # VLAN NAME
+          # ==================================================
+
+          if configuration_success:
+
+              execute(
+                  "name " + VLAN_NAME
+              )
+
+
+          # ==================================================
+          # STOP IF VLAN NAME FAILED
+          # ==================================================
+
+          if not configuration_success:
+
+              write_debug()
+
+              print(
+                  "STATUS=FAILED"
+              )
+
+              print(
+                  "ERROR="
+                  + configuration_error
+              )
+
+              client.close()
+
+              sys.exit(1)
+
+
+          # ==================================================
+          # EXIT VLAN CONFIGURATION
+          # ==================================================
+
+          if configuration_success:
+
+              execute(
+                  "exit"
+              )
+
+
+          # ==================================================
+          # INTERFACE CONFIGURATION
+          # ==================================================
+
+          if configuration_success:
+
+              execute(
+                  "interface " + INTERFACE
+              )
+
+
+          # ==================================================
+          # STOP IF INTERFACE FAILED
+          # ==================================================
+
+          if not configuration_success:
+
+              write_debug()
+
+              print(
+                  "STATUS=FAILED"
+              )
+
+              print(
+                  "ERROR="
+                  + configuration_error
+              )
+
+              client.close()
+
+              sys.exit(1)
+
+
+          # ==================================================
+          # PVID
+          # ==================================================
+
+          if configuration_success:
+
+              execute(
+                  "switchport pvid " + PVID
+              )
+
+
+          # ==================================================
+          # ACCESS MODE
+          # ==================================================
+
+          if (
+              configuration_success
+              and MODE == "access"
+          ):
+
+              execute(
+                  "switchport mode access"
+              )
+
+
+          # ==================================================
+          # TRUNK MODE
+          # ==================================================
+
+          if (
+              configuration_success
+              and MODE == "trunk"
+          ):
+
+              # ------------------------------------------------
+              # SET TRUNK MODE
+              # ------------------------------------------------
+
+              execute(
+                  "switchport mode trunk"
+              )
+
+
+              # ------------------------------------------------
+              # ALLOWED VLAN
+              # ------------------------------------------------
+
+              if configuration_success:
+
+                  if ALLOWED == "yes":
+
+                      execute(
+                          "switchport trunk "
+                          "vlan-allowed add "
+                          + VLAN_ID
+                      )
+
+                  elif ALLOWED == "no":
+
+                      execute(
+                          "switchport trunk "
+                          "vlan-allowed remove "
+                          + VLAN_ID
+                      )
+
+                  else:
+
+                      configuration_success = False
+
+                      configuration_error = (
+                          "Invalid allowed value"
+                      )
+
+
+              # ------------------------------------------------
+              # UNTAGGED VLAN
+              # ------------------------------------------------
+
+              if configuration_success:
+
+                  if UNTAGGED == "yes":
+
+                      execute(
+                          "switchport trunk "
+                          "vlan-untagged add "
+                          + VLAN_ID
+                      )
+
+                  elif UNTAGGED == "no":
+
+                      execute(
+                          "switchport trunk "
+                          "vlan-untagged remove "
+                          + VLAN_ID
+                      )
+
+                  else:
+
+                      configuration_success = False
+
+                      configuration_error = (
+                          "Invalid untagged value"
+                      )
+
+
+          # ==================================================
+          # STOP IF CONFIGURATION FAILED
+          # ==================================================
+
+          if not configuration_success:
+
+              write_debug()
+
+              print(
+                  "STATUS=FAILED"
+              )
+
+              print(
+                  "ERROR="
+                  + configuration_error
+              )
+
+              client.close()
+
+              sys.exit(1)
+
+
+          # ==================================================
+          # EXIT INTERFACE CONFIGURATION
+          # ==================================================
+
+          execute(
+              "exit"
+          )
+
+
+          # ==================================================
+          # EXIT GLOBAL CONFIGURATION
+          # ==================================================
+
+          if configuration_success:
+
+              execute(
+                  "exit"
+              )
+
+
+          # ==================================================
+          # FINAL DEBUG FILE
+          # ==================================================
+
+          write_debug()
+
+
+          # ==================================================
+          # CLOSE SSH CONNECTION
+          # ==================================================
+
+          client.close()
+
+
+          # ==================================================
+          # FINAL STATUS
+          # ==================================================
+
+          if configuration_success:
+
+              print(
+                  "STATUS=SUCCESS"
+              )
+
+              print(
+                  "ERROR="
+              )
+
+              sys.exit(0)
+
+          else:
+
+              print(
+                  "STATUS=FAILED"
+              )
+
+              print(
+                  "ERROR="
+                  + configuration_error
+              )
+
+              sys.exit(1)
+
+
+    # ========================================================
+    # 12. EXECUTE PYTHON SCRIPT
+    # ========================================================
+
+    - name: Execute VLAN EDIT configuration
+      ansible.builtin.command:
+        cmd: >
+          python3
+          {{ temp_dir }}/edit_vlan_{{ inventory_hostname }}.py
+
+      delegate_to: localhost
+
+      register: vlan_edit_result
+
+      changed_when: true
+
+      failed_when: false
+
+
+    # ========================================================
+    # 13. DISPLAY EXECUTION RESULT
+    # ========================================================
+
+    - name: Display VLAN EDIT execution result
+      ansible.builtin.debug:
+        var: vlan_edit_result.stdout_lines
+
+
+    # ========================================================
+    # 14. EXTRACT EXACT ERROR
+    # ========================================================
+
+    - name: Extract VLAN EDIT error
+      ansible.builtin.set_fact:
+
+        vlan_edit_error: >-
+          {{
+            vlan_edit_result.stdout
+            | regex_findall('ERROR=(.*)')
+            | first
+            | default('', true)
+            | trim
+          }}
+
+
+    # ========================================================
+    # 15. SET FINAL STATUS
+    # ========================================================
+
+    - name: Set final VLAN EDIT status
+      ansible.builtin.set_fact:
+
+        vlan_edit_status: >-
+          {{
+            'SUCCESS'
+            if (
+              vlan_edit_result.rc == 0
+              and
+              'STATUS=SUCCESS'
+              in vlan_edit_result.stdout
+            )
+            else
+            'FAILED'
+          }}
+
+
+    # ========================================================
+    # 16. SET DEFAULT ERROR IF EMPTY
+    # ========================================================
+
+    - name: Set default VLAN EDIT error
+      ansible.builtin.set_fact:
+
+        vlan_edit_error: >-
+          {{
+            vlan_edit_error
+            if vlan_edit_error | length > 0
+            else
+            'Switch rejected configuration. Check debug file.'
+          }}
+
+      when:
+        - vlan_edit_status == 'FAILED'
+
+
+    # ========================================================
+    # 17. CREATE RESULT YAML
+    # ========================================================
+
+    - name: Create VLAN EDIT result file
+      ansible.builtin.copy:
+
+        dest: "{{ output_dir }}/{{ device_ip }}_vlan_edit.yml"
+
+        mode: "0644"
+
+        content: |
+          device_ip: {{ device_ip }}
+          status: {{ vlan_edit_status }}
+
+      delegate_to: localhost
+
+
+    # ========================================================
+    # 18. DISPLAY FINAL RESULT
+    # ========================================================
+
+    - name: Display VLAN EDIT result
+      ansible.builtin.debug:
+        msg: |
+          status: {{ vlan_edit_status }}
+          device_ip: {{ device_ip }}
+          feature: vlan_edit
+          vlan_id: {{ vlan_id }}
+          vlan_name: {{ vlan_name }}
+          interface: {{ normalized_interface }}
+          pvid: {{ pvid }}
+          mode: {{ mode_value }}
+          allowed: {{ allowed if mode_value == 'trunk' else 'Not Editable' }}
+          untagged: {{ untagged if mode_value == 'trunk' else 'Not Editable' }}
+          error: {{ vlan_edit_error | default('') }}
+
+
+    # ========================================================
+    # 19. FAIL IF DEVICE REJECTED CONFIGURATION
+    # ========================================================
+
+    - name: Fail VLAN EDIT if device rejected configuration
+      ansible.builtin.fail:
+        msg: |
+          VLAN EDIT failed on {{ device_ip }}.
+
+          VLAN ID   : {{ vlan_id }}
+          VLAN Name : {{ vlan_name }}
+          Interface : {{ normalized_interface }}
+          PVID       : {{ pvid }}
+          Mode       : {{ mode_value }}
+
+          Device Error:
+          {{ vlan_edit_error }}
+
+          Debug file:
+          {{ output_dir }}/{{ device_ip }}_vlan_edit_debug.txt
+
+          Result file:
+          {{ output_dir }}/{{ device_ip }}_vlan_edit.yml
+
+      when:
+        - vlan_edit_status != 'SUCCESS'
+
+
+    # ========================================================
+    # 20. SUCCESS MESSAGE
+    # ========================================================
+
+    - name: VLAN EDIT completed successfully
+      ansible.builtin.debug:
+        msg: |
+          VLAN EDIT SUCCESS
+
+          Device IP : {{ device_ip }}
+          VLAN ID   : {{ vlan_id }}
+          VLAN Name : {{ vlan_name }}
+          Interface : {{ normalized_interface }}
+          PVID       : {{ pvid }}
+          Mode       : {{ mode_value }}
+
+          Result file:
+          {{ output_dir }}/{{ device_ip }}_vlan_edit.yml

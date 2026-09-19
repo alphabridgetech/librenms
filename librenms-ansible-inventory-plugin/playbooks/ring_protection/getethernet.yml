@@ -10,7 +10,7 @@
 
   vars:
     output_dir: "/opt/librenms/librenms-ansible-inventory-plugin/output"
-    output_file: "{{ output_dir }}/{{ ansible_host }}_getethernet.yml"
+    output_file: "{{ output_dir }}/{{ ansible_host }}_etherring.yml"
     script_file: "/opt/librenms/librenms-ansible-inventory-plugin/tmp/get_ethernet_ring.py"
 
   tasks:
@@ -244,7 +244,7 @@
                       role = parts[1]
                       int_state = parts[2]
                       prefwd = parts[3]
-                      link_status = parts[4]
+                      link_status = " ".join(parts[4:])
 
                       interface_data = (
                           interface +
@@ -270,6 +270,8 @@
               # Create normal YAML data
               # --------------------------------------------------------------
               final_data = {
+                  "ip": HOST,
+                  "status": "success",
                   "rings": rings
               }
 
@@ -305,8 +307,36 @@
 
           except Exception as e:
 
-              print("ETHERNET-RING GET FAILED")
-              print(str(e))
+              error_result = {
+                  "ip": HOST,
+                  "status": "failed",
+                  "error": str(e),
+                  "rings": []
+              }
+
+              try:
+                  os.makedirs(
+                      os.path.dirname(OUTPUT),
+                      exist_ok=True
+                  )
+
+                  with open(OUTPUT, "w") as f:
+                      yaml.safe_dump(
+                          error_result,
+                          f,
+                          default_flow_style=False,
+                          sort_keys=False
+                      )
+              except Exception:
+                  pass
+
+              print(
+                  yaml.safe_dump(
+                      error_result,
+                      default_flow_style=False,
+                      sort_keys=False
+                  )
+              )
 
               try:
                   client.close()

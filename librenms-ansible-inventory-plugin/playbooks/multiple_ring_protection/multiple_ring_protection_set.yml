@@ -37,14 +37,8 @@
 #                       both are real ports)
 #
 # Example:
-# ansible-playbook -i inventory/192.168.2.245.yml \
-#   playbooks/multiple_ring_protection.yml \
-#   -e domain_id=3 -e ring_id=2 \
-#   -e ring_type="major ring" \
-#   -e node_type="master node" \
-#   -e control_vlan=2 -e hello_time=2 \
-#   -e fail_time=10 -e pre_forward_time=10 \
-#   -e primary_port=none -e secondary_port=none
+# ansible-playbook -i inventory/192.168.2.245.yml playbooks/multiple_ring_protection/multiple_ring_protection.yml 
+# -e 'domain_id=3 ring_id=2 ring_type="major ring" node_type="master node" control_vlan=2 hello_time=2 fail_time=10 pre_forward_time=10 primary_port=none secondary_port=none'
 #
 # Output:
 # output/<switch_ip>_multiple_ring_protection.yml

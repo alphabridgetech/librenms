@@ -1844,6 +1844,67 @@ public function getmtu($hostname)
     }
 
     #------------------------------------------------------------
+    #                    EDIT VLAN CONFIGURATION
+    #------------------------------------------------------------
+    // editvlanconfiguration.yml assigns a VLAN (id + name) to a specific
+    // interface with PVID/Mode/Untagged/Allowed in one combined operation -
+    // distinct from setinterfacevlanattribute.yml (Interface VLAN Attribute
+    // tab), which edits per-interface VLAN settings without touching the
+    // VLAN's own name. Used by the VLAN Configuration tab's per-row Edit.
+    public function editvlanconfiguration(Request $request, $hostname)
+    {
+        $data = $request->validate([
+            'vlan_id'   => 'required|integer|min:1|max:4094',
+            'vlan_name' => 'required|string|max:32',
+            'interface' => 'required|string',
+            'pvid'      => 'required|integer|min:1|max:4094',
+            'mode'      => 'required|string|in:Access,Trunk,access,trunk',
+            'untagged'  => 'required_if:mode,Trunk,trunk|nullable|string|in:Yes,No,yes,no',
+            'allowed'   => 'required_if:mode,Trunk,trunk|nullable|string|in:Yes,No,yes,no',
+        ]);
+
+        $playbook = "{$this->pluginPath}/playbooks/vlan/editvlanconfiguration.yml";
+        $hosts    = "{$this->pluginPath}/hosts/{$hostname}.yml";
+        $yamlFile = "{$this->pluginPath}/output/{$hostname}_vlan_edit.yml";
+
+        $mode = ucfirst(strtolower($data['mode']));
+
+        $extraVars = [
+            'vlan_id'   => $data['vlan_id'],
+            'vlan_name' => $data['vlan_name'],
+            'interface' => $data['interface'],
+            'pvid'      => $data['pvid'],
+            'mode'      => $mode,
+        ];
+
+        if ($mode === 'Trunk') {
+            $extraVars['untagged'] = ucfirst(strtolower($data['untagged']));
+            $extraVars['allowed']  = ucfirst(strtolower($data['allowed']));
+        }
+
+        $output = $this->runAnsiblejs($playbook, $hosts, $extraVars);
+
+        // editvlanconfiguration.yml writes {device_ip, status} with status
+        // as the uppercase literal SUCCESS/FAILED (not the lowercase
+        // "success" convention used elsewhere in this controller).
+        $result = file_exists($yamlFile) ? $this->parseYamlSafely($yamlFile) : null;
+        if (!is_array($result) || strtoupper($result['status'] ?? '') !== 'SUCCESS') {
+            return $this->error("VLAN configuration failed for {$data['interface']}", $output);
+        }
+
+        // Refresh both the VLAN list and the Interface VLAN Attribute
+        // cache synchronously - this single action changes data both
+        // tabs display.
+        $this->runAnsiblejs("{$this->pluginPath}/playbooks/vlan/getvlan.yml", $hosts);
+        $this->runAnsiblejs("{$this->pluginPath}/playbooks/vlan/getinterfacevlanattribute.yml", $hosts);
+
+        return $this->success([
+            "message" => "VLAN {$data['vlan_id']} configuration updated for {$data['interface']}",
+            "raw"     => $output,
+        ]);
+    }
+
+    #------------------------------------------------------------
     #              GET VOICE VLAN (GLOBAL MAC LIST)
     #------------------------------------------------------------
     public function getvoicevlan($hostname)
@@ -3097,6 +3158,558 @@ public function getvlan($hostname)
         return preg_match('/'.$pattern.'/i', $text, $m)
             ? trim($m[1])
             : "N/A";
+    }
+
+    #------------------------------------------------------------
+    #              IGMP SNOOPING - GLOBAL CONFIGURATION
+    #------------------------------------------------------------
+    public function getigmpsnooping($hostname)
+    {
+        if (!function_exists('yaml_parse_file')) {
+            return $this->error("PHP YAML extension missing", null);
+        }
+
+        $playbook = "{$this->pluginPath}/playbooks/igmp/igmp_snooping_config_get.yml";
+        $hosts    = "{$this->pluginPath}/hosts/{$hostname}.yml";
+        $yamlFile = "{$this->pluginPath}/output/{$hostname}_igmp_snooping_show.yml";
+
+        if (file_exists($yamlFile)) {
+            $cached = $this->parseYamlSafely($yamlFile);
+
+            $this->runAnsibleAsync($playbook, $hosts);
+
+            return $this->success([
+                "igmp"   => $this->formatIgmpGlobal($cached),
+                "cached" => true,
+            ]);
+        }
+
+        $output = $this->runAnsiblejs($playbook, $hosts);
+
+        if (!file_exists($yamlFile)) {
+            return $this->error("IGMP snooping output file not found", $output);
+        }
+
+        return $this->success([
+            "igmp"   => $this->formatIgmpGlobal($this->parseYamlSafely($yamlFile)),
+            "cached" => false,
+        ]);
+    }
+
+    /**
+     * igmp_snooping_config_get.yml's own script prints the "Destination
+     * Looking-up Failure" value as "Discard Unknown" / "Transfer Unknown" -
+     * map those display strings back to the lowercase discard_unknown/
+     * transfer_unknown values igmp_snooping_config_set.yml actually
+     * requires.
+     */
+    private function formatIgmpGlobal(?array $data): ?array
+    {
+        if (!is_array($data)) {
+            return null;
+        }
+
+        $dlfMap = [
+            'discard unknown'  => 'discard_unknown',
+            'transfer unknown' => 'transfer_unknown',
+        ];
+        $dlfRaw = strtolower(trim($data['Destination Looking-up Failure'] ?? ''));
+
+        return [
+            'igmp_snooping'           => strtolower($data['IGMP Snooping'] ?? '') === 'enable' ? 'enable' : 'disable',
+            'dlf_drop'                => $dlfMap[$dlfRaw] ?? 'transfer_unknown',
+            'auto_query'              => strtolower($data['Enable Auto Query'] ?? '') === 'enable' ? 'enable' : 'disable',
+            'querier_address'         => $data['Snooping Querier Address'] ?? '',
+            'query_interval'          => $data['Query Interval(s)'] ?? '',
+            'querier_expiry_interval' => $data['Querier Expiry Interval(s)'] ?? '',
+        ];
+    }
+
+    public function setigmpsnooping(Request $request, $hostname)
+    {
+        $data = $request->validate([
+            'igmp_snooping'           => 'required|string|in:enable,disable',
+            'dlf_drop'                => 'required|string|in:discard_unknown,transfer_unknown',
+            'auto_query'              => 'required|string|in:enable,disable',
+            'querier_address'         => 'required|ipv4',
+            'query_interval'          => 'required|integer|min:10|max:2147483647',
+            'querier_expiry_interval' => 'required|integer|min:10|max:2147483647',
+        ]);
+
+        $playbook = "{$this->pluginPath}/playbooks/igmp/igmp_snooping_config_set.yml";
+        $hosts    = "{$this->pluginPath}/hosts/{$hostname}.yml";
+        $yamlFile = "{$this->pluginPath}/output/{$hostname}_igmp_snooping_config.yml";
+
+        $output = $this->runAnsiblejs($playbook, $hosts, [
+            'igmp_snooping'           => strtolower($data['igmp_snooping']),
+            'dlf_drop'                => strtolower($data['dlf_drop']),
+            'auto_query'              => strtolower($data['auto_query']),
+            'querier_address'         => $data['querier_address'],
+            'query_interval'          => $data['query_interval'],
+            'querier_expiry_interval' => $data['querier_expiry_interval'],
+        ]);
+
+        $result = file_exists($yamlFile) ? $this->parseYamlSafely($yamlFile) : null;
+        if (!is_array($result) || ($result['status'] ?? null) !== 'success') {
+            return $this->error($result['error'] ?? "IGMP snooping configuration failed", $output);
+        }
+
+        // igmp_snooping_config_set.yml doesn't echo back applied values in
+        // its own output file - refresh the GET cache synchronously so the
+        // frontend's reload afterward reflects the change.
+        $this->runAnsiblejs("{$this->pluginPath}/playbooks/igmp/igmp_snooping_config_get.yml", $hosts);
+
+        return $this->success([
+            "message" => "IGMP snooping configuration updated successfully",
+            "raw"     => $output,
+        ]);
+    }
+
+    #------------------------------------------------------------
+    #              IGMP SNOOPING - VLAN CONFIGURATION
+    #------------------------------------------------------------
+    public function getigmpsnoopingvlan($hostname)
+    {
+        if (!function_exists('yaml_parse_file')) {
+            return $this->error("PHP YAML extension missing", null);
+        }
+
+        $playbook = "{$this->pluginPath}/playbooks/igmp/igmp_snooping_vlan_config_get.yml";
+        $hosts    = "{$this->pluginPath}/hosts/{$hostname}.yml";
+        $yamlFile = "{$this->pluginPath}/output/{$hostname}_igmp_snooping_vlan_show.yml";
+
+        if (file_exists($yamlFile)) {
+            $cached = $this->parseYamlSafely($yamlFile);
+
+            $this->runAnsibleAsync($playbook, $hosts);
+
+            return $this->success([
+                "entries" => is_array($cached['vlans'] ?? null) ? $cached['vlans'] : [],
+                "cached"  => true,
+            ]);
+        }
+
+        $output = $this->runAnsiblejs($playbook, $hosts);
+
+        if (!file_exists($yamlFile)) {
+            return $this->error("IGMP snooping VLAN output file not found", $output);
+        }
+
+        $data = $this->parseYamlSafely($yamlFile);
+
+        return $this->success([
+            "entries" => is_array($data['vlans'] ?? null) ? $data['vlans'] : [],
+            "cached"  => false,
+        ]);
+    }
+
+    public function setigmpsnoopingvlan(Request $request, $hostname)
+    {
+        $data = $request->validate([
+            'vlan_id'              => 'required|integer|min:1|max:4094',
+            'status_snooping_vlan' => 'required|string|in:enable,disable',
+            'immediate_leave'      => 'required|string|in:enable,disable',
+            'member_port'          => ['required', 'string', 'regex:/^(g|tg)[0-9]+\/[0-9]+$/i'],
+        ]);
+
+        $playbook = "{$this->pluginPath}/playbooks/igmp/igmp_snooping_vlan_config_set.yml";
+        $hosts    = "{$this->pluginPath}/hosts/{$hostname}.yml";
+        $yamlFile = "{$this->pluginPath}/output/{$hostname}_igmp_snooping_vlan_config.yml";
+
+        $output = $this->runAnsiblejs($playbook, $hosts, [
+            'vlan_id'              => $data['vlan_id'],
+            'status_snooping_vlan' => strtolower($data['status_snooping_vlan']),
+            'immediate_leave'      => strtolower($data['immediate_leave']),
+            'member_port'          => strtolower($data['member_port']),
+        ]);
+
+        $result = file_exists($yamlFile) ? $this->parseYamlSafely($yamlFile) : null;
+        if (!is_array($result) || ($result['status'] ?? null) !== 'success') {
+            return $this->error($result['error'] ?? "IGMP snooping VLAN configuration failed", $output);
+        }
+
+        $this->runAnsiblejs("{$this->pluginPath}/playbooks/igmp/igmp_snooping_vlan_config_get.yml", $hosts);
+
+        return $this->success([
+            "message" => "IGMP snooping VLAN {$data['vlan_id']} configuration updated successfully",
+            "raw"     => $output,
+        ]);
+    }
+
+    #------------------------------------------------------------
+    #              IGMP SNOOPING - MULTICAST GROUPS
+    #------------------------------------------------------------
+    // igmp_snooping_multicast_address_list_get_set.yml (despite its name)
+    // is SET-only - it toggles a single static VLAN/IP/port entry and has
+    // no read capability, so it's paired here with
+    // igmp_snooping_multicast_list_info_get.yml (a completely separate
+    // playbook, "show ip igmp-snooping group") for the table's data.
+    public function getigmpmulticastgroups($hostname)
+    {
+        if (!function_exists('yaml_parse_file')) {
+            return $this->error("PHP YAML extension missing", null);
+        }
+
+        $playbook = "{$this->pluginPath}/playbooks/igmp/igmp_snooping_multicast_list_info_get.yml";
+        $hosts    = "{$this->pluginPath}/hosts/{$hostname}.yml";
+        $yamlFile = "{$this->pluginPath}/output/{$hostname}_igmp_snooping_multicast_group_show.yml";
+
+        if (file_exists($yamlFile)) {
+            $cached = $this->parseYamlSafely($yamlFile);
+
+            $this->runAnsibleAsync($playbook, $hosts);
+
+            return $this->success([
+                "entries" => is_array($cached['groups'] ?? null) ? $cached['groups'] : [],
+                "cached"  => true,
+            ]);
+        }
+
+        $output = $this->runAnsiblejs($playbook, $hosts);
+
+        if (!file_exists($yamlFile)) {
+            return $this->error("IGMP multicast group output file not found", $output);
+        }
+
+        $data = $this->parseYamlSafely($yamlFile);
+
+        return $this->success([
+            "entries" => is_array($data['groups'] ?? null) ? $data['groups'] : [],
+            "cached"  => false,
+        ]);
+    }
+
+    public function setigmpmulticastaddress(Request $request, $hostname)
+    {
+        $data = $request->validate([
+            'vlan_id'    => 'required|integer|min:1|max:4094',
+            'ip_address' => ['required', 'string', 'regex:/^(22[4-9]|23[0-9])\.\d{1,3}\.\d{1,3}\.\d{1,3}$/'],
+            'port'       => ['required', 'string', 'in:g0/1,g0/2,g0/3,g0/4,g0/5,g0/6,g0/7,g0/8,g0/9,g0/10'],
+            'action'     => 'required|string|in:enable,disable',
+        ]);
+
+        $playbook = "{$this->pluginPath}/playbooks/igmp/igmp_snooping_multicast_address_list_get_set.yml";
+        $hosts    = "{$this->pluginPath}/hosts/{$hostname}.yml";
+        $yamlFile = "{$this->pluginPath}/output/{$hostname}_igmp_snooping_multicast.yml";
+
+        $output = $this->runAnsiblejs($playbook, $hosts, [
+            'vlan_id'    => $data['vlan_id'],
+            'ip_address' => $data['ip_address'],
+            'port'       => $data['port'],
+            'action'     => strtolower($data['action']),
+        ]);
+
+        $result = file_exists($yamlFile) ? $this->parseYamlSafely($yamlFile) : null;
+        if (!is_array($result) || ($result['status'] ?? null) !== 'success') {
+            return $this->error($result['error'] ?? "IGMP multicast static entry update failed", $output);
+        }
+
+        $this->runAnsiblejs("{$this->pluginPath}/playbooks/igmp/igmp_snooping_multicast_list_info_get.yml", $hosts);
+
+        return $this->success([
+            "message" => "IGMP multicast static entry updated successfully",
+            "raw"     => $output,
+        ]);
+    }
+
+    #------------------------------------------------------------
+    #              IGMP SNOOPING - VLAN FILTERS
+    #------------------------------------------------------------
+    public function getigmpvlanfilters($hostname)
+    {
+        if (!function_exists('yaml_parse_file')) {
+            return $this->error("PHP YAML extension missing", null);
+        }
+
+        $playbook = "{$this->pluginPath}/playbooks/igmp/igmp_snooping_vlan_filter_get.yml";
+        $hosts    = "{$this->pluginPath}/hosts/{$hostname}.yml";
+        $yamlFile = "{$this->pluginPath}/output/{$hostname}_igmp_snooping_vlan_filter_get.yml";
+
+        if (file_exists($yamlFile)) {
+            $cached = $this->parseYamlSafely($yamlFile);
+
+            $this->runAnsibleAsync($playbook, $hosts);
+
+            return $this->success([
+                "entries" => is_array($cached['vlan_filters'] ?? null) ? $cached['vlan_filters'] : [],
+                "cached"  => true,
+            ]);
+        }
+
+        $output = $this->runAnsiblejs($playbook, $hosts);
+
+        if (!file_exists($yamlFile)) {
+            return $this->error("IGMP VLAN filter output file not found", $output);
+        }
+
+        $data = $this->parseYamlSafely($yamlFile);
+
+        return $this->success([
+            "entries" => is_array($data['vlan_filters'] ?? null) ? $data['vlan_filters'] : [],
+            "cached"  => false,
+        ]);
+    }
+
+    public function setigmpvlanfilter(Request $request, $hostname)
+    {
+        $data = $request->validate([
+            'vlan_id'    => 'required|integer|min:1|max:4094',
+            'ip_address' => ['required', 'string', 'regex:/^(22[4-9]|23[0-9])\.\d{1,3}\.\d{1,3}\.\d{1,3}$/'],
+        ]);
+
+        $playbook = "{$this->pluginPath}/playbooks/igmp/igmp_snooping_vlan_filter_set.yml";
+        $hosts    = "{$this->pluginPath}/hosts/{$hostname}.yml";
+        $yamlFile = "{$this->pluginPath}/output/{$hostname}_igmp_snooping_vlan_filter.yml";
+
+        $output = $this->runAnsiblejs($playbook, $hosts, [
+            'vlan_id'    => $data['vlan_id'],
+            'ip_address' => $data['ip_address'],
+        ]);
+
+        $result = file_exists($yamlFile) ? $this->parseYamlSafely($yamlFile) : null;
+        if (!is_array($result) || ($result['status'] ?? null) !== 'success') {
+            return $this->error($result['error'] ?? "IGMP VLAN filter add failed", $output);
+        }
+
+        $this->runAnsiblejs("{$this->pluginPath}/playbooks/igmp/igmp_snooping_vlan_filter_get.yml", $hosts);
+
+        return $this->success([
+            "message" => "IGMP VLAN filter added successfully",
+            "raw"     => $output,
+        ]);
+    }
+
+    public function deleteigmpvlanfilter(Request $request, $hostname)
+    {
+        $data = $request->validate([
+            'vlan_id'    => 'required|integer|min:1|max:4094',
+            'ip_address' => ['required', 'string', 'regex:/^(22[4-9]|23[0-9])\.\d{1,3}\.\d{1,3}\.\d{1,3}$/'],
+        ]);
+
+        $playbook = "{$this->pluginPath}/playbooks/igmp/igmp_snooping_vlan_filter_delete.yml";
+        $hosts    = "{$this->pluginPath}/hosts/{$hostname}.yml";
+        $yamlFile = "{$this->pluginPath}/output/{$hostname}_igmp_snooping_vlan_filter_delete.yml";
+
+        $output = $this->runAnsiblejs($playbook, $hosts, [
+            'vlan_id'    => $data['vlan_id'],
+            'ip_address' => $data['ip_address'],
+        ]);
+
+        $result = file_exists($yamlFile) ? $this->parseYamlSafely($yamlFile) : null;
+        if (!is_array($result) || ($result['status'] ?? null) !== 'success') {
+            return $this->error($result['error'] ?? "IGMP VLAN filter delete failed", $output);
+        }
+
+        $this->runAnsiblejs("{$this->pluginPath}/playbooks/igmp/igmp_snooping_vlan_filter_get.yml", $hosts);
+
+        return $this->success([
+            "message" => "IGMP VLAN filter removed successfully",
+            "raw"     => $output,
+        ]);
+    }
+
+    #------------------------------------------------------------
+    #                    ERPS - GET / SET / DELETE
+    #------------------------------------------------------------
+    public function geterps($hostname)
+    {
+        if (!function_exists('yaml_parse_file')) {
+            return $this->error("PHP YAML extension missing", null);
+        }
+
+        $playbook = "{$this->pluginPath}/playbooks/ring_protection/geterps.yml";
+        $hosts    = "{$this->pluginPath}/hosts/{$hostname}.yml";
+        $yamlFile = "{$this->pluginPath}/output/{$hostname}_erps.yml";
+
+        if (file_exists($yamlFile)) {
+            $cached = $this->parseYamlSafely($yamlFile);
+
+            $this->runAnsibleAsync($playbook, $hosts);
+
+            return $this->success([
+                "entries" => is_array($cached['rings'] ?? null) ? $cached['rings'] : [],
+                "cached"  => true,
+            ]);
+        }
+
+        $output = $this->runAnsiblejs($playbook, $hosts);
+
+        if (!file_exists($yamlFile)) {
+            return $this->error("ERPS output file not found", $output);
+        }
+
+        $data = $this->parseYamlSafely($yamlFile);
+
+        return $this->success([
+            "entries" => is_array($data['rings'] ?? null) ? $data['rings'] : [],
+            "cached"  => false,
+        ]);
+    }
+
+    public function seterps(Request $request, $hostname)
+    {
+        $rules = [
+            'operation' => 'required|string|in:add,edit,delete',
+            'ring_id'   => 'required|integer|min:1|max:239',
+        ];
+
+        if ($request->input('operation') !== 'delete') {
+            $rules['control_vlan'] = 'required|integer|min:1|max:4094';
+            $rules['wtr_time']     = 'required|integer|min:0|max:720';
+            $rules['guard_time']   = 'required|integer|min:0|max:2000|multiple_of:10';
+            $rules['send_time']    = 'required|integer|min:1|max:10';
+        }
+
+        if ($request->input('operation') === 'add') {
+            $rules['port1']      = 'required|string';
+            $rules['port2']      = 'required|string|different:port1';
+            $rules['port1_role'] = 'required|string|in:ring-port,rpl';
+            $rules['port2_role'] = 'required|string|in:ring-port,rpl|different:port1_role';
+        }
+
+        $data = $request->validate($rules);
+
+        $playbook = "{$this->pluginPath}/playbooks/ring_protection/seterps.yml";
+        $hosts    = "{$this->pluginPath}/hosts/{$hostname}.yml";
+
+        $extraVars = array_filter([
+            'operation'    => $data['operation'],
+            'ring_id'      => $data['ring_id'],
+            'control_vlan' => $data['control_vlan'] ?? null,
+            'wtr_time'     => $data['wtr_time'] ?? null,
+            'guard_time'   => $data['guard_time'] ?? null,
+            'send_time'    => $data['send_time'] ?? null,
+            // EDIT never touches port configuration (the playbook itself
+            // documents this - existing ports remain unchanged), so ports
+            // are only ever sent for ADD.
+            'port1'        => $data['operation'] === 'add' ? ($data['port1'] ?? null) : null,
+            'port1_role'   => $data['operation'] === 'add' ? ($data['port1_role'] ?? null) : null,
+            'port2'        => $data['operation'] === 'add' ? ($data['port2'] ?? null) : null,
+            'port2_role'   => $data['operation'] === 'add' ? ($data['port2_role'] ?? null) : null,
+        ], fn ($value) => $value !== null && $value !== '');
+
+        $output = $this->runAnsiblejs($playbook, $hosts, $extraVars);
+
+        if (stripos($output, 'FAILED!') !== false) {
+            return $this->error("ERPS {$data['operation']} failed for ring {$data['ring_id']}", $output);
+        }
+
+        // Refresh the GET cache synchronously so the frontend's reload
+        // afterward reflects the change immediately.
+        $this->runAnsiblejs("{$this->pluginPath}/playbooks/ring_protection/geterps.yml", $hosts);
+
+        return $this->success([
+            "message" => "ERPS ring {$data['ring_id']} {$data['operation']} completed successfully",
+            "raw"     => $output,
+        ]);
+    }
+
+    #------------------------------------------------------------
+    #              ETHERNET RING (EAPS) - GET / SET / DELETE
+    #------------------------------------------------------------
+    private const ETHERNET_RING_PORTS = [
+        'None',
+        'GigaEthernet0/1', 'GigaEthernet0/2', 'GigaEthernet0/3',
+        'GigaEthernet0/6', 'GigaEthernet0/7', 'GigaEthernet0/8',
+        'TenGigabitEthernet0/1', 'TenGigabitEthernet0/2',
+        'TenGigabitEthernet0/3', 'TenGigabitEthernet0/4',
+        'p1',
+    ];
+
+    public function getethernetring($hostname)
+    {
+        if (!function_exists('yaml_parse_file')) {
+            return $this->error("PHP YAML extension missing", null);
+        }
+
+        $playbook = "{$this->pluginPath}/playbooks/ring_protection/getethernet.yml";
+        $hosts    = "{$this->pluginPath}/hosts/{$hostname}.yml";
+        $yamlFile = "{$this->pluginPath}/output/{$hostname}_etherring.yml";
+
+        if (file_exists($yamlFile)) {
+            $cached = $this->parseYamlSafely($yamlFile);
+
+            $this->runAnsibleAsync($playbook, $hosts);
+
+            return $this->success([
+                "entries" => is_array($cached['rings'] ?? null) ? $cached['rings'] : [],
+                "cached"  => true,
+            ]);
+        }
+
+        $output = $this->runAnsiblejs($playbook, $hosts);
+
+        if (!file_exists($yamlFile)) {
+            return $this->error("Ethernet Ring output file not found", $output);
+        }
+
+        $data = $this->parseYamlSafely($yamlFile);
+
+        return $this->success([
+            "entries" => is_array($data['rings'] ?? null) ? $data['rings'] : [],
+            "cached"  => false,
+        ]);
+    }
+
+    public function setethernetring(Request $request, $hostname)
+    {
+        $portRule = 'nullable|string|in:' . implode(',', self::ETHERNET_RING_PORTS);
+
+        $rules = [
+            'operation' => 'required|string|in:add,edit,delete',
+            'ring_id'   => 'required|integer|min:1|max:32',
+        ];
+
+        if ($request->input('operation') === 'add') {
+            $rules['node_type']        = 'required|string|in:Master Node,Transit Node';
+            $rules['control_vlan']     = 'required|integer|min:1|max:4094';
+            $rules['hello_time']       = 'required|integer|min:1|max:10';
+            $rules['fail_time']        = 'required|integer|min:3|max:30';
+            $rules['pre_forward_time'] = 'required|integer|min:3|max:30';
+            $rules['primary_port']     = 'required|string|in:' . implode(',', self::ETHERNET_RING_PORTS);
+            $rules['secondary_port']   = 'required|string|in:' . implode(',', self::ETHERNET_RING_PORTS);
+        } elseif ($request->input('operation') === 'edit') {
+            $rules['node_type']        = 'nullable|string|in:Master Node,Transit Node';
+            $rules['control_vlan']     = 'nullable|integer|min:1|max:4094';
+            $rules['hello_time']       = 'nullable|integer|min:1|max:10';
+            $rules['fail_time']        = 'nullable|integer|min:3|max:30';
+            $rules['pre_forward_time'] = 'nullable|integer|min:3|max:30';
+            $rules['primary_port']     = $portRule;
+            $rules['secondary_port']   = $portRule;
+        }
+
+        $rules['ring_description'] = 'nullable|string|max:64';
+
+        $data = $request->validate($rules);
+
+        $playbook = "{$this->pluginPath}/playbooks/ring_protection/setethernet.yml";
+        $hosts    = "{$this->pluginPath}/hosts/{$hostname}.yml";
+
+        $extraVars = array_filter([
+            'operation'        => $data['operation'],
+            'ring_id'          => $data['ring_id'],
+            'node_type'        => $data['node_type'] ?? null,
+            'ring_description' => $data['ring_description'] ?? null,
+            'control_vlan'     => $data['control_vlan'] ?? null,
+            'hello_time'       => $data['hello_time'] ?? null,
+            'fail_time'        => $data['fail_time'] ?? null,
+            'pre_forward_time' => $data['pre_forward_time'] ?? null,
+            'primary_port'     => $data['primary_port'] ?? null,
+            'secondary_port'   => $data['secondary_port'] ?? null,
+        ], fn ($value) => $value !== null && $value !== '');
+
+        $output = $this->runAnsiblejs($playbook, $hosts, $extraVars);
+
+        if (stripos($output, 'FAILED!') !== false) {
+            return $this->error("Ethernet Ring {$data['operation']} failed for ring {$data['ring_id']}", $output);
+        }
+
+        $this->runAnsiblejs("{$this->pluginPath}/playbooks/ring_protection/getethernet.yml", $hosts);
+
+        return $this->success([
+            "message" => "Ethernet Ring {$data['ring_id']} {$data['operation']} completed successfully",
+            "raw"     => $output,
+        ]);
     }
 
     private function success(array $data)

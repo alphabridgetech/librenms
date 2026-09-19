@@ -238,12 +238,12 @@
 
               dlf_drop_vlan_nodes = raw_fields.get("Dlf-drop VLAN nodes", "")
               destination_lookup_failure = (
-                  "Discard Unknown" if dlf_drop_vlan_nodes else "Transfer Unknown"
+                  "Discrad Unknown" if dlf_drop_vlan_nodes else "Transfer Unknown"
               )
 
-              enable_auto_querier = raw_fields.get("Querier", "Disabled")
-              enable_auto_querier = (
-                  "Enable" if enable_auto_querier.lower().startswith("enable") else "Disable"
+              querier_election = raw_fields.get("Querier election", "Disabled")
+              enable_auto_query = (
+                  "Enable" if querier_election.lower().startswith("enable") else "Disable"
               )
 
               snooping_querier_address = raw_fields.get("Querier address", "")
@@ -266,7 +266,7 @@
               print(json.dumps({
                   "ip": HOST,
                   "Destination Looking-up Failure": (destination_lookup_failure),
-                  "Enable Auto Query": enable_auto_querier,
+                  "Enable Auto Query": enable_auto_query,
                   "IGMP Snooping": igmp_snooping_state,
                   "Querier Expiry Interval(s)": (querier_expiry_interval),
                   "Query Interval(s)": query_interval,

@@ -1,0 +1,836 @@
+# ============================================================================
+# File        : setethernet.yml
+# Feature     : Ethernet Ring (EAPS) - SET
+#
+# Operations :
+#   add    - Create a new Ethernet Ring configuration
+#   edit   - Modify selected fields of an existing Ethernet Ring
+#   delete - Delete an existing Ethernet Ring configuration
+#
+# UI Fields :
+#   Ring ID
+#   Node Type
+#   Ring Description
+#   Control VLAN
+#   Ring Status
+#   Hello Time
+#   Fail Time
+#   Pre-forward Time
+#   Primary Port
+#   Secondary Port
+#   add
+#   ansible-playbook -i inventory/192.168.2.245.yml playbooks/ring_protection/setethernet.yml -e "operation=add ring_id=30 node_type='Master Node' ring_description='Ethernet Ring 1' control_vlan=400 hello_time=1 fail_time=3 pre_forward_time=3 primary_port=GigaEthernet0/1 secondary_port=GigaEthernet0/2"
+#delete
+#ansible-playbook -i inventory/192.168.2.245.yml playbooks/ring_protection/setethernet.yml -e "operation=delete ring_id=30 node_type='Master Node' ring_description='Ethernet Ring 1' control_vlan=400 hello_time=1 fail_time=3 pre_forward_time=4 primary_port=GigaEthernet0/3 secondary_port=GigaEthernet0/2"
+#edit
+#ansible-playbook -i inventory/192.168.2.245.yml playbooks/ring_protection/setethernet.yml -e "operation=edit ring_id=30 node_type='Master Node' ring_description='Ethernet Ring 1' control_vlan=400 hello_time=1 fail_time=3 pre_forward_time=4 primary_port=GigaEthernet0/3 secondary_port=GigaEthernet0/2"
+
+# ============================================================================
+
+---
+- name: Ethernet Ring SET Configuration
+  hosts: alphabridge_devices
+  gather_facts: false
+
+  vars:
+    output_dir: "/opt/librenms/librenms-ansible-inventory-plugin/output"
+    script_dir: "/opt/librenms/librenms-ansible-inventory-plugin/tmp"
+    script_file: "{{ script_dir }}/set_ethernet_exec.py"
+
+    ethernet_operation: "{{ operation | default('add') }}"
+    ethernet_ring_id: "{{ ring_id | default(1) }}"
+
+    ethernet_node_type: "{{ node_type | default('') }}"
+    ethernet_ring_description: "{{ ring_description | default('') }}"
+    ethernet_control_vlan: "{{ control_vlan | default('') }}"
+    ethernet_hello_time: "{{ hello_time | default('') }}"
+    ethernet_fail_time: "{{ fail_time | default('') }}"
+    ethernet_pre_forward_time: "{{ pre_forward_time | default('') }}"
+
+    ethernet_primary_port: "{{ primary_port | default('') }}"
+    ethernet_secondary_port: "{{ secondary_port | default('') }}"
+
+  tasks:
+
+    # ========================================================================
+    # VALIDATION
+    # ========================================================================
+
+    - name: Validate Ethernet Ring operation
+      ansible.builtin.assert:
+        that:
+          - ethernet_operation in ['add', 'edit', 'delete']
+        fail_msg: "operation must be add, edit or delete"
+
+    - name: Validate Ethernet Ring ID
+      ansible.builtin.assert:
+        that:
+          - ethernet_ring_id | int >= 1
+          - ethernet_ring_id | int <= 32
+        fail_msg: "ring_id must be between 1 and 32"
+
+    - name: Validate required fields for ADD
+      ansible.builtin.assert:
+        that:
+          - ethernet_node_type != ''
+          - ethernet_control_vlan != ''
+          - ethernet_hello_time != ''
+          - ethernet_fail_time != ''
+          - ethernet_pre_forward_time != ''
+          - ethernet_primary_port != ''
+          - ethernet_secondary_port != ''
+        fail_msg: >-
+          For ADD operation, node_type, control_vlan, hello_time,
+          fail_time, pre_forward_time, primary_port and secondary_port
+          are required.
+      when: ethernet_operation == 'add'
+
+    - name: Validate Ethernet Ring node type
+      ansible.builtin.assert:
+        that:
+          - ethernet_node_type in ['Master Node', 'Transit Node']
+        fail_msg: "node_type must be Master Node or Transit Node"
+      when:
+        - ethernet_operation in ['add', 'edit']
+        - ethernet_node_type != ''
+
+    - name: Validate Ethernet Ring control VLAN
+      ansible.builtin.assert:
+        that:
+          - ethernet_control_vlan | int >= 1
+          - ethernet_control_vlan | int <= 4094
+        fail_msg: "control_vlan must be between 1 and 4094"
+      when:
+        - ethernet_operation in ['add', 'edit']
+        - ethernet_control_vlan != ''
+
+    - name: Validate Ethernet Ring hello time
+      ansible.builtin.assert:
+        that:
+          - ethernet_hello_time | int >= 1
+          - ethernet_hello_time | int <= 10
+        fail_msg: "hello_time must be between 1 and 10 seconds"
+      when:
+        - ethernet_operation in ['add', 'edit']
+        - ethernet_hello_time != ''
+
+    - name: Validate Ethernet Ring fail time
+      ansible.builtin.assert:
+        that:
+          - ethernet_fail_time | int >= 3
+          - ethernet_fail_time | int <= 30
+        fail_msg: "fail_time must be between 3 and 30 seconds"
+      when:
+        - ethernet_operation in ['add', 'edit']
+        - ethernet_fail_time != ''
+
+    - name: Validate Ethernet Ring pre-forward time
+      ansible.builtin.assert:
+        that:
+          - ethernet_pre_forward_time | int >= 3
+          - ethernet_pre_forward_time | int <= 30
+        fail_msg: "pre_forward_time must be between 3 and 30 seconds"
+      when:
+        - ethernet_operation in ['add', 'edit']
+        - ethernet_pre_forward_time != ''
+
+    - name: Validate Primary Port
+      ansible.builtin.assert:
+        that:
+          - ethernet_primary_port in [
+              'None',
+              'GigaEthernet0/1',
+              'GigaEthernet0/2',
+              'GigaEthernet0/3',
+              'GigaEthernet0/6',
+              'GigaEthernet0/7',
+              'GigaEthernet0/8',
+              'TenGigabitEthernet0/1',
+              'TenGigabitEthernet0/2',
+              'TenGigabitEthernet0/3',
+              'TenGigabitEthernet0/4',
+              'p1'
+            ]
+        fail_msg: "Invalid primary_port"
+      when:
+        - ethernet_operation in ['add', 'edit']
+        - ethernet_primary_port != ''
+
+    - name: Validate Secondary Port
+      ansible.builtin.assert:
+        that:
+          - ethernet_secondary_port in [
+              'None',
+              'GigaEthernet0/1',
+              'GigaEthernet0/2',
+              'GigaEthernet0/3',
+              'GigaEthernet0/6',
+              'GigaEthernet0/7',
+              'GigaEthernet0/8',
+              'TenGigabitEthernet0/1',
+              'TenGigabitEthernet0/2',
+              'TenGigabitEthernet0/3',
+              'TenGigabitEthernet0/4',
+              'p1'
+            ]
+        fail_msg: "Invalid secondary_port"
+      when:
+        - ethernet_operation in ['add', 'edit']
+        - ethernet_secondary_port != ''
+
+    # ========================================================================
+    # TEMP DIRECTORY
+    # ========================================================================
+
+    - name: Create temporary directory
+      ansible.builtin.file:
+        path: "{{ script_dir }}"
+        state: directory
+        mode: '0755'
+
+    # ========================================================================
+    # PARAMIKO SSH SCRIPT
+    # ========================================================================
+
+    - name: Create Python SSH script for Ethernet Ring
+      ansible.builtin.copy:
+        dest: "{{ script_file }}"
+        mode: '0755'
+        content: |
+          #!/usr/bin/env python3
+
+          import paramiko
+          import time
+          import re
+          import json
+          import sys
+
+          HOST = "{{ ansible_host }}"
+          USER = "{{ ansible_user }}"
+          PASSWORD = "{{ ansible_password }}"
+
+          OPERATION = "{{ ethernet_operation }}"
+          RING_ID = "{{ ethernet_ring_id }}"
+
+          NODE_TYPE = "{{ ethernet_node_type }}"
+          RING_DESCRIPTION = "{{ ethernet_ring_description }}"
+          CONTROL_VLAN = "{{ ethernet_control_vlan }}"
+          HELLO_TIME = "{{ ethernet_hello_time }}"
+          FAIL_TIME = "{{ ethernet_fail_time }}"
+          PRE_FORWARD_TIME = "{{ ethernet_pre_forward_time }}"
+
+          PRIMARY_PORT = "{{ ethernet_primary_port }}"
+          SECONDARY_PORT = "{{ ethernet_secondary_port }}"
+
+          ANSI_RE = re.compile(
+              r'\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])'
+          )
+
+          def clean(text):
+              text = ANSI_RE.sub('', text)
+              text = text.replace('\r', '')
+              return text
+
+          def read_until_prompt(shell, prompt_regex, timeout=10):
+
+              buf = ""
+              end_time = time.time() + timeout
+
+              while time.time() < end_time:
+
+                  if shell.recv_ready():
+
+                      data = shell.recv(65535).decode(
+                          errors='ignore'
+                      )
+
+                      buf += data
+
+                      cleaned = clean(buf)
+
+                      if re.search(
+                          prompt_regex,
+                          cleaned
+                      ):
+                          return cleaned
+
+                      end_time = time.time() + 0.5
+
+                  else:
+                      time.sleep(0.1)
+
+              return clean(buf)
+
+          def send_command(
+              shell,
+              command,
+              prompt_regex,
+              timeout=10
+          ):
+
+              shell.send(command + "\n")
+
+              return read_until_prompt(
+                  shell,
+                  prompt_regex,
+                  timeout
+              )
+
+          def check_error(output, command):
+
+              output = clean(output)
+
+              if re.search(
+                  r'%Error|Invalid input|Invalid command|Unknown command|'
+                  r'Incomplete command|failed|error:',
+                  output,
+                  re.IGNORECASE
+              ):
+
+                  raise Exception(
+                      f"Command failed: {command}\n"
+                      f"{output.strip()}"
+                  )
+
+              return output
+
+          def execute_command(
+              shell,
+              command,
+              prompt_regex=r'[#>]\s*$',
+              timeout=5
+          ):
+
+              output = send_command(
+                  shell,
+                  command,
+                  prompt_regex,
+                  timeout
+              )
+
+              check_error(
+                  output,
+                  command
+              )
+
+              return output
+
+          def assign_ring_port(shell, ring_id, port, role):
+
+              # ------------------------------------------------------------
+              # Port assignment for Ethernet Ring (EAPS) is done from
+              # interface configuration mode on THIS device, not from the
+              # "ether-ring <id>" ring config context:
+              #
+              #   interface <port>
+              #   ether-ring <ring_id> primary-port|secondary-port
+              #   exit
+              #
+              # ("ether-ring <ring_id> primary-port <port>" at the ring
+              # config level does not exist on this firmware and is
+              # rejected as "Unknown command".)
+              # ------------------------------------------------------------
+
+              execute_command(
+                  shell,
+                  f"interface {port}",
+                  r'[#>]\s*$',
+                  timeout=5
+              )
+
+              execute_command(
+                  shell,
+                  f"ether-ring {ring_id} {role}-port",
+                  r'[#>]\s*$',
+                  timeout=5
+              )
+
+              execute_command(
+                  shell,
+                  "exit",
+                  r'[#>]\s*$',
+                  timeout=5
+              )
+
+          def unassign_ring_port(shell, ring_id, port, role):
+
+              # Counterpart to assign_ring_port() - removes an existing
+              # primary/secondary assignment from the interface that
+              # currently holds it.
+
+              execute_command(
+                  shell,
+                  f"interface {port}",
+                  r'[#>]\s*$',
+                  timeout=5
+              )
+
+              execute_command(
+                  shell,
+                  f"no ether-ring {ring_id} {role}-port",
+                  r'[#>]\s*$',
+                  timeout=5
+              )
+
+              execute_command(
+                  shell,
+                  "exit",
+                  r'[#>]\s*$',
+                  timeout=5
+              )
+
+          def find_current_ring_ports(shell, ring_id):
+
+              # Used only when EDIT is asked to unassign a port (set it to
+              # "None") - looks up which interface currently holds the
+              # primary/secondary role for this ring, since the caller
+              # only supplies "None", not the port to remove it from.
+
+              output = send_command(
+                  shell,
+                  f"show ether-ring {ring_id}",
+                  r'[#>]\s*$',
+                  timeout=10
+              )
+
+              primary_port = None
+              secondary_port = None
+
+              for line in clean(output).splitlines():
+
+                  parts = line.split()
+
+                  if len(parts) >= 2 and parts[1].lower() == "primary":
+                      primary_port = parts[0]
+
+                  elif len(parts) >= 2 and parts[1].lower() == "secondary":
+                      secondary_port = parts[0]
+
+              return primary_port, secondary_port
+
+          ssh = None
+
+          try:
+
+              ssh = paramiko.SSHClient()
+
+              ssh.set_missing_host_key_policy(
+                  paramiko.AutoAddPolicy()
+              )
+
+              ssh.connect(
+                  HOST,
+                  username=USER,
+                  password=PASSWORD,
+                  look_for_keys=False,
+                  allow_agent=False,
+                  timeout=10
+              )
+
+              shell = ssh.invoke_shell()
+
+              time.sleep(0.5)
+
+              read_until_prompt(
+                  shell,
+                  r'[#>]\s*$',
+                  timeout=5
+              )
+
+              execute_command(
+                  shell,
+                  "enable",
+                  r'[#>]\s*$',
+                  timeout=5
+              )
+
+              execute_command(
+                  shell,
+                  "terminal length 0",
+                  r'[#>]\s*$',
+                  timeout=3
+              )
+
+              output = send_command(
+                  shell,
+                  "config",
+                  r'config[^#]*#\s*$',
+                  timeout=5
+              )
+
+              check_error(
+                  output,
+                  "config"
+              )
+
+              config_prompt = r'config[^#]*#\s*$'
+
+              if not re.search(
+                  config_prompt,
+                  output
+              ):
+
+                  raise Exception(
+                      "Unable to enter configuration mode"
+                  )
+
+              # ==============================================================
+              # ADD
+              # ==============================================================
+
+              if OPERATION == "add":
+
+                  execute_command(
+                      shell,
+                      f"ether-ring {RING_ID}",
+                      r'[#>]\s*$',
+                      timeout=5
+                  )
+
+                  if NODE_TYPE == "Master Node":
+
+                      execute_command(
+                          shell,
+                          "master-node",
+                          r'[#>]\s*$',
+                          timeout=5
+                      )
+
+                  elif NODE_TYPE == "Transit Node":
+
+                      execute_command(
+                          shell,
+                          "transit-node",
+                          r'[#>]\s*$',
+                          timeout=5
+                      )
+
+                  if RING_DESCRIPTION:
+
+                      execute_command(
+                          shell,
+                          f"ring-description {RING_DESCRIPTION}",
+                          r'[#>]\s*$',
+                          timeout=5
+                      )
+
+                  execute_command(
+                      shell,
+                      f"control-vlan {CONTROL_VLAN}",
+                      r'[#>]\s*$',
+                      timeout=5
+                  )
+
+                  execute_command(
+                      shell,
+                      f"hello-time {HELLO_TIME}",
+                      r'[#>]\s*$',
+                      timeout=5
+                  )
+
+                  execute_command(
+                      shell,
+                      f"fail-time {FAIL_TIME}",
+                      r'[#>]\s*$',
+                      timeout=5
+                  )
+
+                  execute_command(
+                      shell,
+                      f"pre-forward-time {PRE_FORWARD_TIME}",
+                      r'[#>]\s*$',
+                      timeout=5
+                  )
+
+                  # Port assignment happens from interface config mode, so
+                  # leave the ring config context first.
+                  execute_command(
+                      shell,
+                      "exit",
+                      r'[#>]\s*$',
+                      timeout=5
+                  )
+
+                  if PRIMARY_PORT and PRIMARY_PORT != "None":
+
+                      assign_ring_port(
+                          shell,
+                          RING_ID,
+                          PRIMARY_PORT,
+                          "primary"
+                      )
+
+                  if SECONDARY_PORT and SECONDARY_PORT != "None":
+
+                      assign_ring_port(
+                          shell,
+                          RING_ID,
+                          SECONDARY_PORT,
+                          "secondary"
+                      )
+
+                  result = {
+                      "status": "SUCCESS"
+                  }
+
+              # ==============================================================
+              # EDIT
+              # ==============================================================
+
+              elif OPERATION == "edit":
+
+                  # Look up the interface currently holding each role
+                  # BEFORE making any changes, in case the caller wants to
+                  # unassign one ("None") - only needed then, since
+                  # unassigning requires knowing which interface to remove
+                  # the role from.
+                  current_primary_port = None
+                  current_secondary_port = None
+
+                  if PRIMARY_PORT == "None" or SECONDARY_PORT == "None":
+
+                      current_primary_port, current_secondary_port = (
+                          find_current_ring_ports(shell, RING_ID)
+                      )
+
+                  execute_command(
+                      shell,
+                      f"ether-ring {RING_ID}",
+                      r'[#>]\s*$',
+                      timeout=5
+                  )
+
+                  # Only modify fields supplied by the user.
+
+                  if NODE_TYPE == "Master Node":
+
+                      execute_command(
+                          shell,
+                          "master-node",
+                          r'[#>]\s*$',
+                          timeout=5
+                      )
+
+                  elif NODE_TYPE == "Transit Node":
+
+                      execute_command(
+                          shell,
+                          "transit-node",
+                          r'[#>]\s*$',
+                          timeout=5
+                      )
+
+                  if RING_DESCRIPTION:
+
+                      execute_command(
+                          shell,
+                          f"ring-description {RING_DESCRIPTION}",
+                          r'[#>]\s*$',
+                          timeout=5
+                      )
+
+                  if CONTROL_VLAN:
+
+                      execute_command(
+                          shell,
+                          f"control-vlan {CONTROL_VLAN}",
+                          r'[#>]\s*$',
+                          timeout=5
+                      )
+
+                  if HELLO_TIME:
+
+                      execute_command(
+                          shell,
+                          f"hello-time {HELLO_TIME}",
+                          r'[#>]\s*$',
+                          timeout=5
+                      )
+
+                  if FAIL_TIME:
+
+                      execute_command(
+                          shell,
+                          f"fail-time {FAIL_TIME}",
+                          r'[#>]\s*$',
+                          timeout=5
+                      )
+
+                  if PRE_FORWARD_TIME:
+
+                      execute_command(
+                          shell,
+                          f"pre-forward-time {PRE_FORWARD_TIME}",
+                          r'[#>]\s*$',
+                          timeout=5
+                      )
+
+                  # Port assignment happens from interface config mode, so
+                  # leave the ring config context first.
+                  execute_command(
+                      shell,
+                      "exit",
+                      r'[#>]\s*$',
+                      timeout=5
+                  )
+
+                  if PRIMARY_PORT:
+
+                      if PRIMARY_PORT == "None":
+
+                          if current_primary_port:
+
+                              unassign_ring_port(
+                                  shell,
+                                  RING_ID,
+                                  current_primary_port,
+                                  "primary"
+                              )
+
+                      else:
+
+                          assign_ring_port(
+                              shell,
+                              RING_ID,
+                              PRIMARY_PORT,
+                              "primary"
+                          )
+
+                  if SECONDARY_PORT:
+
+                      if SECONDARY_PORT == "None":
+
+                          if current_secondary_port:
+
+                              unassign_ring_port(
+                                  shell,
+                                  RING_ID,
+                                  current_secondary_port,
+                                  "secondary"
+                              )
+
+                      else:
+
+                          assign_ring_port(
+                              shell,
+                              RING_ID,
+                              SECONDARY_PORT,
+                              "secondary"
+                          )
+
+                  result = {
+                      "status": "SUCCESS"
+                  }
+
+              # ==============================================================
+              # DELETE
+              # ==============================================================
+
+              elif OPERATION == "delete":
+
+                  # Actual device command for deleting Ethernet Ring
+                  # discovered from switch CLI:
+                  #
+                  #   no ether-ring <ring_id>
+
+                  execute_command(
+                      shell,
+                      f"no ether-ring {RING_ID}",
+                      r'config[^#]*#\s*$',
+                      timeout=5
+                  )
+
+                  result = {
+                      "status": "SUCCESS"
+                  }
+
+              else:
+
+                  raise Exception(
+                      f"Unsupported operation: {OPERATION}"
+                  )
+
+              # ==============================================================
+              # EXIT CONFIGURATION
+              # ==============================================================
+
+              send_command(
+                  shell,
+                  "end",
+                  r'[#>]\s*$',
+                  timeout=5
+              )
+
+              ssh.close()
+
+              print(
+                  json.dumps(result)
+              )
+
+              if result["status"] == "SUCCESS":
+
+                  sys.exit(0)
+
+              else:
+
+                  sys.exit(1)
+
+          except Exception as e:
+
+              try:
+
+                  if ssh:
+                      ssh.close()
+
+              except Exception:
+                  pass
+
+              print(
+                  json.dumps({
+                      "status": "FAILED",
+                      "reason": str(e)
+                  })
+              )
+
+              sys.exit(1)
+
+    # ========================================================================
+    # EXECUTE
+    # ========================================================================
+
+    - name: Execute Ethernet Ring configuration
+      ansible.builtin.command:
+        cmd: "/opt/librenms/librenms-ansible-inventory-plugin/bin/python3 {{ script_file }}"
+      register: ethernet_result
+      changed_when: false
+      failed_when: false
+
+    - name: Display Ethernet Ring result
+      ansible.builtin.debug:
+        var: ethernet_result.stdout
+
+    # ========================================================================
+    # SAVE RESULT
+    # ========================================================================
+
+    - name: Save Ethernet Ring result
+      ansible.builtin.copy:
+        dest: "{{ output_dir }}/{{ ansible_host }}_etherring_{{ ethernet_operation }}.yml"
+        mode: '0644'
+        content: |
+          {% if ethernet_result.rc == 0 %}
+          status: SUCCESS
+          {% else %}
+          status: FAILED
+          reason: "{{ ethernet_result.stdout | default('Unknown error') | trim | replace('\n', ' ') }}"
+          {% endif %}
+
+    # ========================================================================
+    # FAIL ON ERROR
+    # ========================================================================
+
+    - name: Fail if Ethernet Ring configuration failed
+      ansible.builtin.fail:
+        msg: "{{ ethernet_result.stdout }}"
+      when:
+        - ethernet_result.rc != 0
