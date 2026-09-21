@@ -137,6 +137,35 @@ class AlertRuleController extends Controller
     }
 
     /**
+     * Export selected alert rules as a downloadable JSON file.
+     */
+    public function bulkExport(Request $request)
+    {
+        $ids = array_filter(array_map('intval', explode(',', (string) $request->query('ids', ''))));
+
+        $rules = AlertRule::whereIn('id', $ids)->orderBy('name')->get();
+
+        $export = $rules->map(function (AlertRule $alertRule) {
+            return [
+                'name' => $alertRule->name,
+                'severity' => $alertRule->severity,
+                'disabled' => (bool) $alertRule->disabled,
+                'builder' => $alertRule->builder,
+                'extra' => $alertRule->extra,
+                'proc' => $alertRule->proc,
+                'invert_map' => (bool) $alertRule->invert_map,
+                'notes' => $alertRule->notes,
+            ];
+        })->values();
+
+        $filename = 'telequill-alert-rules-' . now()->format('Y-m-d_His') . '.json';
+
+        return response()->json($export, 200, [
+            'Content-Disposition' => 'attachment; filename="' . $filename . '"',
+        ], JSON_PRETTY_PRINT);
+    }
+
+    /**
      * @return array<int, array{id: int|string, text: string}>
      */
     private function formatDeviceMaps(AlertRule $alertRule): array

@@ -39,6 +39,9 @@ if (! Auth::user()->hasGlobalAdmin()) {
                 <h5 class="modal-title" id="search_rule">Alert rule collection</h5>
             </div>
             <div class="modal-body">
+                <div class="col pull-right" style="margin-bottom: 10px;">
+                    <button type="button" class="btn btn-default btn-sm" id="btn-export-rule-collection"><i class="fa fa-download" aria-hidden="true"></i> Download CSV</button>
+                </div>
                 <div class="table-responsive">
                     <table id="rule_collection" class="table table-condensed table-hover">
                         <thead>
@@ -50,17 +53,20 @@ if (! Auth::user()->hasGlobalAdmin()) {
                         </thead>
                         <?php
                         $tmp_rule_id = 0;
+                        $csv_rows = [];
                         foreach (get_rules_from_json() as $rule) {
                             $rule['rule_id'] = $tmp_rule_id;
+                            $rule_sql = QueryBuilderParser::fromJson($rule['builder'])->toSql(false);
                             echo "
                                 <tr>
                                     <td>{$rule['name']}</td>
                                     <td>";
-                            echo QueryBuilderParser::fromJson($rule['builder'])->toSql(false);
+                            echo $rule_sql;
                             echo "  </td>
                                     <td>{$rule['rule_id']}</td>
                                 </tr>
                             ";
+                            $csv_rows[] = ['name' => $rule['name'], 'rule' => $rule_sql];
                             $tmp_rule_id++;
                         }
                         ?>
@@ -100,6 +106,24 @@ if (! Auth::user()->hasGlobalAdmin()) {
                                     }
                                 });
                             }).end();
+                        });
+
+                        $("#btn-export-rule-collection").on("click", function () {
+                            var rows = <?php echo json_encode($csv_rows); ?>;
+                            var csvEscape = function (val) {
+                                return '"' + String(val == null ? '' : val).replace(/"/g, '""') + '"';
+                            };
+                            var lines = ["Name,Rule"];
+                            rows.forEach(function (row) {
+                                lines.push(csvEscape(row.name) + ',' + csvEscape(row.rule));
+                            });
+                            var blob = new Blob([lines.join("\r\n")], { type: "text/csv;charset=utf-8;" });
+                            var link = document.createElement("a");
+                            link.href = URL.createObjectURL(blob);
+                            link.download = "telequill-alert-rule-collection.csv";
+                            document.body.appendChild(link);
+                            link.click();
+                            document.body.removeChild(link);
                         });
                     </script>
                 </div>

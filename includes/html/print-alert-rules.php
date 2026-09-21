@@ -97,6 +97,8 @@ $device_id = $device['device_id'] ?? 0;
 echo '<button type="button" class="btn btn-primary btn-sm" data-toggle="modal" data-target="#create-alert" data-device_id="' .$device_id. '">Create new alert rule</button>';
 echo '<i> - OR - </i>';
 echo '<button type="button" class="btn btn-primary btn-sm" data-toggle="modal" data-target="#search_rule_modal" data-device_id="' .$device_id. '">Create rule from collection</button>';
+echo '<i> - OR - </i>';
+echo '<button type="button" class="btn btn-default btn-sm" id="btn-bulk-export-rules" disabled><i class="fa fa-download" aria-hidden="true"></i> Bulk Export</button>';
 echo '</div>';
 
 echo '<div class="col pull-right">';
@@ -166,6 +168,7 @@ $start = (($page_number - 1) * $results);
 <table id="alert-rules-table" class="table table-condensed table-hover table-striped">
 <thead>
     <tr>
+        <th style="width:24px;"><input type="checkbox" id="selectAllRules" data-toggle="popover" data-placement="top" data-content="Select all rules"></th>
         <th data-column-id="Type">Type<th>
         <th data-column-id="Name">Name</th>
         <th data-column-id="Devices">Devices<th>
@@ -259,6 +262,10 @@ foreach ($rule_list as $rule) {
     $popover_msg .= ' alert Rule #' . $rule['id'];
 
     echo "<tr class='" . $extra . "' id='rule_id_" . $rule['id'] . "'>";
+
+    // Select
+
+    echo "<td><input type='checkbox' class='rule-select' value='" . $rule['id'] . "'></td>";
 
     // Type
 
@@ -591,4 +598,31 @@ function changePage(page,e) {
     $('#page_number').val(page);
     $('#result_form').trigger( "submit" );
 }
+
+function updateBulkExportBtn() {
+    $('#btn-bulk-export-rules').prop('disabled', $('.rule-select:checked').length === 0);
+}
+
+$('#selectAllRules').on('change', function () {
+    $('.rule-select').prop('checked', this.checked);
+    updateBulkExportBtn();
+});
+
+$(document).on('change', '.rule-select', function () {
+    if (!this.checked) {
+        $('#selectAllRules').prop('checked', false);
+    } else if ($('.rule-select:checked').length === $('.rule-select').length) {
+        $('#selectAllRules').prop('checked', true);
+    }
+    updateBulkExportBtn();
+});
+
+$('#btn-bulk-export-rules').on('click', function () {
+    var ids = $('.rule-select:checked').map(function () { return $(this).val(); }).get();
+    if (!ids.length) {
+        return;
+    }
+    var url = '<?php echo route('alert-rules.bulk-export'); ?>' + '?ids=' + ids.join(',');
+    window.location.href = url;
+});
 </script>
