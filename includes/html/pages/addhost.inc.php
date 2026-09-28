@@ -222,7 +222,7 @@ $pagetitle[] = 'Add host';
       <div class="form-group">
           <label for="hostname" class="col-sm-3 control-label">Device IP</label>
           <div class="col-sm-9">
-              <input type="text" id="hostname" name="hostname" class="form-control input-sm" placeholder="Hostname">
+              <input type="text" id="hostname" name="hostname" class="form-control input-sm" placeholder="Device Ip">
           </div>
       </div>
       <?php if ($prefillDefaultSnmp) { ?>

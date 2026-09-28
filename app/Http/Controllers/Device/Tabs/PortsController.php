@@ -44,6 +44,7 @@ class PortsController implements DeviceTab
 {
     private bool $detail = true;
     private array $settings = [];
+    private ?string $search = null;
     private array $defaults = [
         'perPage' => 32,
         'sort' => 'ifIndex',
@@ -88,9 +89,11 @@ class PortsController implements DeviceTab
             'type' => 'in:bits,upkts,nupkts,errors,etherlike',
             'from' => ['regex:/^(int|[+-]\d+[hdmy])$/'],
             'to' => ['regex:/^(int|[+-]\d+[hdmy])$/'],
+            'search' => 'nullable|string|max:191',
         ]);
 
         $this->loadSettings($request);
+        $this->search = $request->filled('search') ? trim($request->get('search')) : null;
         $tab = $this->parseTab($request);
         $this->detail = $tab == 'detail';
         $data = match ($tab) {
@@ -131,7 +134,8 @@ class PortsController implements DeviceTab
         /** @var Collection<Port>|LengthAwarePaginator<Port> $ports */
         $ports = $this->getFilteredPortsQuery($device, $relationships)
             ->paginate(fn ($total) => $this->settings['perPage'] == 'all' ? $total : (int) $this->settings['perPage']) // @phpstan-ignore-line missing closure type
-            ->appends('perPage', $this->settings['perPage']);
+            ->appends('perPage', $this->settings['perPage'])
+            ->appends('search', $this->search);
 
         $data = [
             'ports' => $ports,
@@ -391,6 +395,11 @@ class PortsController implements DeviceTab
             ->when(! $this->settings['ignored'], fn (Builder $q, $disabled) => $q->where('ignore', 0))
             ->when($this->settings['admin'] != 'any', fn (Builder $q, $admin) => $q->where('ifAdminStatus', $this->settings['admin']))
             ->when($this->settings['status'] != 'any', fn (Builder $q, $admin) => $q->where('ifOperStatus', $this->settings['status']))
+            ->when($this->search, fn (Builder $q, $search) => $q->where(fn (Builder $q2) => $q2
+                ->where('ifName', 'like', "%{$search}%")
+                ->orWhere('ifDescr', 'like', "%{$search}%")
+                ->orWhere('ifAlias', 'like', "%{$search}%")
+            ))
             ->when($this->settings['sort'] == 'port', fn (Builder $q, $sort) => $q
                 ->orderByRaw('SOUNDEX(ifName) ' . $this->settings['order'])
                 ->orderByRaw('CHAR_LENGTH(ifName) ' . $this->settings['order'])

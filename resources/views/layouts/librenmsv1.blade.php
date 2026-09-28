@@ -158,7 +158,7 @@
         let shownAlerts = new Set();
         let audioUnlocked = false;
 
-        let soundEnabled = localStorage.getItem("alertSound") !== "off";
+        let soundEnabled = localStorage.getItem("alertSound") === "on";
 
         document.addEventListener("DOMContentLoaded", function() {
 

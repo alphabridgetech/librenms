@@ -1,4 +1,20 @@
 <x-panel body-class="tw:p-0!">
+    <div class="tw:flex tw:items-center tw:gap-2 tw:m-3">
+        <input type="text"
+               class="form-control input-sm tw:max-w-xs"
+               placeholder="{{ __('Find interface...') }}"
+               value="{{ $request->get('search') }}"
+               x-data="{}"
+               x-on:keydown.enter="
+                 const params = new URLSearchParams(window.location.search);
+                 if ($event.target.value) { params.set('search', $event.target.value); } else { params.delete('search'); }
+                 params.delete('page');
+                 window.location.search = params.toString();
+               ">
+        @if($request->filled('search'))
+            <a href="{{ $request->fullUrlWithQuery(['search' => null, 'page' => null]) }}" class="btn btn-default btn-sm" title="{{ __('Clear filter') }}"><i class="fa fa-times"></i> {{ __('Clear') }}</a>
+        @endif
+    </div>
     <table id="ports-fdb" class="table table-condensed table-hover table-striped tw:mt-1 tw:mb-0!">
         <thead>
         <tr>
