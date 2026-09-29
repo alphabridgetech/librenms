@@ -60,22 +60,16 @@
             $("#chatBox").scrollTop($("#chatBox")[0].scrollHeight);
 
             $.ajax({
-                url: 'http://172.18.0.5:5000/ask',
+                url: '{{ route('chatbot.message') }}',
                 method: 'POST',
                 contentType: 'application/json',
-                data: JSON.stringify({ question: question }),
+                data: JSON.stringify({ message: question, mode: 'bubble' }),
                 success: function(res) {
-                    let answerText = "";
-                    if(res.answer && res.answer.parts && res.answer.parts.length > 0) {
-                        answerText = res.answer.parts.map(p => p.text).join("\n");
-                    } else {
-                        answerText = "No response from chatbot.";
-                    }
-                    botMessage.text(answerText);
+                    botMessage.text(res.reply || "No response from chatbot.");
                     $("#chatBox").scrollTop($("#chatBox")[0].scrollHeight);
                 },
                 error: function(err) {
-                    botMessage.text("Error contacting chatbot. Make sure the Flask server is running.");
+                    botMessage.text("Error contacting chatbot.");
                     console.error(err);
                 }
             });

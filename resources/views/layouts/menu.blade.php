@@ -82,8 +82,8 @@
                             </ul>
                         </li>
                         <li role="presentation" class="divider"></li>
-                        <li><a href="{{ url('eventlog') }}"><i class="fa fa-bookmark fa-fw fa-lg"
-                                                               aria-hidden="true"></i> {{ __('Eventlog') }}</a></li>
+                        <!-- <li><a href="{{ url('eventlog') }}"><i class="fa fa-bookmark fa-fw fa-lg"
+                                                               aria-hidden="true"></i> {{ __('Eventlog') }}</a></li> -->
                         @config('enable_syslog')
                         <li><a href="{{ url('syslog') }}"><i class="fa fa-clone fa-fw fa-lg"
                                                              aria-hidden="true"></i> {{ __('syslog.title') }}</a></li>

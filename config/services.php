@@ -12,10 +12,9 @@ return [
     'url' => 'http://localhost:8000/',
     ],
     'chatbot' => [
-   
-    'key'=> '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',
-    'endpoint' => 'https://openrouter.ai/api/v1/chat/completions',
-    'model' => 'arcee-ai/trinity-large-preview:free',
+        'key' => env('CHATBOT_API_KEY'),
+        'endpoint' => env('CHATBOT_ENDPOINT'),
+        'model' => env('CHATBOT_MODEL'),
     ],
 
 

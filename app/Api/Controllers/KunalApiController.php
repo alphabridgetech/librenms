@@ -2334,6 +2334,10 @@ public function getvlan($hostname)
             "vlan_name" => $data['vlan_name'],
         ]);
 
+        if ($this->ansiblePlaybookFailed($output)) {
+            return $this->error("Failed to add VLAN", $output);
+        }
+
         // Refresh the getvlan cache synchronously so the table the frontend
         // reloads right after this call already reflects the new VLAN,
         // instead of showing stale data until the next background refresh
@@ -3715,6 +3719,26 @@ public function getvlan($hostname)
     private function success(array $data)
     {
         return response()->json(["status" => "success"] + $data);
+    }
+
+    /**
+     * ansible-playbook's PLAY RECAP reports per-host failed=/unreachable= counts;
+     * shell_exec() in runAnsible() discards the process exit code, so this is the
+     * only signal left in $output to tell a failed run from a successful one.
+     */
+    private function ansiblePlaybookFailed(string $output): bool
+    {
+        if (preg_match_all('/\bfailed=(\d+)\b/', $output, $failedMatches)
+            && array_sum($failedMatches[1]) > 0) {
+            return true;
+        }
+
+        if (preg_match_all('/\bunreachable=(\d+)\b/', $output, $unreachableMatches)
+            && array_sum($unreachableMatches[1]) > 0) {
+            return true;
+        }
+
+        return false;
     }
 
     public function error(string $message, $raw = null)
