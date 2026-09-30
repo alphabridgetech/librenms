@@ -41,6 +41,7 @@ return Application::configure(basePath: dirname(__DIR__))
         $middleware->alias([
             'deny-demo' => \App\Http\Middleware\DenyDemoUser::class,
             'license' => \App\Http\Middleware\CheckLicense::class,
+            'ajax.redirect' => \App\Http\Middleware\AjaxRedirectToJson::class,
         ]);
 
         $middleware->priority([

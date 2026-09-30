@@ -22,6 +22,8 @@
             </div>
         @endif
 
+        <div id="backupFlashArea"></div>
+
         <!-- Navigation Tabs -->
         <ul class="nav nav-tabs" id="backupTabs" style="margin-bottom: 20px;">
             <li class="active">
@@ -83,7 +85,7 @@
                                     </div>
                                     
                                     <div class="form-group" style="margin-bottom: 0;">
-                                        <button type="submit" class="btn btn-success btn-block btn-sm" onclick="this.disabled=true; this.innerText='Exporting Startup-Config...'; this.form.submit();">
+                                        <button type="submit" class="btn btn-success btn-block btn-sm">
                                             <i class="fa fa-download fa-fw"></i> Export Node Startup-Config
                                         </button>
                                     </div>
@@ -211,13 +213,13 @@
                                                         <a href="{{ route('backup.node.download', ['filename' => $backup['name']]) }}" class="btn btn-xs btn-success">
                                                             <i class="fa fa-download"></i> Download
                                                         </a>
-                                                        <form action="{{ route('backup.node.restore', ['filename' => $backup['name']]) }}" method="POST" style="display:inline;" onsubmit="return confirm('Initiate restore for startup-config {{ $backup['name'] }} from /tftpboot?');">
+                                                        <form action="{{ route('backup.node.restore', ['filename' => $backup['name']]) }}" method="POST" style="display:inline;" data-confirm="Initiate restore for startup-config {{ $backup['name'] }} from /tftpboot?">
                                                             @csrf
                                                             <button type="submit" class="btn btn-xs btn-info">
                                                                 <i class="fa fa-undo"></i> Restore
                                                             </button>
                                                         </form>
-                                                        <form action="{{ route('backup.node.delete', ['filename' => $backup['name']]) }}" method="POST" style="display:inline;" onsubmit="return confirm('Are you sure you want to delete {{ $backup['name'] }}?');">
+                                                        <form action="{{ route('backup.node.delete', ['filename' => $backup['name']]) }}" method="POST" style="display:inline;" data-confirm="Are you sure you want to delete {{ $backup['name'] }}?">
                                                             @csrf
                                                             @method('DELETE')
                                                             <button type="submit" class="btn btn-xs btn-danger">
@@ -400,13 +402,13 @@
                                                         <a href="{{ route('backup.rrd.download', ['filename' => $backup['name']]) }}" class="btn btn-xs btn-success">
                                                             <i class="fa fa-download"></i> Download
                                                         </a>
-                                                        <form action="{{ route('backup.rrd.restore', ['filename' => $backup['name']]) }}" method="POST" style="display:inline;" onsubmit="return confirm('WARNING: This will extract and replace existing RRD files in rrd/ directory. Are you sure you want to restore?');">
+                                                        <form action="{{ route('backup.rrd.restore', ['filename' => $backup['name']]) }}" method="POST" style="display:inline;" data-confirm="WARNING: This will extract and replace existing RRD files in rrd/ directory. Are you sure you want to restore?">
                                                             @csrf
                                                             <button type="submit" class="btn btn-xs btn-warning">
                                                                 <i class="fa fa-refresh"></i> Restore
                                                             </button>
                                                         </form>
-                                                        <form action="{{ route('backup.rrd.delete', ['filename' => $backup['name']]) }}" method="POST" style="display:inline;" onsubmit="return confirm('Are you sure you want to delete this RRD backup?');">
+                                                        <form action="{{ route('backup.rrd.delete', ['filename' => $backup['name']]) }}" method="POST" style="display:inline;" data-confirm="Are you sure you want to delete this RRD backup?">
                                                             @csrf
                                                             @method('DELETE')
                                                             <button type="submit" class="btn btn-xs btn-danger">
@@ -596,13 +598,13 @@
                                                         <a href="{{ route('backup.download', ['filename' => $backup['filename'] ?? $backup['name']]) }}" class="btn btn-xs btn-success">
                                                             <i class="fa fa-download"></i> Download
                                                         </a>
-                                                        <form action="{{ route('backup.restore', ['filename' => $backup['name']]) }}" method="POST" style="display:inline;" onsubmit="return confirm('WARNING: This will overwrite your current database. Proceed?');">
+                                                        <form action="{{ route('backup.restore', ['filename' => $backup['name']]) }}" method="POST" style="display:inline;" data-confirm="WARNING: This will overwrite your current database. Proceed?">
                                                             @csrf
                                                             <button type="submit" class="btn btn-xs btn-warning">
                                                                 <i class="fa fa-refresh"></i> Restore
                                                             </button>
                                                         </form>
-                                                        <form action="{{ route('backup.delete', ['filename' => $backup['name']]) }}" method="POST" style="display:inline;" onsubmit="return confirm('Are you sure you want to delete this backup?');">
+                                                        <form action="{{ route('backup.delete', ['filename' => $backup['name']]) }}" method="POST" style="display:inline;" data-confirm="Are you sure you want to delete this backup?">
                                                             @csrf
                                                             @method('DELETE')
                                                             <button type="submit" class="btn btn-xs btn-danger">
@@ -1039,7 +1041,7 @@
                                                         <a href="{{ route('alerts.archive.download', $archive->id) }}" class="btn btn-xs btn-success">
                                                             <i class="fa fa-download"></i> Download
                                                         </a>
-                                                        <form action="{{ route('alerts.archive.destroy', $archive->id) }}" method="POST" style="display:inline;" onsubmit="return confirm('Are you sure you want to delete archive {{ $archive->filename }}?');">
+                                                        <form action="{{ route('alerts.archive.destroy', $archive->id) }}" method="POST" style="display:inline;" data-confirm="Are you sure you want to delete archive {{ $archive->filename }}?">
                                                             @csrf
                                                             @method('DELETE')
                                                             <button type="submit" class="btn btn-xs btn-danger">
@@ -1431,6 +1433,87 @@
                         $('#modalLoading').hide();
                         alert('Failed to load archive file contents.');
                     }
+                });
+            });
+        });
+
+        /* ==================================================================
+           AJAX-ify every Backup Management form (Node/RRD/Database/Alarm
+           Archive: run, upload, save-schedule, restore, delete) so actions
+           never trigger a full page reload / navigation, which previously
+           reset the page back to the first tab every time.
+           ================================================================== */
+        $(document).ready(function () {
+            var $tabs = $('#backupTabs');
+            var activeTabHref = $tabs.find('li.active > a').attr('href') || '#node-backup';
+
+            $tabs.on('shown.bs.tab', 'a[data-toggle="tab"]', function (e) {
+                activeTabHref = $(e.target).attr('href');
+            });
+
+            function showBackupAlert(status, message) {
+                var alertClass = status === 'success' ? 'alert-success' : 'alert-danger';
+                var icon = status === 'success' ? 'fa-check-circle' : 'fa-exclamation-circle';
+                var $alert = $(
+                    '<div class="alert ' + alertClass + '"><i class="fa ' + icon + '"></i> </div>'
+                ).append(document.createTextNode(message));
+
+                $('#backupFlashArea').empty().append($alert);
+                $('html, body').animate({ scrollTop: Math.max(0, $('.page-header').offset().top - 20) }, 300);
+
+                setTimeout(function () {
+                    $alert.fadeOut(400, function () { $(this).remove(); });
+                }, 8000);
+            }
+
+            function refreshBackupContent() {
+                $.get(window.location.href).done(function (html) {
+                    var $newTabContent = $('<div>').html(html).find('.tab-content').first();
+                    if (!$newTabContent.length) {
+                        return;
+                    }
+
+                    $('.tab-content').first().replaceWith($newTabContent);
+
+                    $tabs.find('li').removeClass('active');
+                    $tabs.find('a[href="' + activeTabHref + '"]').closest('li').addClass('active');
+                    $newTabContent.children('.tab-pane').removeClass('active in');
+                    $newTabContent.find(activeTabHref).addClass('active in');
+                });
+            }
+
+            $(document).on('submit', '.tab-content form', function (e) {
+                e.preventDefault();
+                var $form = $(this);
+
+                var confirmMsg = $form.data('confirm');
+                if (confirmMsg && !window.confirm(confirmMsg)) {
+                    return;
+                }
+
+                var isMultipart = $form.attr('enctype') === 'multipart/form-data';
+                var $submitBtn = $form.find('button[type="submit"]');
+                var originalBtnHtml = $submitBtn.html();
+                $submitBtn.prop('disabled', true).html('<i class="fa fa-spinner fa-spin"></i> Please wait...');
+
+                $.ajax({
+                    url: $form.attr('action'),
+                    method: $form.attr('method') || 'POST',
+                    data: isMultipart ? new FormData($form[0]) : $form.serialize(),
+                    processData: !isMultipart,
+                    contentType: isMultipart ? false : 'application/x-www-form-urlencoded; charset=UTF-8'
+                }).done(function (response) {
+                    showBackupAlert(response.status, response.message);
+                    if (response.status === 'success') {
+                        refreshBackupContent();
+                    }
+                }).fail(function (xhr) {
+                    var msg = (xhr.responseJSON && xhr.responseJSON.message)
+                        ? xhr.responseJSON.message
+                        : 'Request failed. Please try again.';
+                    showBackupAlert('error', msg);
+                }).always(function () {
+                    $submitBtn.prop('disabled', false).html(originalBtnHtml);
                 });
             });
         });
