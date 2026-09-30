@@ -290,6 +290,20 @@ class AlarmArchiveController extends Controller
             ['config_value' => $request->input('purge_days')]
         );
 
-        return redirect()->back()->with('success', __('Alarm History Archive settings updated successfully.'));
+        try {
+            $exitCode = Artisan::call('alarm:archive', [
+                '--force' => true,
+                '--destination' => $request->input('archive_destination'),
+            ]);
+            $output = trim(Artisan::output());
+
+            if ($exitCode === 0) {
+                return redirect()->back()->with('success', __('Alarm History Archive settings updated and an immediate backup was run successfully. ') . $output);
+            }
+
+            return redirect()->back()->with('error', __('Settings saved, but the immediate backup run failed: ') . $output);
+        } catch (\Exception $e) {
+            return redirect()->back()->with('error', __('Settings saved, but the immediate backup run failed: ') . $e->getMessage());
+        }
     }
 }
