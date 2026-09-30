@@ -136,7 +136,7 @@ class SfpInventoryController extends TableController
                 ? htmlspecialchars((string) ($device->overwrite_ip ?: (\LibreNMS\Util\IP::isValid($device->hostname) ? $device->hostname : $device->ip)))
                 : 'N/A';
             $hostnameLink = $device
-                ? '<a href="' . route('device', ['device' => $device->device_id]) . '">' . strtoupper(htmlspecialchars((string) ($device->sysName ?: $device->hostname))) . '</a>'
+                ? '<a href="' . route('device', ['device' => $device->device_id]) . '">' . htmlspecialchars((string) ($device->sysName ?: $device->hostname)) . '</a>'
                 : 'N/A';
 
             $portName = $item->port ? $item->port->ifName : ("Index: " . ($item->index ?? 'N/A'));
@@ -164,7 +164,7 @@ class SfpInventoryController extends TableController
                 ? htmlspecialchars((string) ($device->overwrite_ip ?: (\LibreNMS\Util\IP::isValid($device->hostname) ? $device->hostname : $device->ip)))
                 : 'N/A';
             $hostnameLink = $device
-                ? '<a href="' . route('device', ['device' => $device->device_id]) . '">' . strtoupper(htmlspecialchars((string) ($device->sysName ?: $device->hostname))) . '</a>'
+                ? '<a href="' . route('device', ['device' => $device->device_id]) . '">' . htmlspecialchars((string) ($device->sysName ?: $device->hostname)) . '</a>'
                 : 'N/A';
 
             $isSfpPlus = str_contains((string) $item->entPhysicalName, 'TGiga') || str_contains((string) $item->entPhysicalDescr, '10G');

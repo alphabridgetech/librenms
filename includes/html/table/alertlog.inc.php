@@ -176,7 +176,7 @@ foreach (dbFetchRows($sql, $param) as $alertlog) {
         'time_logged' => $alertlog['humandate'],
         'details' => '<a class="fa fa-plus incident-toggle" style="display:none" data-toggle="collapse" data-target="#incident' . $rulei . '" data-parent="#alerts"></a>',
         'verbose_details' => "<button type='button' class='btn btn-alert-details verbose-alert-details' style='display:none' aria-label='Details' id='alert-details' data-alert_log_id='{$alert_log_id}'><i class='fa-solid fa-circle-info'></i></button>",
-        'hostname' => '<div class="incident">' . generate_device_link($dev, strtoupper(shorthost($dev['sysName'] ?: $dev['hostname']))) . '<div id="incident' . $rulei . '" class="collapse">' . $fault_detail . '</div></div>',
+        'hostname' => '<div class="incident">' . generate_device_link($dev, shorthost($dev['sysName'] ?: $dev['hostname'])) . '<div id="incident' . $rulei . '" class="collapse">' . $fault_detail . '</div></div>',
         'device_ip' => $device_ip,
         'alert' => htmlspecialchars($alertlog['alert']),
         'status' => "<span class='label $status'>$status_text</span>",
