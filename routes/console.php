@@ -209,7 +209,7 @@ Schedule::command(MaintenanceCleanupNetworks::class, [])
     ->onOneServer()
     ->appendOutputTo($maintenance_log_file);
 
-Artisan::command('backup:startup-configs', function () {
+Artisan::command('backup:startup-configs {--force : Skip the interval throttle and run immediately, for manually-triggered runs}', function () {
     /** @var Illuminate\Console\Command $this */
     $intervalDays = 1;
     $lastRun = null;
@@ -218,9 +218,9 @@ Artisan::command('backup:startup-configs', function () {
         $lastRun = \DB::table('config')->where('config_name', 'node_backup_last_run')->value('config_value');
     } catch (\Exception $e) {}
 
-    if ($lastRun) {
+    if ($lastRun && !$this->option('force')) {
         $lastRunDate = \Carbon\Carbon::parse($lastRun);
-        $daysSinceLast = \Carbon\Carbon::now()->diffInDays($lastRunDate);
+        $daysSinceLast = \Carbon\Carbon::now()->diffInDays($lastRunDate, true);
         if ($daysSinceLast < $intervalDays) {
             $msg = "Skipping node startup-config backup: Interval is set to {$intervalDays} day(s), but last run was {$daysSinceLast} day(s) ago on {$lastRun}.";
             $this->info($msg);

@@ -839,7 +839,7 @@ class BackupController extends Controller
             }
 
             if (empty($deviceId) || $deviceId === 'all') {
-                $exitCode = Artisan::call('backup:startup-configs');
+                $exitCode = Artisan::call('backup:startup-configs', ['--force' => true]);
                 $output = Artisan::output();
 
                 if ($exitCode === 0) {
