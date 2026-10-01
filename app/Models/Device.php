@@ -551,7 +551,7 @@ class Device extends BaseModel
 
     public function setSysNameAttribute(?string $sysName): void
     {
-        $this->attributes['sysName'] = $sysName === null ? null : str_replace("\n", '', strtolower(trim($sysName)));
+        $this->attributes['sysName'] = $sysName === null ? null : str_replace("\n", '', trim($sysName));
     }
 
     // ---- Query scopes ----

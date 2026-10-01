@@ -1,0 +1,41 @@
+TELEQUILL SYSTEM REQUIREMENTS FOR 100 DEVICES
+================================================
+Based on live measurements taken from this running instance (5 devices currently monitored),
+extrapolated to a 100-device deployment.
+
+CURRENT BASELINE (5 devices, measured directly from this instance)
+--------------------------------------------------------------------
+- RRD storage:  68-121 MB per device (average ~82 MB) -> 407 MB total for 5 devices
+- Database:     28.6 MB (mostly fixed schema/reference overhead, not purely per-device)
+- RAM (all containers combined - web+scheduler, poller/dispatcher, DB, redis,
+  snmptrapd, syslogng): ~355 MB total, measured under light/idle load
+
+EXTRAPOLATED ESTIMATE FOR 100 DEVICES
+--------------------------------------------------------------------
+Resource        Estimate                  Notes
+---------        --------                  -----
+RRD storage      6-10 GB                   Depends heavily on ports/sensors per device.
+                                            Heavily-instrumented switches (SFP/DDM optics,
+                                            many sensors, like the devices in this lab) trend
+                                            toward the higher end; simple devices with few
+                                            ports trend lower.
+
+Database         1-2 GB                    Grows mainly with alert/event history retention
+                                            settings, not device count alone.
+
+RAM              4 GB minimum,              Poller memory spikes during active poll cycles,
+                 6-8 GB comfortable         not while idle - an idle snapshot understates
+                                            real load under 100 active devices.
+
+CPU              2+ cores                  Needed to keep the default 5-minute poll cycle
+                                            running smoothly at 100 devices alongside the
+                                            web UI and alerting.
+
+Disk (overall)   20-30 GB free minimum     Covers RRD + database + config/node/RRD backups
+                                            + application logs combined.
+
+BOTTOM LINE
+--------------------------------------------------------------------
+This host currently has 7.6 GB RAM allocated as the container limit, which is comfortably
+sufficient for 100 devices. Just confirm the host has at least 20-30 GB of free disk space
+(for RRD + database + backups) and ideally 2+ dedicated CPU cores so polling stays smooth.
