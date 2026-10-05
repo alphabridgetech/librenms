@@ -16,6 +16,13 @@ return [
         'endpoint' => env('CHATBOT_ENDPOINT'),
         'model' => env('CHATBOT_MODEL'),
     ],
+    // Jenkins test runner page (/jenkins). Use an API token, not the password.
+    // From inside the docker container the host's Jenkins is http://172.17.0.1:8080
+    'jenkins' => [
+        'url' => env('JENKINS_URL', 'http://172.17.0.1:8080'),
+        'user' => env('JENKINS_USER'),
+        'token' => env('JENKINS_TOKEN'),
+    ],
 
 
 ];

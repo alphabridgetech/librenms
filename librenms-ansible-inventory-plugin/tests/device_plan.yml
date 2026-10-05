@@ -1,0 +1,57 @@
+# Read-only playbooks run against a REAL test switch by tests/device_tests.py.
+# Only get/show playbooks are listed here - nothing that changes the switch.
+#
+# vars: extra-vars passed to the playbook. {placeholders} are filled from
+#       "defaults" below, which Jenkins parameters can override
+#       (TEST_INTERFACE -> {interface}, ...).
+# skip: reason - playbook is listed but not run.
+#
+# A step PASSES only if: ansible exit code 0, no failed/unreachable host,
+# no error text in the script output, and the playbook wrote a non-empty
+# output file without errors in it.
+
+defaults:
+  interface: GigaEthernet0/1
+  vlan_id: "1"
+  group_id: "1"
+
+steps:
+  - playbook: hostname/gethostname.yml
+  - playbook: device/devicedetails.yml
+  - playbook: mtu/getmtu.yml
+  - playbook: vlan/getvlan.yml
+  - playbook: vlan/getvoicevlan.yml
+  - playbook: vlan/getinterfacevlanattribute.yml
+  - playbook: vlan/getinterfacevoicevlan.yml
+  - playbook: interface/getinterface.yml
+  - playbook: interface/network_interface_show.yml
+    vars: { interface: "{interface}" }
+  - playbook: getinterfacenew.yml
+    vars: { interface: "{interface}" }
+  - playbook: lldp/getlldp.yml
+  - playbook: lldp/getlldpinterface.yml
+    vars: { interface: "{interface}" }
+  - playbook: port_configuration/getportconfigurationinterfacedata.yml
+  - playbook: port_channel/port_aggregate_details.yml
+    vars: { group_id: "{group_id}" }
+  - playbook: rate_limit/rate_limit_details.yml
+    vars: { interfaces: "{interface}" }
+  - playbook: gvrp/gvrp_global_details.yml
+  - playbook: gvrp/gvrp_interface_config_show.yml
+    vars: { interfaces: "{interface}" }
+  - playbook: ddm/ddm_show.yml
+  - playbook: pdp/getpdp.yml
+  - playbook: pdp/getpdpinterfaceconfi.yml
+  - playbook: arp/show_basic_arp.yml
+  - playbook: igmp_snooping_show.yml
+  - playbook: private_vlan/getprivatevlan.yml
+  - playbook: private_vlan/getprivatevlanport.yml
+  - playbook: backup_link_configuration/getbackuplink.yml
+  - playbook: backup_link_configuration/getbackuplinkinterfaceconfiguration.yml
+  - playbook: ring_protection/geterps.yml
+  - playbook: ring_protection/getethernet.yml
+  - playbook: mqtt/getmqtt.yml
+  - playbook: voicevlan/voicevlanshow.yml
+  - playbook: vlanconfigerdshow.yml
+  - playbook: dhcp_snooping/dhcp_binding_port_details.yml
+    skip: needs a real MAC address from the switch's DHCP binding table

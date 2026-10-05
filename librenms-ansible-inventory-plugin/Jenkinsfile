@@ -1,0 +1,109 @@
+// Jenkins job "telequill-playbook-tests"
+//
+//  1. Static file checks for every playbook (YAML, ansible --syntax-check,
+//     embedded Python). No device is contacted.
+//  2. Device tests - only when TEST_SWITCH_IP is filled in: the read-only
+//     playbooks from tests/device_plan.yml run on that REAL switch.
+//
+// Reads the playbooks straight from PLUGIN_DIR on this machine, so the
+// current files are tested - no git push needed.
+
+pipeline {
+    agent any
+
+    options {
+        timestamps()
+        disableConcurrentBuilds()
+        buildDiscarder(logRotator(numToKeepStr: '30'))
+        timeout(time: 60, unit: 'MINUTES')
+    }
+
+    parameters {
+        string(name: 'TEST_SWITCH_IP', defaultValue: '',
+               description: 'IP of a TEST switch for device tests (read-only playbooks). Empty = only file checks. Never a production switch.')
+        string(name: 'SWITCH_CREDENTIAL_ID', defaultValue: 'test-switch',
+               description: 'Jenkins "Username with password" credential for the switch. If it does not exist, the login from hosts/<ip>.yml is used.')
+        string(name: 'TEST_INTERFACE', defaultValue: 'GigaEthernet0/1',
+               description: 'Interface used by playbooks that need one')
+        string(name: 'EMAIL_TO', defaultValue: 'kunal.verma@indovisionservices.in',
+               description: 'Who gets the result mail (comma separated)')
+        string(name: 'PLUGIN_DIR',
+               defaultValue: '/var/data/Telequill_Install/examples/compose/telequill/librenms-ansible-inventory-plugin',
+               description: 'Folder that contains playbooks/ and tests/')
+    }
+
+    environment {
+        // params are empty on the very first build (before Jenkins has read
+        // the parameters block), so fall back to the defaults here
+        PLUGIN = "${params.PLUGIN_DIR ?: '/var/data/Telequill_Install/examples/compose/telequill/librenms-ansible-inventory-plugin'}"
+        MAIL_TO = "${params.EMAIL_TO ?: 'kunal.verma@indovisionservices.in'}"
+        SWITCH_IP = "${(params.TEST_SWITCH_IP ?: '').trim()}"
+        TEST_INTERFACE = "${params.TEST_INTERFACE ?: 'GigaEthernet0/1'}"
+    }
+
+    triggers {
+        cron('H 2 * * *')   // every night ~2 AM (file checks; device tests only if a default IP is set)
+    }
+
+    stages {
+        stage('File checks') {
+            steps {
+                sh '''
+                    rm -rf reports
+                    /usr/bin/python3 -I "$PLUGIN/tests/playbook_tests.py" \
+                        --junit reports/static.xml --html reports/summary.html
+                '''
+            }
+        }
+
+        stage('Device tests') {
+            when { expression { env.SWITCH_IP } }
+            steps {
+                script {
+                    def runDeviceTests = {
+                        sh '''
+                            /usr/bin/python3 -I "$PLUGIN/tests/device_tests.py" \
+                                --ip "$SWITCH_IP" --set "interface=$TEST_INTERFACE" \
+                                --junit reports/device.xml --html reports/device_summary.html
+                        '''
+                    }
+                    try {
+                        withCredentials([usernamePassword(credentialsId: params.SWITCH_CREDENTIAL_ID ?: 'test-switch',
+                                                          usernameVariable: 'SW_USER', passwordVariable: 'SW_PASS')]) {
+                            runDeviceTests()
+                        }
+                    } catch (e) {
+                        if (!(e.message ?: '').contains('Could not find credentials')) {
+                            throw e
+                        }
+                        echo "Credential '${params.SWITCH_CREDENTIAL_ID}' not found - using the login from hosts/*.yml"
+                        runDeviceTests()
+                    }
+                }
+            }
+        }
+    }
+
+    post {
+        always {
+            junit testResults: 'reports/*.xml', allowEmptyResults: true
+            archiveArtifacts artifacts: 'reports/**', allowEmptyArchive: true
+            script {
+                def body = ''
+                if (fileExists('reports/device_summary.html')) {
+                    body += readFile('reports/device_summary.html')
+                }
+                if (fileExists('reports/summary.html')) {
+                    body += readFile('reports/summary.html')
+                }
+                def what = env.SWITCH_IP ? "file checks + switch ${env.SWITCH_IP}" : 'file checks only, no device'
+                emailext(
+                    to: env.MAIL_TO,
+                    subject: "Playbook tests #${env.BUILD_NUMBER}: ${currentBuild.currentResult} (${what})",
+                    mimeType: 'text/html',
+                    body: body + "<p>Full report: <a href=\"${env.BUILD_URL}testReport/\">${env.BUILD_URL}testReport/</a></p>"
+                )
+            }
+        }
+    }
+}

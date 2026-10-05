@@ -1,0 +1,79 @@
+# One generic playbook for every feature and every model.
+#
+#   ANSIBLE_CONFIG=telequill_dynamic/ansible.cfg ansible-playbook telequill_dynamic/run.yml \
+#     -l 192.168.200.248 -e '{
+#        "actions": [
+#          {"name": "create_vlan",     "params": {"vlan_id": 100, "vlan_name": "DATA"}},
+#          {"name": "set_access_vlan", "params": {"interface": "gigabitethernet 0/5", "vlan_id": 100}}
+#        ],
+#        "shows": [{"name": "show_vlan"}]
+#      }'
+#
+# Everything for a device - login, enable, all config, save, all shows -
+# happens in ONE SSH session (network_cli keeps the connection open).
+# The result lands in output/<host>.json for PHP to read.
+
+- name: Telequill dynamic runner
+  hosts: all
+  gather_facts: false
+
+  vars:
+    actions: []          # config actions  [{name, params}]
+    shows: []            # show actions    [{name, params}]
+    dry_run: false       # true = only build and return the commands, no SSH
+    profile_dir: "{{ playbook_dir }}/profiles"
+    output_dir: "{{ playbook_dir }}/output"
+
+  tasks:
+    - block:
+        - name: Load this device's profile (vendor -> series -> model -> firmware)
+          ansible.builtin.set_fact:
+            profile: "{{ profile_dir | load_profile(vendor, series | default(None), model | default(None), firmware | default(None)) }}"
+
+        - name: Render config and show lines
+          ansible.builtin.set_fact:
+            config_lines: "{{ actions | build_commands(profile) }}"
+            show_lines: "{{ shows | build_commands(profile) }}"
+
+        - name: Push config, save and run shows (single SSH session)
+          telequill_cli:
+            config: "{{ config_lines }}"
+            shows: "{{ show_lines }}"
+            save: "{{ profile.save }}"
+          register: cli
+          when: not dry_run
+
+        - name: Write result for PHP
+          ansible.builtin.copy:
+            dest: "{{ output_dir }}/{{ inventory_hostname }}.json"
+            mode: "0644"
+            content: >-
+              {{ {
+                   'host': inventory_hostname,
+                   'ok': true,
+                   'profile': profile._loaded_from,
+                   'dry_run': dry_run,
+                   'config_lines': config_lines,
+                   'show_lines': show_lines,
+                   'changed': cli.changed | default(false),
+                   'shows': cli.shows | default({}),
+                 } | to_nice_json }}
+          delegate_to: localhost
+
+      rescue:
+        - name: Write error for PHP
+          ansible.builtin.copy:
+            dest: "{{ output_dir }}/{{ inventory_hostname }}.json"
+            mode: "0644"
+            content: >-
+              {{ {
+                   'host': inventory_hostname,
+                   'ok': false,
+                   'failed_task': ansible_failed_task.name,
+                   'error': ansible_failed_result.msg | default('unknown error'),
+                 } | to_nice_json }}
+          delegate_to: localhost
+
+        - name: Mark device as failed
+          ansible.builtin.fail:
+            msg: "{{ ansible_failed_result.msg | default('unknown error') }}"

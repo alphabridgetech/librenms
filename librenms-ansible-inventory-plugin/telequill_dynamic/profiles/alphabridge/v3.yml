@@ -1,0 +1,14 @@
+# Alphabridge v3 series: ONLY what differs from _base.yml.
+# (Illustrative values - put the real v3 differences here.)
+
+# v3 firmware asks for confirmation on save (as addvlan.yml handles with "y").
+save:
+  command: write
+  prompt: '[Yy]/[Nn]'
+  answer: y
+
+set_access_vlan:
+  - interface {interface}
+  - switchport mode access
+  - switchport access vlan {vlan_id}
+  - exit

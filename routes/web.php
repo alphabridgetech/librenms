@@ -54,6 +54,7 @@ use App\Http\Controllers\VLANController;
 use App\Http\Controllers\MibsUploadController;
 use App\Http\Controllers\ChatBotController;
 use App\Http\Controllers\BackupController;
+use App\Http\Controllers\JenkinsTestController;
 use App\Http\Controllers\TftpDownloadController;
 use App\Http\Controllers\SystemBulkUploadController;
 use App\Http\Controllers\LicenceController;
@@ -259,6 +260,17 @@ Route::middleware(['auth', 'license'])->group(function () {
     Route::resource('chatbot', ChatBotController::class);
     Route::post('chatbot/messages', [ChatBotController::class, 'message'])
     ->name('chatbot.message');
+
+    // Jenkins test runner
+    Route::middleware('can:admin')->prefix('jenkins')->name('jenkins.')->group(function () {
+        Route::get('/', [JenkinsTestController::class, 'index'])->name('index');
+        Route::get('api/jobs', [JenkinsTestController::class, 'jobs'])->name('jobs');
+        Route::get('api/job/{job}', [JenkinsTestController::class, 'job'])->name('job');
+        Route::post('api/job/{job}/run', [JenkinsTestController::class, 'run'])->name('run');
+        Route::post('api/job/{job}/{build}/stop', [JenkinsTestController::class, 'stop'])->whereNumber('build')->name('stop');
+        Route::get('api/job/{job}/{build}/tests', [JenkinsTestController::class, 'tests'])->whereNumber('build')->name('tests');
+        Route::get('api/job/{job}/{build}/console', [JenkinsTestController::class, 'console'])->whereNumber('build')->name('console');
+    });
 
     // Backup routes (ajax.redirect lets every action here respond with JSON
     // instead of a full-page redirect when called via AJAX, so the Backup

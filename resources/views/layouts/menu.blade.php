@@ -557,6 +557,16 @@
     </a>
 </li>
 
+{{-- Test Runner (Jenkins) --}}
+@admin
+<li>
+    <a href="{{ route('jenkins.index') }}">
+        <i class="fa fa-flask fa-fw fa-lg fa-nav-icons" aria-hidden="true"></i>
+        <span class="tw:md:hidden tw:lg:inline-block">{{ __('Tests') }}</span>
+    </a>
+</li>
+@endadmin
+
 {{-- Alerts --}}
                 <li class="dropdown">
                     <a href="#" class="dropdown-toggle" data-hover="dropdown" data-toggle="dropdown"><i

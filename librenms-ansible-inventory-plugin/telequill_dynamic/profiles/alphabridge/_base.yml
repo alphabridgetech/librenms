@@ -1,0 +1,36 @@
+# Alphabridge common commands (all series / models).
+# Placeholders like {interface} are filled from the action's params.
+# Commands are what the current playbooks send (vlanconfigure.yml,
+# vlanconfiguretrunk.yml, changehostname.yml, changemtu.yml, addvlan.yml).
+
+save: write memory
+
+# ---------- config actions (run inside config ... end) ----------
+create_vlan:
+  - vlan {vlan_id}
+  - name {vlan_name}
+  - exit
+
+set_access_vlan:
+  - interface {interface}
+  - switchport mode access
+  - switchport pvid {vlan_id}
+  - exit
+
+set_trunk_vlans:
+  - interface {interface}
+  - switchport mode trunk
+  - switchport trunk vlan-allowed {vlan_list}
+  - exit
+
+set_hostname:
+  - hostname {hostname}
+
+set_mtu:
+  - system mtu {mtu}
+
+# ---------- show actions ----------
+show_vlan: show vlan
+show_interface: show interface {interface}
+show_running: show running-config
+show_version: show version

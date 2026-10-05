@@ -1,0 +1,9 @@
+# AS212XTS on v3: ONLY what differs from v3.yml.
+# (Illustrative values.)
+
+# This model has no system MTU command -> action not supported.
+set_mtu: null
+
+# Extra action available only on this model.
+set_ddm:
+  - ddm {state}
