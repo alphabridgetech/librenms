@@ -34,6 +34,8 @@ namespace LibreNMS\Alert;
 
 use App\Models\Eventlog;
 use Carbon\Carbon;
+use Illuminate\Contracts\Cache\LockTimeoutException;
+use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
 use LibreNMS\Alerting\QueryBuilderParser;
@@ -46,6 +48,19 @@ use PDOException;
 class AlertRules
 {
     public function runRules($device_id)
+    {
+        // the trap handler and the poller can check the same device at the same time,
+        // run them one after the other so a state change isn't recorded and forwarded twice
+        try {
+            return Cache::lock('alert-rules-device-' . $device_id, 60)->block(30, fn () => $this->checkRules($device_id));
+        } catch (LockTimeoutException) {
+            Log::warning("Alert rules for device $device_id are still being checked by another process, skipping");
+
+            return false;
+        }
+    }
+
+    private function checkRules($device_id)
     {
         //Check to see if under maintenance
         if (AlertUtil::getMaintenanceStatus($device_id) === MaintenanceStatus::SKIP_ALERTS) {
@@ -191,14 +206,19 @@ class AlertRules
                             // Update the main alerts table to reflect the new sub-state (Worse / Better / Changed)
                             dbUpdate(['state' => $state_change, 'open' => 1, 'timestamp' => Carbon::now()], 'alerts', 'device_id = ? && rule_id = ?', [$device_id, $rule['id']]);
 
-                            (new \LibreNMS\Alert\Transport\Snmpforwarding())->deliverAlert([
-                                'device_id' => $device_id,
-                                'rule_id'   => $rule['id'],
-                                'name'      => $rule['name'],
-                                'state'     => $state_change,
-                                'severity'  => $rule['severity'] ?? 'critical',
-                                'faults'    => !empty($added) ? $added : (!empty($resolved) ? $resolved : $qry),
-                            ]);
+                            // new ports are forwarded as active, recovered ports as clear
+                            foreach ([AlertState::WORSE => $added, AlertState::BETTER => $resolved] as $port_state => $faults) {
+                                if (! empty($faults)) {
+                                    (new \LibreNMS\Alert\Transport\Snmpforwarding())->deliverAlert([
+                                        'device_id' => $device_id,
+                                        'rule_id'   => $rule['id'],
+                                        'name'      => $rule['name'],
+                                        'state'     => $port_state,
+                                        'severity'  => $rule['severity'] ?? 'critical',
+                                        'faults'    => $faults,
+                                    ]);
+                                }
+                            }
                         }
                     } else {
                         // If nothing changed, just update the latest details
@@ -229,6 +249,8 @@ class AlertRules
                 if (! is_null($current_state) && $current_state == AlertState::RECOVERED) {
                     Log::info('Status: %bNOCHG%n', ['color' => true]);
                 } else {
+                    // the rule query returns nothing on recovery, clear the faults of the last alert instead
+                    $recovered_faults = $this->lastAlertFaults($device_id, $rule['id']);
                     if (dbInsert(['state' => AlertState::RECOVERED, 'device_id' => $device_id, 'rule_id' => $rule['id']], 'alert_log')) {
                         if (is_null($current_state)) {
                             dbInsert(['state' => AlertState::RECOVERED, 'device_id' => $device_id, 'rule_id' => $rule['id'], 'open' => 1, 'alerted' => 0], 'alerts');
@@ -244,11 +266,26 @@ class AlertRules
                             'name'      => $rule['name'],
                             'state'     => AlertState::RECOVERED,
                             'severity'  => $rule['severity'] ?? 'critical',
-                            'faults'    => $qry,
+                            'faults'    => $recovered_faults,
                         ]);
                     }
                 }
             }
         }
+    }
+
+    /**
+     * Faults stored with the most recent alert of this rule on this device
+     */
+    private function lastAlertFaults($device_id, $rule_id): array
+    {
+        $details = dbFetchCell('SELECT details FROM alert_log WHERE device_id = ? AND rule_id = ? AND state != ? AND details IS NOT NULL ORDER BY id DESC LIMIT 1', [$device_id, $rule_id, AlertState::RECOVERED]);
+        if (empty($details)) {
+            return [];
+        }
+
+        $details = json_decode(@gzuncompress($details), true);
+
+        return (array) ($details['rule'] ?? []);
     }
 }

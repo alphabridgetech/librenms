@@ -15,7 +15,6 @@ class Snmpforwarding extends Transport
     public function deliverAlert(array $alert_data): bool
     {
         $rawHosts = LibrenmsConfig::get('snmptrap_forward_host', '');
-        $port = (int) LibrenmsConfig::get('snmptrap_forward_port', 162);
 
         if (empty($rawHosts)) {
             return false;
@@ -106,187 +105,118 @@ class Snmpforwarding extends Transport
             $objectType = 'Manage Element';
         }
 
-        // Extract faulted entity details & IF-MIB interface attributes
-        $faultDetails = [];
-        $portData = []; // Array of ['ifIndex' => ..., 'ifDescr' => ..., 'ifType' => ..., 'ifAdminStatus' => ..., 'ifOperStatus' => ...]
+        // Collect the faulted ports, one trap is sent per port so every port gets its own alarm/clear
+        $ports = [];
+        $otherFaults = [];
+        foreach ((array) ($alert_data['faults'] ?? []) as $fault) {
+            if (! is_array($fault)) {
+                continue;
+            }
 
-        if (! empty($alert_data['faults']) && is_array($alert_data['faults'])) {
-            foreach ($alert_data['faults'] as $fault) {
-                if (is_array($fault)) {
-                    $portName = null;
-                    $portId = null;
-                    $ifIndex = null;
-                    $ifDescr = null;
-                    $ifType = null;
-                    $ifAdminStatus = null;
-                    $ifOperStatus = null;
-
-                    // 1. Direct or prefixed key search in fault array
-                    foreach ($fault as $k => $v) {
-                        if ($v === null || $v === '') {
-                            continue;
-                        }
-                        $cleanKey = strtolower(str_replace(['ports.', 'ports_'], '', (string) $k));
-                        if ($cleanKey === 'port_id' && is_numeric($v)) {
-                            $portId = (int) $v;
-                        } elseif ($cleanKey === 'ifindex' && is_numeric($v)) {
-                            $ifIndex = (string) $v;
-                        } elseif (in_array($cleanKey, ['ifdescr', 'ifname', 'ifalias'])) {
-                            if (! $ifDescr) {
-                                $ifDescr = (string) $v;
-                            }
-                        } elseif ($cleanKey === 'iftype') {
-                            $ifType = (string) $v;
-                        } elseif ($cleanKey === 'ifadminstatus') {
-                            $ifAdminStatus = (string) $v;
-                        } elseif ($cleanKey === 'ifoperstatus') {
-                            $ifOperStatus = (string) $v;
-                        }
-                    }
-
-                    // 2. Query DB if port_id exists or if attributes are missing
-                    if ($portId || ($ifIndex && (! $ifDescr || ! $ifType || ! $ifAdminStatus || ! $ifOperStatus))) {
-                        $dbRow = null;
-                        if ($portId) {
-                            $dbRow = \dbFetchRow('SELECT ifIndex, ifDescr, ifName, ifAlias, ifType, ifAdminStatus, ifOperStatus FROM ports WHERE port_id = ?', [$portId]);
-                        } elseif ($ifIndex && $device_id) {
-                            $dbRow = \dbFetchRow('SELECT ifIndex, ifDescr, ifName, ifAlias, ifType, ifAdminStatus, ifOperStatus FROM ports WHERE device_id = ? AND ifIndex = ?', [$device_id, $ifIndex]);
-                        }
-
-                        if ($dbRow) {
-                            if (! $ifIndex && ! empty($dbRow['ifIndex'])) {
-                                $ifIndex = (string) $dbRow['ifIndex'];
-                            }
-                            if (! $ifDescr) {
-                                $ifDescr = $dbRow['ifDescr'] ?: ($dbRow['ifName'] ?: $dbRow['ifAlias']);
-                            }
-                            if (! $ifType && ! empty($dbRow['ifType'])) {
-                                $ifType = (string) $dbRow['ifType'];
-                            }
-                            if (! $ifAdminStatus && ! empty($dbRow['ifAdminStatus'])) {
-                                $ifAdminStatus = (string) $dbRow['ifAdminStatus'];
-                            }
-                            if (! $ifOperStatus && ! empty($dbRow['ifOperStatus'])) {
-                                $ifOperStatus = (string) $dbRow['ifOperStatus'];
-                            }
-                        }
-                    }
-
-                    $portName = $ifDescr ?: ($ifIndex ? "Interface {$ifIndex}" : null);
-
-                    if ($portName) {
-                        $faultDetails[] = $portName;
-                    } elseif (! empty($fault['string'])) {
-                        $faultDetails[] = $fault['string'];
-                    }
-
-                    if ($ifIndex !== null && $ifIndex !== '') {
-                        $portData[] = [
-                            'ifIndex' => (string) $ifIndex,
-                            'ifDescr' => (string) ($ifDescr ?: ('GigaEthernet0/' . $ifIndex)),
-                            'ifType' => (string) ($ifType ?: 'gigabitEthernet'),
-                            'ifAdminStatus' => (string) ($ifAdminStatus ?: 'up'),
-                            'ifOperStatus' => (string) ($ifOperStatus ?: 'up'),
-                        ];
-                    }
-                }
+            $port = $this->portFromFault($fault, (int) $device_id);
+            if ($port !== null) {
+                $ports[$port['ifIndex']] = $port;
+            } elseif (! empty($fault['string'])) {
+                $otherFaults[] = $fault['string'];
             }
         }
-
-        // Fallback for Port / Link rules ONLY if no portData was collected from faults
-        if (empty($portData) && in_array($objectType, ['Port', 'Link'], true)) {
-            $dbRow = null;
-            if ($device_id) {
-                $dbRow = \dbFetchRow('SELECT ifIndex, ifDescr, ifName, ifAlias, ifType, ifAdminStatus, ifOperStatus FROM ports WHERE device_id = ? LIMIT 1', [$device_id]);
-            }
-            if ($dbRow && ! empty($dbRow['ifIndex'])) {
-                $idx = (string) $dbRow['ifIndex'];
-                $descr = $dbRow['ifDescr'] ?: ($dbRow['ifName'] ?: ($dbRow['ifAlias'] ?: ('GigaEthernet0/' . $idx)));
-                $portData[] = [
-                    'ifIndex' => $idx,
-                    'ifDescr' => (string) $descr,
-                    'ifType' => (string) ($dbRow['ifType'] ?: 'gigabitEthernet'),
-                    'ifAdminStatus' => (string) ($dbRow['ifAdminStatus'] ?: 'up'),
-                    'ifOperStatus' => (string) ($dbRow['ifOperStatus'] ?: 'up'),
-                ];
-                if (empty($faultDetails) && ($objectType === 'Port' || str_contains(strtolower($ruleName), 'interface'))) {
-                    $faultDetails[] = $descr;
-                }
-            } else {
-                // Default fallback for test interface alerts
-                $portData[] = [
-                    'ifIndex' => '10',
-                    'ifDescr' => 'GigaEthernet0/10',
-                    'ifType' => 'gigabitEthernet',
-                    'ifAdminStatus' => 'up',
-                    'ifOperStatus' => 'up',
-                ];
-                if (empty($faultDetails) && ($objectType === 'Port' || str_contains(strtolower($ruleName), 'interface'))) {
-                    $faultDetails[] = 'GigaEthernet0/10';
-                }
-            }
-        }
-
-        // Prioritize physical ports (GigaEthernet, etc.) over virtual/VLAN interfaces
-        if (count($portData) > 1) {
-            usort($portData, function ($a, $b) {
-                $isVirtA = str_contains(strtolower($a['ifDescr']), 'vlan') || in_array($a['ifType'], ['propVirtual', 'softwareLoopback', 'tunnel', 'l2vlan'], true);
-                $isVirtB = str_contains(strtolower($b['ifDescr']), 'vlan') || in_array($b['ifType'], ['propVirtual', 'softwareLoopback', 'tunnel', 'l2vlan'], true);
-                if ($isVirtA && ! $isVirtB) {
-                    return 1;
-                }
-                if (! $isVirtA && $isVirtB) {
-                    return -1;
-                }
-                return 0;
-            });
-            $portData = array_slice($portData, 0, 1);
-        }
-
-        $uniqueFaults = array_values(array_unique($faultDetails));
-        if (count($uniqueFaults) > 1) {
-            usort($uniqueFaults, function ($a, $b) {
-                $isVirtA = str_contains(strtolower($a), 'vlan');
-                $isVirtB = str_contains(strtolower($b), 'vlan');
-                if ($isVirtA && ! $isVirtB) {
-                    return 1;
-                }
-                if (! $isVirtA && $isVirtB) {
-                    return -1;
-                }
-                return 0;
-            });
-            $uniqueFaults = array_slice($uniqueFaults, 0, 1);
-        }
-
-        $faultSummary = ! empty($uniqueFaults) ? (' [' . implode(', ', $uniqueFaults) . ']') : '';
-        $fullRuleName = $ruleName . $faultSummary . ' (State: ' . $stateText . ')';
 
         $uptimeTicks = ($device && $device->uptime > 0) ? (int) ($device->uptime * 100) : 0;
         $timestamp = Carbon::now()->format('Y M j H:i:s ');
 
-        // Base varbinds payload with IF-MIB attributes inserted directly after sysName (.188.2)
-        $varbinds = [
-            'SNMPv2-SMI::enterprises.58158.9.188.1' => (string) $deviceIp,
-            'SNMPv2-SMI::enterprises.58158.9.188.2' => (string) $sysName,
-        ];
-
-        foreach ($portData as $p) {
-            $idx = $p['ifIndex'];
-            $varbinds["IF-MIB::ifIndex.{$idx}"] = (string) $idx;
-            $varbinds["IF-MIB::ifDescr.{$idx}"] = (string) $p['ifDescr'];
-            
-            $varbinds["IF-MIB::ifType.{$idx}"] = (string) $p['ifType'];
-            $varbinds["IF-MIB::ifAdminStatus.{$idx}"] = (string) $p['ifAdminStatus'];
-            $varbinds["IF-MIB::ifOperStatus.{$idx}"] = (string) $p['ifOperStatus'];
+        $traps = [];
+        foreach ($ports as $port) {
+            $traps[] = [$port, $ruleName . ' [' . ($port['ifDescr'] ?? 'Interface ' . $port['ifIndex']) . '] (State: ' . $stateText . ')'];
+        }
+        if (empty($traps)) {
+            $faultSummary = empty($otherFaults) ? '' : ' [' . implode(', ', array_unique($otherFaults)) . ']';
+            $traps[] = [null, $ruleName . $faultSummary . ' (State: ' . $stateText . ')'];
         }
 
-        $varbinds['SNMPv2-SMI::enterprises.58158.9.188.3'] = (string) $stateText;
-        $varbinds['SNMPv2-SMI::enterprises.58158.9.188.4'] = (string) $objectType;
-        $varbinds['d'] = (string) $severityText;
-        $varbinds['SNMPv2-SMI::enterprises.58158.9.188.6'] = (string) $timestamp;
-        $varbinds['SNMPv2-SMI::enterprises.58158.9.188.7'] = (string) $fullRuleName;
+        $anySuccess = false;
+        foreach ($traps as [$port, $fullRuleName]) {
+            // Base varbinds payload with IF-MIB attributes inserted directly after sysName (.188.2)
+            $varbinds = [
+                'SNMPv2-SMI::enterprises.58158.9.188.1' => (string) $deviceIp,
+                'SNMPv2-SMI::enterprises.58158.9.188.2' => (string) $sysName,
+            ];
 
+            if ($port !== null) {
+                $idx = $port['ifIndex'];
+                foreach (['ifIndex', 'ifDescr', 'ifType', 'ifAdminStatus', 'ifOperStatus'] as $field) {
+                    if (isset($port[$field])) {
+                        $varbinds["IF-MIB::{$field}.{$idx}"] = (string) $port[$field];
+                    }
+                }
+            }
+
+            $varbinds['SNMPv2-SMI::enterprises.58158.9.188.3'] = (string) $stateText;
+            $varbinds['SNMPv2-SMI::enterprises.58158.9.188.4'] = (string) $objectType;
+            $varbinds['SNMPv2-SMI::enterprises.58158.9.188.5'] = (string) $severityText;
+            $varbinds['SNMPv2-SMI::enterprises.58158.9.188.6'] = (string) $timestamp;
+            $varbinds['SNMPv2-SMI::enterprises.58158.9.188.7'] = (string) $fullRuleName;
+
+            if ($this->sendTrap($targetHosts, $port, $uptimeTicks, $varbinds, $fullRuleName)) {
+                $anySuccess = true;
+                $this->logTrap($device, (int) $device_id, $stateVal, $varbinds);
+            }
+        }
+
+        if ($anySuccess) {
+            // Execute poller immediately for the device IP
+            $targetIp = ! empty($deviceIp) ? $deviceIp : $device_id;
+            if (! empty($targetIp)) {
+                $pollerPath = base_path('poller.php');
+                // snmptrapd runs as root, poll as librenms so the rrd files stay writable for the dispatcher
+                $asUser = function_exists('posix_geteuid') && posix_geteuid() === 0 ? 's6-setuidgid librenms ' : '';
+                $cmd = sprintf('%sphp %s -h %s > /dev/null 2>&1 &', $asUser, escapeshellarg($pollerPath), escapeshellarg($targetIp));
+                exec($cmd);
+            }
+
+            return true;
+        }
+
+        return false;
+    }
+
+    /**
+     * Build the IF-MIB attributes of a faulted port. Current values from the ports table win over the
+     * values stored in the alert, those can be stale (e.g. recovery uses the details of the original alert).
+     * Unknown attributes are left out instead of guessed.
+     */
+    private function portFromFault(array $fault, int $device_id): ?array
+    {
+        $values = [];
+        foreach ($fault as $k => $v) {
+            if ($v !== null && $v !== '') {
+                $values[strtolower(str_replace(['ports.', 'ports_'], '', (string) $k))] = $v;
+            }
+        }
+
+        $dbRow = null;
+        if (isset($values['port_id']) && is_numeric($values['port_id'])) {
+            $dbRow = \dbFetchRow('SELECT ifIndex, ifDescr, ifName, ifAlias, ifType, ifAdminStatus, ifOperStatus FROM ports WHERE port_id = ?', [(int) $values['port_id']]);
+        } elseif (isset($values['ifindex']) && is_numeric($values['ifindex']) && $device_id) {
+            $dbRow = \dbFetchRow('SELECT ifIndex, ifDescr, ifName, ifAlias, ifType, ifAdminStatus, ifOperStatus FROM ports WHERE device_id = ? AND ifIndex = ?', [$device_id, $values['ifindex']]);
+        }
+        $dbRow = array_filter((array) $dbRow, fn ($v) => $v !== null && $v !== '');
+
+        $ifIndex = $dbRow['ifIndex'] ?? (isset($values['ifindex']) && is_numeric($values['ifindex']) ? $values['ifindex'] : null);
+        if ($ifIndex === null) {
+            return null;
+        }
+
+        return array_filter([
+            'ifIndex' => (string) $ifIndex,
+            'ifDescr' => $dbRow['ifDescr'] ?? $dbRow['ifName'] ?? $dbRow['ifAlias'] ?? $values['ifdescr'] ?? $values['ifname'] ?? $values['ifalias'] ?? null,
+            'ifType' => $dbRow['ifType'] ?? $values['iftype'] ?? null,
+            'ifAdminStatus' => $dbRow['ifAdminStatus'] ?? $values['ifadminstatus'] ?? null,
+            'ifOperStatus' => $dbRow['ifOperStatus'] ?? $values['ifoperstatus'] ?? null,
+        ], fn ($v) => $v !== null);
+    }
+
+    private function sendTrap(array $targetHosts, ?array $port, int $uptimeTicks, array $varbinds, string $fullRuleName): bool
+    {
         $anySuccess = false;
         foreach ($targetHosts as $host) {
             $targetIp = $host;
@@ -301,7 +231,7 @@ class Snmpforwarding extends Transport
                 '/usr/bin/snmptrap',
                 '-v', '2c',
                 '-c', 'public',
-                sprintf('udp:%s:%d', $targetIp, $port),
+                sprintf('udp:%s:%d', $targetIp, $this->port()),
                 (string) $uptimeTicks,
                 'SNMPv2-SMI::enterprises.58158.9.188.6.1.0.6',
             ];
@@ -329,38 +259,36 @@ class Snmpforwarding extends Transport
             }
         }
 
-        if ($anySuccess) {
-            // Log to Eventlog in exact trap JSON representation format
-            $uptimeSec = ($device && $device->uptime > 0) ? (int) $device->uptime : 0;
-            $days = (int) floor($uptimeSec / 86400);
-            $hours = (int) floor(($uptimeSec % 86400) / 3600);
-            $minutes = (int) floor(($uptimeSec % 3600) / 60);
-            $secs = $uptimeSec % 60;
-            $uptimeFormatted = sprintf('%d:%02d:%02d:%02d.00', $days, $hours, $minutes, $secs);
+        return $anySuccess;
+    }
 
-            $jsonArray = array_merge([
-                'DISMAN-EVENT-MIB::sysUpTimeInstance' => $uptimeFormatted,
-            ], $varbinds);
+    private function port(): int
+    {
+        return (int) LibrenmsConfig::get('snmptrap_forward_port', 162);
+    }
 
-            $jsonPayload = json_encode($jsonArray, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE);
+    /**
+     * Log to Eventlog in exact trap JSON representation format
+     */
+    private function logTrap(?Device $device, int $device_id, string $stateVal, array $varbinds): void
+    {
+        $uptimeSec = ($device && $device->uptime > 0) ? (int) $device->uptime : 0;
+        $days = (int) floor($uptimeSec / 86400);
+        $hours = (int) floor(($uptimeSec % 86400) / 3600);
+        $minutes = (int) floor(($uptimeSec % 3600) / 60);
+        $secs = $uptimeSec % 60;
+        $uptimeFormatted = sprintf('%d:%02d:%02d:%02d.00', $days, $hours, $minutes, $secs);
 
-            $eventlogMessage = 'SNMPv2-SMI::enterprises.58158.9.188.6.1.0.6 ' . $jsonPayload;
+        $jsonArray = array_merge([
+            'DISMAN-EVENT-MIB::sysUpTimeInstance' => $uptimeFormatted,
+        ], $varbinds);
 
-            $logSeverity = ($stateVal === '0') ? Severity::Ok : Severity::Error;
-            Eventlog::log($eventlogMessage, $device_id, 'trap', $logSeverity);
+        $jsonPayload = json_encode($jsonArray, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE);
 
-            // Execute poller immediately for the device IP
-            $targetIp = ! empty($deviceIp) ? $deviceIp : $device_id;
-            if (! empty($targetIp)) {
-                $pollerPath = base_path('poller.php');
-                $cmd = sprintf('php %s -h %s > /dev/null 2>&1 &', escapeshellarg($pollerPath), escapeshellarg($targetIp));
-                exec($cmd);
-            }
+        $eventlogMessage = 'SNMPv2-SMI::enterprises.58158.9.188.6.1.0.6 ' . $jsonPayload;
 
-            return true;
-        }
-
-        return false;
+        $logSeverity = ($stateVal === '0') ? Severity::Ok : Severity::Error;
+        Eventlog::log($eventlogMessage, $device_id, 'trap', $logSeverity);
     }
 
     public static function configTemplate(): array

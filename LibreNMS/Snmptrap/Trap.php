@@ -97,6 +97,14 @@ class Trap
         return $this->oid_data->get($oid, '');
     }
 
+    /**
+     * All varbinds of this trap as oid => value
+     */
+    public function getOidValues(): array
+    {
+        return $this->oid_data->all();
+    }
+
     public function getDevice(): ?Device
     {
         if (is_null($this->device) && IP::isValid($this->ip)) {

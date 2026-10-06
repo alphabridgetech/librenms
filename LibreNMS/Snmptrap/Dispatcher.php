@@ -35,10 +35,22 @@ use Log;
 class Dispatcher
 {
     /**
+     * Trap OIDs that are dropped without logging, alerting or polling
+     * (switch user login notifications)
+     */
+    private const IGNORED_TRAP_OIDS = [
+        'SNMPv2-SMI::enterprises.58158.9.188.6.1',
+    ];
+
+    /**
      * Instantiate the correct handler for this trap and call it's handle method
      */
     public static function handle(Trap $trap): bool
     {
+        if (in_array($trap->getTrapOid(), self::IGNORED_TRAP_OIDS, true)) {
+            return true;
+        }
+
         if (empty($trap->getDevice())) {
             Log::warning('Could not find device for trap', ['trap_text' => $trap->raw]);
 
@@ -65,17 +77,20 @@ class Dispatcher
         $detailed = LibrenmsConfig::get('snmptraps.eventlog_detailed', false);
         if ($logging == 'all' || ($fallback && $logging == 'unhandled')) {
             $trap->log($trap->toString($detailed));
-        } else {
-            $rules = new AlertRules;
-            $rules->runRules($trap->getDevice()->device_id);
         }
+
+        // evaluate alert rules right away so alerts and SNMP forwarding don't wait for the poller
+        $rules = new AlertRules;
+        $rules->runRules($trap->getDevice()->device_id);
 
         // Trigger background poller for the device IP
         if ($trap->getDevice()) {
             $deviceModel = $trap->getDevice();
             $targetIp = $deviceModel->ip ?: $deviceModel->hostname ?: $deviceModel->device_id;
             $pollerPath = base_path('poller.php');
-            $cmd = sprintf('php %s -h %s > /dev/null 2>&1 &', escapeshellarg($pollerPath), escapeshellarg($targetIp));
+            // snmptrapd runs as root, poll as librenms so the rrd files stay writable for the dispatcher
+            $asUser = function_exists('posix_geteuid') && posix_geteuid() === 0 ? 's6-setuidgid librenms ' : '';
+            $cmd = sprintf('%sphp %s -h %s > /dev/null 2>&1 &', $asUser, escapeshellarg($pollerPath), escapeshellarg($targetIp));
             exec($cmd);
         }
 
