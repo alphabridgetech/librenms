@@ -677,9 +677,9 @@
                                 <li><a href="{{ url('api-access') }}"><i class="fa fa-cog fa-fw fa-lg"
                                                                          aria-hidden="true"></i> {{ __('API Settings') }}
                                     </a></li>
-                                <li><a href="https://docs.librenms.org/API/" target="_blank" rel="noopener"><i
+                                <!-- <li><a href="https://docs.librenms.org/API/" target="_blank" rel="noopener"><i
                                             class="fa fa-book fa-fw fa-lg" aria-hidden="true"></i> {{ __('API Docs') }}</a>
-                                </li>
+                                </li> -->
                             </ul>
                         </li>
                         <li role="presentation" class="divider"></li>
