@@ -42,11 +42,14 @@ class ArchiveAlarmHistory extends Command
         $intervalDays = max(1, (int) (DB::table('config')->where('config_name', 'alarm_archive_interval_days')->value('config_value') ?: 1));
         $destination = $this->option('destination') ?: (DB::table('config')->where('config_name', 'alarm_archive_destination')->value('config_value') ?: 'local');
         $lastRun = DB::table('config')->where('config_name', 'alarm_archive_last_run')->value('config_value');
+        $scheduleChangedAt = DB::table('config')->where('config_name', 'alarm_archive_schedule_changed_at')->value('config_value');
 
         // Check if dynamic day interval requirement is met (manual runs pass --force to bypass this)
         if (! $this->option('force') && ! empty($lastRun)) {
             $daysSince = (int) \Carbon\Carbon::parse($lastRun)->startOfDay()->diffInDays(now()->startOfDay());
-            if ($daysSince < $intervalDays) {
+            // a newly saved schedule time runs at that time even if an archive was already made today
+            $rescheduled = ! empty($scheduleChangedAt) && \Carbon\Carbon::parse($scheduleChangedAt)->gt(\Carbon\Carbon::parse($lastRun));
+            if ($daysSince < $intervalDays && ! $rescheduled) {
                 $daysLeft = $intervalDays - $daysSince;
                 $skipReason = "Alarm history archive skipped: Configured interval is every {$intervalDays} day(s). Last run was {$daysSince} day(s) ago. Next run due in {$daysLeft} day(s).";
                 $this->info($skipReason);
@@ -134,7 +137,7 @@ class ArchiveAlarmHistory extends Command
         $openNewFile = function($timestampSample) use ($archiveDir, $runType, &$fileHandle, &$currentFilename, &$currentFilePath, &$currentLines, &$currentBytes, &$firstTimestamp, &$lastTimestamp, &$chunkCount) {
             $chunkCount++;
             $dateStr = date('Ymd_His');
-            $currentFilename = "alarm_history_{$runType}_{$dateStr}_part{$chunkCount}.csv";
+            $currentFilename = "{$runType}_alarm_history_{$dateStr}_part{$chunkCount}.csv";
             $currentFilePath = "{$archiveDir}/{$currentFilename}";
 
             $fileHandle = fopen($currentFilePath, 'w');

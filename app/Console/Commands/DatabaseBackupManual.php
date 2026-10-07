@@ -13,7 +13,7 @@ class DatabaseBackupManual extends Command
      *
      * @var string
      */
-    protected $signature = 'db:backup-manual {--destination=local : The destination for the backup (local, external, network)}';
+    protected $signature = 'db:backup-manual {--destination=local : The destination for the backup (local, external, network)} {--type=manual : auto or manual, used as the file name prefix}';
 
     /**
      * The console command description.
@@ -37,7 +37,8 @@ class DatabaseBackupManual extends Command
         $password = config('database.connections.mysql.password');
         $host = config('database.connections.mysql.host');
 
-        $filename = "backup_" . now()->format('Y-m-d_H-i-s') . ".sql";
+        $type = $this->option('type') === 'auto' ? 'auto' : 'manual';
+        $filename = "{$type}_backup_" . now()->format('Y-m-d_H-i-s') . ".sql";
         $basePath = '';
 
         switch ($destination) {
