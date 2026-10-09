@@ -59,6 +59,11 @@ Route::prefix('v0')->group(function () {
     // admin required
     Route::middleware(['can:admin'])->group(function () {
 
+        // Template Push (/addhost/template)
+        Route::get('templates', [App\Api\Controllers\TemplatePushApiController::class, 'index'])->name('templates.list');
+        Route::post('templates/push', [App\Api\Controllers\TemplatePushApiController::class, 'push'])->name('templates.push');
+        Route::get('templates/{name}', [App\Api\Controllers\TemplatePushApiController::class, 'show'])->name('templates.show');
+
         //kunal api add for configuration changes
         Route::post('testapi', [App\Api\Controllers\KunalApiController::class, 'testFunction'])->name('testFunction');
         Route::get('systeminfo/{hostname}', [App\Api\Controllers\KunalApiController::class, 'systeminfo'])->name('systeminfo');

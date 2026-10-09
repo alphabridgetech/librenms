@@ -47,12 +47,12 @@
 
   vars:
     # Resolve paths from this checkout, including the Jenkins workspace.
-    project_root: "/opt/librenms/librenms-ansible-inventory-plugin/../.."
+    project_root: "{{ playbook_dir }}/../.."
 
   pre_tasks:
     - name: Ensure script and report directories exist
       ansible.builtin.file:
-        path: "/opt/librenms/librenms-ansible-inventory-plugin/{{ item }}"
+        path: "{{ project_root }}/{{ item }}"
         state: directory
         mode: '0755'
       loop:
@@ -121,10 +121,10 @@
     - name: >-
         Create Python SSH Script for MEAPS ring delete
       ansible.builtin.copy:
-        dest: "/opt/librenms/librenms-ansible-inventory-plugin/tmp/multiple_ring_protection_delete_exec.py"
+        dest: "{{ project_root }}/tmp/multiple_ring_protection_delete_exec.py"
         mode: '0755'
         content: |
-          #!/usr/bin/env python3
+          #!"{{ project_root }}/bin/env python3
 
           import paramiko
           import time
@@ -348,8 +348,8 @@
     - name: Execute MEAPS ring delete script
       ansible.builtin.command:
         argv:
-          - /opt/librenms/librenms-ansible-inventory-plugin/bin/python3
-          - "/opt/librenms/librenms-ansible-inventory-plugin/tmp/multiple_ring_protection_delete_exec.py"
+          - "{{ project_root }}/bin/python3"
+          - "{{ project_root }}/tmp/multiple_ring_protection_delete_exec.py"
       register: meaps_raw
       changed_when: false
       failed_when: false
@@ -376,7 +376,7 @@
 
     - name: Save MEAPS delete result
       ansible.builtin.copy:
-        dest: "/opt/librenms/librenms-ansible-inventory-plugin/output/{{ ansible_host }}_multiple_ring_protection_delete.yml"
+        dest: "{{ project_root }}/output/{{ ansible_host }}_multiple_ring_protection_delete.yml"
         content: |
           {{ meaps_result | to_nice_yaml }}
 
