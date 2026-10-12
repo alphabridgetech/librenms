@@ -140,7 +140,11 @@ class ArchiveAlarmHistory extends Command
             $currentFilename = "{$runType}_alarm_history_{$dateStr}_part{$chunkCount}.csv";
             $currentFilePath = "{$archiveDir}/{$currentFilename}";
 
-            $fileHandle = fopen($currentFilePath, 'w');
+            $fileHandle = @fopen($currentFilePath, 'w');
+            if ($fileHandle === false) {
+                $fileHandle = null;
+                throw new \RuntimeException("Cannot write archive file {$currentFilePath}. Check that {$archiveDir} exists, is mounted and is writable by user '" . (function_exists('posix_geteuid') ? (posix_getpwuid(posix_geteuid())['name'] ?? posix_geteuid()) : get_current_user()) . "'.");
+            }
             // Write CSV Header
             fputcsv($fileHandle, ['ID', 'Timestamp', 'Device', 'Alert Name', 'State', 'Severity', 'Details']);
             

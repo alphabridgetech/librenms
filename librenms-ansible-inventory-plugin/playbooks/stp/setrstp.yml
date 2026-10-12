@@ -1,0 +1,934 @@
+---
+# ============================================================
+# setrstp.yml
+#
+# Configure and Verify RSTP
+# ============================================================
+
+- name: Configure and verify RSTP
+  hosts: alphabridge_devices
+  gather_facts: false
+
+  vars:
+
+    # ========================================================
+    # PROJECT PATHS
+    # ========================================================
+
+    project_root: "{{ playbook_dir }}/../.."
+
+    output_dir: "{{ project_root }}/output"
+
+    tmp_dir: "{{ project_root }}/tmp"
+
+  tasks:
+
+    # ========================================================
+    # Validate input parameters
+    # ========================================================
+
+    - name: Validate RSTP parameters
+      ansible.builtin.assert:
+        that:
+          - protocol_type == "RSTP"
+
+          - spanning_tree_priority | int >= 0
+          - spanning_tree_priority | int <= 61440
+          - (spanning_tree_priority | int) % 4096 == 0
+
+          - hello_time | int >= 1
+          - hello_time | int <= 10
+
+          - max_age | int >= 6
+          - max_age | int <= 40
+
+          - forward_delay | int >= 4
+          - forward_delay | int <= 30
+
+          - bpdu_terminal in ["Enable", "Disable"]
+
+          - loop_guard in ["Enable", "Disable"]
+
+        success_msg: "All RSTP assertions passed"
+
+
+    # ========================================================
+    # Create temporary directory
+    # ========================================================
+
+    - name: Create local temporary directory
+      ansible.builtin.file:
+        path: "{{ tmp_dir }}"
+        state: directory
+        mode: "0755"
+      delegate_to: localhost
+
+
+    # ========================================================
+    # Create output directory
+    # ========================================================
+
+    - name: Create output directory
+      ansible.builtin.file:
+        path: "{{ output_dir }}"
+        state: directory
+        mode: "0755"
+      delegate_to: localhost
+
+
+    # ========================================================
+    # Create Paramiko script
+    # ========================================================
+
+    - name: Create Python SSH script for RSTP
+      ansible.builtin.copy:
+        dest: "{{ tmp_dir }}/set_rstp_exec_{{ ansible_host }}.py"
+        mode: "0755"
+
+        content: |
+          #!/usr/bin/env python3
+
+          import paramiko
+          import time
+          import re
+          import json
+          import sys
+
+          HOST = "{{ ansible_host }}"
+          USER = "{{ ansible_user }}"
+          PASSWORD = "{{ ansible_password }}"
+
+          PRIORITY = int("{{ spanning_tree_priority }}")
+          HELLO = int("{{ hello_time }}")
+          MAX_AGE = int("{{ max_age }}")
+          FORWARD = int("{{ forward_delay }}")
+
+          BPDU = "{{ bpdu_terminal }}"
+          LOOP = "{{ loop_guard }}"
+
+          PROMPT = re.compile(
+              r'(?m)^[A-Za-z0-9_.:-]+'
+              r'(?:\([^)]+\)|_config|__config)?'
+              r'[#>]\s*$'
+          )
+
+          ANSI = re.compile(
+              r'\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])'
+          )
+
+          ERROR_PATTERN = re.compile(
+              r'(Invalid|Incomplete|Error|Unknown|Failed|Rejected|'
+              r'Unrecognized|Ambiguous|% ?Invalid|% ?Error)',
+              re.IGNORECASE
+          )
+
+          def clean(text):
+              return ANSI.sub("", text)
+
+          def connect():
+
+              client = paramiko.SSHClient()
+
+              client.set_missing_host_key_policy(
+                  paramiko.AutoAddPolicy()
+              )
+
+              client.connect(
+                  hostname=HOST,
+                  username=USER,
+                  password=PASSWORD,
+                  port=22,
+                  look_for_keys=False,
+                  allow_agent=False,
+                  timeout=10,
+                  banner_timeout=10,
+                  auth_timeout=10
+              )
+
+              shell = client.invoke_shell()
+
+              shell.settimeout(10)
+
+              time.sleep(1)
+
+              return client, shell
+
+          def read_prompt(shell, timeout=10):
+
+              output = ""
+
+              end_time = time.time() + timeout
+
+              while time.time() < end_time:
+
+                  if shell.recv_ready():
+
+                      data = shell.recv(65535)
+
+                      if not data:
+                          raise Exception("SSH socket closed")
+
+                      output += data.decode(
+                          "utf-8",
+                          errors="ignore"
+                      )
+
+                      cleaned = clean(output)
+
+                      if PROMPT.search(cleaned):
+                          return cleaned
+
+                  else:
+                      time.sleep(0.2)
+
+              return clean(output)
+
+          def send_command(
+              shell,
+              command,
+              wait=2,
+              timeout=15
+          ):
+
+              shell.send(command + "\r")
+
+              time.sleep(wait)
+
+              output = ""
+
+              end_time = time.time() + timeout
+
+              while time.time() < end_time:
+
+                  if shell.recv_ready():
+
+                      data = shell.recv(65535)
+
+                      if not data:
+                          raise Exception("SSH socket closed")
+
+                      output += data.decode(
+                          "utf-8",
+                          errors="ignore"
+                      )
+
+                      cleaned = clean(output)
+
+                      if PROMPT.search(cleaned):
+
+                          time.sleep(0.3)
+
+                          if not shell.recv_ready():
+                              break
+
+                  else:
+                      time.sleep(0.2)
+
+              return clean(output)
+
+          def close_connection(client):
+
+              try:
+
+                  if client:
+                      client.close()
+
+              except Exception:
+                  pass
+
+          def reconnect_config():
+
+              client, shell = connect()
+
+              read_prompt(shell, 5)
+
+              send_command(
+                  shell,
+                  "enable",
+                  2
+              )
+
+              send_command(
+                  shell,
+                  "config",
+                  2
+              )
+
+              return client, shell
+
+          def execute_config_command(
+              client,
+              shell,
+              command,
+              wait
+          ):
+
+              try:
+
+                  result = send_command(
+                      shell,
+                      command,
+                      wait
+                  )
+
+                  print(
+                      "\nCOMMAND: " + command,
+                      file=sys.stderr
+                  )
+
+                  print(
+                      result,
+                      file=sys.stderr
+                  )
+
+                  if ERROR_PATTERN.search(result):
+
+                      raise Exception(
+                          "Switch rejected command: "
+                          + command
+                      )
+
+                  return client, shell, True
+
+              except Exception as error:
+
+                  print(
+                      "\nCOMMAND ERROR: "
+                      + str(error),
+                      file=sys.stderr
+                  )
+
+                  close_connection(client)
+
+                  try:
+
+                      client, shell = reconnect_config()
+
+                      result = send_command(
+                          shell,
+                          command,
+                          wait
+                      )
+
+                      print(
+                          "\nRETRY COMMAND: "
+                          + command,
+                          file=sys.stderr
+                      )
+
+                      print(
+                          result,
+                          file=sys.stderr
+                      )
+
+                      if ERROR_PATTERN.search(result):
+
+                          raise Exception(
+                              "Switch rejected command "
+                              "after retry: "
+                              + command
+                          )
+
+                      return client, shell, True
+
+                  except Exception as retry_error:
+
+                      print(
+                          "\nRETRY FAILED: "
+                          + str(retry_error),
+                          file=sys.stderr
+                      )
+
+                      close_connection(client)
+
+                      return None, None, False
+
+          client = None
+          shell = None
+
+          try:
+
+              client, shell = reconnect_config()
+
+              commands = [
+
+                  (
+                      "spanning-tree mode rstp",
+                      2
+                  ),
+
+                  (
+                      f"spanning-tree rstp priority {PRIORITY}",
+                      3
+                  ),
+
+                  (
+                      f"spanning-tree rstp hello-time {HELLO}",
+                      3
+                  ),
+
+                  (
+                      f"spanning-tree rstp max-age {MAX_AGE}",
+                      3
+                  ),
+
+                  (
+                      f"spanning-tree rstp forward-time {FORWARD}",
+                      3
+                  )
+
+              ]
+
+              for command, wait in commands:
+
+                  client, shell, success = execute_config_command(
+                      client,
+                      shell,
+                      command,
+                      wait
+                  )
+
+                  if not success:
+
+                      print(
+                          json.dumps({
+                              "status": "FAILED",
+                              "device_ip": HOST
+                          })
+                      )
+
+                      sys.exit(1)
+
+
+              # ------------------------------------------------
+              # BPDU Terminal
+              # ------------------------------------------------
+
+              if BPDU == "Enable":
+
+                  client, shell, success = execute_config_command(
+                      client,
+                      shell,
+                      "spanning-tree bpdu-terminal",
+                      2
+                  )
+
+              else:
+
+                  client, shell, success = execute_config_command(
+                      client,
+                      shell,
+                      "no spanning-tree bpdu-terminal",
+                      2
+                  )
+
+              if not success:
+
+                  print(
+                      json.dumps({
+                          "status": "FAILED",
+                          "device_ip": HOST
+                      })
+                  )
+
+                  sys.exit(1)
+
+
+              # ------------------------------------------------
+              # Loop Guard
+              # ------------------------------------------------
+
+              if LOOP == "Enable":
+
+                  client, shell, success = execute_config_command(
+                      client,
+                      shell,
+                      "spanning-tree loopguard default",
+                      2
+                  )
+
+              else:
+
+                  client, shell, success = execute_config_command(
+                      client,
+                      shell,
+                      "no spanning-tree loopguard default",
+                      2
+                  )
+
+              if not success:
+
+                  print(
+                      json.dumps({
+                          "status": "FAILED",
+                          "device_ip": HOST
+                      })
+                  )
+
+                  sys.exit(1)
+
+
+              time.sleep(5)
+
+              close_connection(client)
+
+
+              # ------------------------------------------------
+              # Reconnect for verification
+              # ------------------------------------------------
+
+              client, shell = connect()
+
+              read_prompt(
+                  shell,
+                  5
+              )
+
+              send_command(
+                  shell,
+                  "enable",
+                  2
+              )
+
+
+              # ------------------------------------------------
+              # Show STP
+              # ------------------------------------------------
+
+              output = send_command(
+                  shell,
+                  "show spanning-tree",
+                  wait=3,
+                  timeout=20
+              )
+
+              output = clean(output)
+
+              print(
+                  "\nRSTP_SHOW_OUTPUT_START",
+                  file=sys.stderr
+              )
+
+              print(
+                  output,
+                  file=sys.stderr
+              )
+
+              print(
+                  "RSTP_SHOW_OUTPUT_END",
+                  file=sys.stderr
+              )
+
+
+              normalized = output.replace(
+                  "\r",
+                  ""
+              )
+
+
+              # ------------------------------------------------
+              # Protocol
+              # ------------------------------------------------
+
+              protocol_match = re.search(
+                  r'Spanning tree enabled protocol\s+'
+                  r'(RSTP(?:\(2004\))?)',
+                  normalized,
+                  re.IGNORECASE
+              )
+
+              actual_protocol = (
+                  protocol_match.group(1)
+                  if protocol_match
+                  else "Unknown"
+              )
+
+              protocol_ok = (
+                  actual_protocol.upper()
+                  in ["RSTP", "RSTP(2004)"]
+              )
+
+
+              # ------------------------------------------------
+              # Root STP information
+              # ------------------------------------------------
+
+              root_priority_match = re.search(
+                  r'Root ID\s+Priority\s+(\d+)',
+                  normalized,
+                  re.IGNORECASE
+              )
+
+              root_mac_match = re.search(
+                  r'Root ID[\s\S]*?Address\s+'
+                  r'([A-Fa-f0-9.]+)',
+                  normalized,
+                  re.IGNORECASE
+              )
+
+              root_hello_match = re.search(
+                  r'Root ID[\s\S]*?Hello Time\s+'
+                  r'(\d+)\s+sec',
+                  normalized,
+                  re.IGNORECASE
+              )
+
+              root_max_age_match = re.search(
+                  r'Root ID[\s\S]*?Max Age\s+'
+                  r'(\d+)\s+sec',
+                  normalized,
+                  re.IGNORECASE
+              )
+
+              root_forward_match = re.search(
+                  r'Root ID[\s\S]*?Forward Delay\s+'
+                  r'(\d+)\s+sec',
+                  normalized,
+                  re.IGNORECASE
+              )
+
+              root_priority = (
+                  int(root_priority_match.group(1))
+                  if root_priority_match
+                  else None
+              )
+
+              root_mac = (
+                  root_mac_match.group(1)
+                  if root_mac_match
+                  else "N/A"
+              )
+
+              root_hello = (
+                  int(root_hello_match.group(1))
+                  if root_hello_match
+                  else None
+              )
+
+              root_max_age = (
+                  int(root_max_age_match.group(1))
+                  if root_max_age_match
+                  else None
+              )
+
+              root_forward = (
+                  int(root_forward_match.group(1))
+                  if root_forward_match
+                  else None
+              )
+
+
+              # ------------------------------------------------
+              # Local / Bridge STP information
+              # ------------------------------------------------
+
+              bridge_match = re.search(
+                  r'Bridge ID\s+Priority\s+(\d+)'
+                  r'.*?'
+                  r'Address\s+([A-Fa-f0-9.]+)'
+                  r'.*?'
+                  r'Hello Time\s+(\d+)\s+sec'
+                  r'\s+Max Age\s+(\d+)\s+sec'
+                  r'\s+Forward Delay\s+(\d+)\s+sec',
+                  normalized,
+                  re.IGNORECASE | re.DOTALL
+              )
+
+              if bridge_match:
+
+                  actual_priority = int(
+                      bridge_match.group(1)
+                  )
+
+                  actual_mac = bridge_match.group(2)
+
+                  actual_hello = int(
+                      bridge_match.group(3)
+                  )
+
+                  actual_max_age = int(
+                      bridge_match.group(4)
+                  )
+
+                  actual_forward = int(
+                      bridge_match.group(5)
+                  )
+
+              else:
+
+                  actual_priority = None
+                  actual_mac = "N/A"
+                  actual_hello = None
+                  actual_max_age = None
+                  actual_forward = None
+
+
+              # ------------------------------------------------
+              # Root port
+              # ------------------------------------------------
+
+              root_port_match = re.search(
+                  r'Root ID[\s\S]*?'
+                  r'(?:Root Port|Port)\s+(\S+)',
+                  normalized,
+                  re.IGNORECASE
+              )
+
+              root_port = (
+                  root_port_match.group(1)
+                  if root_port_match
+                  else "Root"
+              )
+
+
+              # ------------------------------------------------
+              # Root cost
+              # ------------------------------------------------
+
+              root_cost_match = re.search(
+                  r'Root ID[\s\S]*?'
+                  r'(?:Cost|Path Cost)\s+(\d+)',
+                  normalized,
+                  re.IGNORECASE
+              )
+
+              root_cost = (
+                  int(root_cost_match.group(1))
+                  if root_cost_match
+                  else 0
+              )
+
+
+              # ------------------------------------------------
+              # Root status
+              # ------------------------------------------------
+
+              if re.search(
+                  r'This bridge is the root',
+                  normalized,
+                  re.IGNORECASE
+              ):
+
+                  root_status = "This bridge is the root"
+
+              else:
+
+                  root_status = "Not root"
+
+
+              # ------------------------------------------------
+              # Verify requested configuration
+              # ------------------------------------------------
+
+              priority_ok = (
+                  actual_priority == PRIORITY
+              )
+
+              hello_ok = (
+                  actual_hello == HELLO
+              )
+
+              max_age_ok = (
+                  actual_max_age == MAX_AGE
+              )
+
+              forward_ok = (
+                  actual_forward == FORWARD
+              )
+
+
+              # ------------------------------------------------
+              # Final status
+              # ------------------------------------------------
+
+              status = (
+                  "SUCCESS"
+                  if all([
+                      protocol_ok,
+                      priority_ok,
+                      hello_ok,
+                      max_age_ok,
+                      forward_ok
+                  ])
+                  else "FAILED"
+              )
+
+
+              # ------------------------------------------------
+              # Return result
+              # ------------------------------------------------
+
+              result = {
+
+                  "status": status,
+
+                  "device_ip": HOST,
+
+                  "feature": "rstp_configuration",
+
+                  "protocol_type": actual_protocol,
+
+                  "root_stp_configuration": {
+
+                      "spanning_tree_priority": root_priority,
+
+                      "mac_address": root_mac,
+
+                      "root_port": root_port,
+
+                      "root_cost": root_cost,
+
+                      "hello_time": root_hello,
+
+                      "max_age": root_max_age,
+
+                      "forward_delay": root_forward,
+
+                      "root_status": root_status
+
+                  },
+
+                  "local_stp_configuration": {
+
+                      "protocol_type": actual_protocol,
+
+                      "spanning_tree_priority": actual_priority,
+
+                      "mac_address": actual_mac,
+
+                      "hello_time": actual_hello,
+
+                      "max_age": actual_max_age,
+
+                      "forward_delay": actual_forward,
+
+                      "bpdu_terminal": BPDU,
+
+                      "loop_guard": LOOP
+
+                  }
+
+              }
+
+
+              print(
+                  json.dumps(result)
+              )
+
+              close_connection(client)
+
+              sys.exit(
+                  0 if status == "SUCCESS" else 1
+              )
+
+
+          except Exception as error:
+
+              print(
+                  "\nFATAL ERROR: "
+                  + str(error),
+                  file=sys.stderr
+              )
+
+              close_connection(client)
+
+              print(
+                  json.dumps({
+                      "status": "FAILED",
+                      "device_ip": HOST,
+                      "error": str(error)
+                  })
+              )
+
+              sys.exit(1)
+
+
+    # ========================================================
+    # RUN PYTHON SCRIPT
+    # ========================================================
+
+    - name: Configure and verify RSTP
+      ansible.builtin.command:
+        cmd: >
+          python3
+          {{ tmp_dir }}/set_rstp_exec_{{ ansible_host }}.py
+      delegate_to: localhost
+      register: rstp_raw
+      changed_when: true
+      failed_when: false
+
+
+    # ========================================================
+    # CONVERT JSON RESULT
+    # ========================================================
+
+    - name: Convert RSTP result
+      ansible.builtin.set_fact:
+        rstp_result: "{{ rstp_raw.stdout | from_json }}"
+
+
+    # ========================================================
+    # DISPLAY RESULT
+    # ========================================================
+
+    - name: Display RSTP result
+      ansible.builtin.debug:
+        var: rstp_result
+
+
+    # ========================================================
+    # SAVE RSTP RESULT
+    # ========================================================
+
+    - name: Save RSTP result
+      ansible.builtin.copy:
+        dest: "{{ output_dir }}/{{ ansible_host }}_rstp.yml"
+        mode: "0644"
+
+        content: |
+          status: {{ rstp_result.status }}
+          device_ip: {{ rstp_result.device_ip }}
+          feature: {{ rstp_result.feature }}
+
+          root_stp_configuration:
+            spanning_tree_priority: {{ rstp_result.root_stp_configuration.spanning_tree_priority }}
+            mac_address: {{ rstp_result.root_stp_configuration.mac_address }}
+            root_port: {{ rstp_result.root_stp_configuration.root_port }}
+            root_cost: {{ rstp_result.root_stp_configuration.root_cost }}
+            hello_time: {{ rstp_result.root_stp_configuration.hello_time }}
+            max_age: {{ rstp_result.root_stp_configuration.max_age }}
+            forward_delay: {{ rstp_result.root_stp_configuration.forward_delay }}
+            root_status: {{ rstp_result.root_stp_configuration.root_status }}
+
+          local_stp_configuration:
+            protocol_type: {{ rstp_result.local_stp_configuration.protocol_type }}
+            spanning_tree_priority: {{ rstp_result.local_stp_configuration.spanning_tree_priority }}
+            mac_address: {{ rstp_result.local_stp_configuration.mac_address }}
+            hello_time: {{ rstp_result.local_stp_configuration.hello_time }}
+            max_age: {{ rstp_result.local_stp_configuration.max_age }}
+            forward_delay: {{ rstp_result.local_stp_configuration.forward_delay }}
+            bpdu_terminal: {{ rstp_result.local_stp_configuration.bpdu_terminal }}
+            loop_guard: {{ rstp_result.local_stp_configuration.loop_guard }}
+
+      delegate_to: localhost
+
+
+    # ========================================================
+    # DISPLAY FINAL YAML
+    # ========================================================
+
+    - name: Display final RSTP output
+      ansible.builtin.debug:
+        msg: "{{ lookup('file', output_dir + '/' + ansible_host + '_rstp.yml') }}"
+      delegate_to: localhost
+
+
+    # ========================================================
+    # FAIL IF VERIFICATION FAILED
+    # ========================================================
+
+    - name: Fail if RSTP verification failed
+      ansible.builtin.fail:
+        msg: "RSTP configuration or verification failed."
+      when: rstp_result.status != "SUCCESS"
+

@@ -1,0 +1,694 @@
+---
+# ============================================================
+# ABOSS - MSTP Configuration SET
+# ============================================================
+#
+# File:
+#   playbooks/stp/setmstp.yml
+#
+# Purpose:
+#   Configure MSTP global parameters on the switch.
+#
+# Parameters:
+#
+#   protocol
+#   hello_time
+#   max_age
+#   forward_delay
+#   network_diameter
+#   max_hops
+#   mst_compatibility
+#   bpdu_terminal
+#   loop_guard
+#
+# Example:
+#
+# ansible-playbook -i inventory/192.168.2.245.yml \
+# playbooks/stp/setmstp.yml \
+# -e "protocol=MSTP hello_time=2 max_age=20 forward_delay=15 network_diameter=7 max_hops=20 mst_compatibility=Enable bpdu_terminal=Enable loop_guard=Enable"
+#
+# ============================================================
+
+- name: MSTP Configuration - SET
+  hosts: alphabridge_devices
+  gather_facts: no
+
+  vars:
+
+    # ========================================================
+    # Output and temporary directories
+    # ========================================================
+
+    project_root: "{{ playbook_dir }}/../.."
+    output_dir: "{{ project_root }}/output"
+    tmp_dir: "{{ project_root }}/tmp"
+    # ========================================================
+    # Default parameters
+    # ========================================================
+
+    mst_protocol: "{{ protocol | default('MSTP') }}"
+
+    mst_hello_time: "{{ hello_time | default(2) }}"
+
+    mst_max_age: "{{ max_age | default(20) }}"
+
+    mst_forward_delay: "{{ forward_delay | default(15) }}"
+
+    mst_network_diameter: "{{ network_diameter | default(7) }}"
+
+    mst_max_hops: "{{ max_hops | default(20) }}"
+
+    mst_compatibility: "{{ mst_compatibility | default('Disable') }}"
+
+    mst_bpdu_terminal: "{{ bpdu_terminal | default('Disable') }}"
+
+    mst_loop_guard: "{{ loop_guard | default('Disable') }}"
+
+
+  tasks:
+
+    # ========================================================
+    # 1. Validate MSTP parameters
+    # ========================================================
+
+    - name: Validate MSTP parameters
+      ansible.builtin.assert:
+
+        that:
+
+          # --------------------------------------------------
+          # Protocol
+          # --------------------------------------------------
+
+          - mst_protocol in ['MSTP', 'RSTP']
+
+          # --------------------------------------------------
+          # Hello Time
+          # --------------------------------------------------
+
+          - mst_hello_time | int >= 1
+          - mst_hello_time | int <= 10
+
+          # --------------------------------------------------
+          # Max Age
+          # --------------------------------------------------
+
+          - mst_max_age | int >= 6
+          - mst_max_age | int <= 40
+
+          # --------------------------------------------------
+          # Forward Delay
+          # --------------------------------------------------
+
+          - mst_forward_delay | int >= 4
+          - mst_forward_delay | int <= 30
+
+          # --------------------------------------------------
+          # Network Diameter
+          # --------------------------------------------------
+
+          - mst_network_diameter | int >= 2
+          - mst_network_diameter | int <= 7
+
+          # --------------------------------------------------
+          # Max Hops
+          # --------------------------------------------------
+
+          - mst_max_hops | int >= 6
+          - mst_max_hops | int <= 40
+
+          # --------------------------------------------------
+          # MST Compatibility
+          # --------------------------------------------------
+
+          - mst_compatibility in ['Enable', 'Disable']
+
+          # --------------------------------------------------
+          # BPDU Terminal
+          # --------------------------------------------------
+
+          - mst_bpdu_terminal in ['Enable', 'Disable']
+
+          # --------------------------------------------------
+          # Loop Guard
+          # --------------------------------------------------
+
+          - mst_loop_guard in ['Enable', 'Disable']
+
+        fail_msg: |
+          Invalid MSTP parameter.
+
+          Allowed values:
+
+          protocol          = MSTP / RSTP
+          hello_time        = 1-10
+          max_age           = 6-40
+          forward_delay     = 4-30
+          network_diameter  = 2-7
+          max_hops           = 6-40
+          mst_compatibility = Enable / Disable
+          bpdu_terminal     = Enable / Disable
+          loop_guard        = Enable / Disable
+
+        success_msg: "All MSTP parameters are valid."
+
+
+    # ========================================================
+    # 2. Create output directory
+    # ========================================================
+
+    - name: Create output directory
+      ansible.builtin.file:
+        path: "{{ output_dir }}"
+        state: directory
+        mode: "0755"
+      delegate_to: localhost
+
+
+    # ========================================================
+    # 3. Create temporary directory
+    # ========================================================
+
+    - name: Create temporary directory
+      ansible.builtin.file:
+        path: "{{ tmp_dir }}"
+        state: directory
+        mode: "0755"
+      delegate_to: localhost
+
+
+    # ========================================================
+    # 4. Create MSTP output file
+    # ========================================================
+
+    - name: Create MSTP output file
+      ansible.builtin.file:
+        path: "{{ output_dir }}/{{ ansible_host }}_mstp.yml"
+        state: touch
+        mode: "0644"
+      delegate_to: localhost
+
+
+    # ========================================================
+    # 5. Check SSH connectivity
+    # ========================================================
+
+    - name: Check SSH connectivity
+      ansible.builtin.wait_for:
+        host: "{{ ansible_host }}"
+        port: 22
+        timeout: 10
+        state: started
+      delegate_to: localhost
+
+
+    # ========================================================
+    # 6. Configure MSTP
+    # ========================================================
+
+    - name: Configure MSTP on switch
+      ansible.builtin.shell: |
+        python3 - <<'PY'
+
+        import paramiko
+        import time
+        import yaml
+        import sys
+
+
+        # ====================================================
+        # Device parameters
+        # ====================================================
+
+        HOST = "{{ ansible_host }}"
+        PORT = 22
+
+        USER = "{{ ansible_user }}"
+        PASSWORD = "{{ ansible_password }}"
+
+        CONNECT_TIMEOUT = 15
+
+        OUTPUT_FILE = "{{ output_dir }}/{{ ansible_host }}_mstp.yml"
+
+
+        # ====================================================
+        # MSTP parameters
+        # ====================================================
+
+        PROTOCOL = "{{ mst_protocol }}"
+
+        HELLO_TIME = "{{ mst_hello_time }}"
+
+        MAX_AGE = "{{ mst_max_age }}"
+
+        FORWARD_DELAY = "{{ mst_forward_delay }}"
+
+        NETWORK_DIAMETER = "{{ mst_network_diameter }}"
+
+        MAX_HOPS = "{{ mst_max_hops }}"
+
+        MST_COMPATIBILITY = "{{ mst_compatibility }}"
+
+        BPDU_TERMINAL = "{{ mst_bpdu_terminal }}"
+
+        LOOP_GUARD = "{{ mst_loop_guard }}"
+
+
+        # ====================================================
+        # SSH connection
+        # ====================================================
+
+        def connect_device():
+
+            print("Connecting to:", HOST)
+
+            client = paramiko.SSHClient()
+
+            client.set_missing_host_key_policy(
+                paramiko.AutoAddPolicy()
+            )
+
+            client.connect(
+                hostname=HOST,
+                port=PORT,
+                username=USER,
+                password=PASSWORD,
+                timeout=CONNECT_TIMEOUT,
+                banner_timeout=CONNECT_TIMEOUT,
+                auth_timeout=CONNECT_TIMEOUT,
+                look_for_keys=False,
+                allow_agent=False
+            )
+
+            print("SSH connection established")
+
+            return client
+
+
+        # ====================================================
+        # Send CLI command
+        # ====================================================
+
+        def send_command(shell, command, delay=1, timeout=10):
+
+            print("COMMAND:", command)
+
+            shell.send(command + "\n")
+
+            output = ""
+
+            start_time = time.time()
+            last_data_time = time.time()
+
+            time.sleep(delay)
+
+            while True:
+
+                if shell.recv_ready():
+
+                    data = shell.recv(
+                        65535
+                    ).decode(
+                        "utf-8",
+                        errors="ignore"
+                    )
+
+                    if data:
+
+                        output += data
+
+                        print(data)
+
+                        last_data_time = time.time()
+
+                else:
+
+                    if time.time() - last_data_time >= 1.5:
+                        break
+
+                    if time.time() - start_time >= timeout:
+                        break
+
+                    time.sleep(0.1)
+
+            return output
+
+
+        # ====================================================
+        # Result structure
+        # ====================================================
+
+        result = {
+
+            "status": "FAILED",
+
+            "device_ip": HOST
+
+        }
+
+
+        client = None
+
+
+        try:
+
+            # =================================================
+            # Connect to switch
+            # =================================================
+
+            client = connect_device()
+
+            print("Opening interactive shell")
+
+            shell = client.invoke_shell(
+                term="vt100",
+                width=200,
+                height=1000
+            )
+
+            shell.settimeout(CONNECT_TIMEOUT)
+
+            print("Interactive shell opened")
+
+            time.sleep(1)
+
+
+            # =================================================
+            # Clear initial banner
+            # =================================================
+
+            while shell.recv_ready():
+
+                shell.recv(
+                    65535
+                )
+
+
+            # =================================================
+            # Enable mode
+            # =================================================
+
+            send_command(
+                shell,
+                "enable"
+            )
+
+
+            # =================================================
+            # Enter configuration mode
+            # =================================================
+
+            send_command(
+                shell,
+                "config"
+            )
+
+
+            # =================================================
+            # MSTP protocol
+            # =================================================
+
+            if PROTOCOL == "MSTP":
+
+                send_command(
+                    shell,
+                    "spanning-tree mode mstp"
+                )
+
+            elif PROTOCOL == "RSTP":
+
+                send_command(
+                    shell,
+                    "spanning-tree mode rstp"
+                )
+
+
+            # =================================================
+            # MSTP Hello Time
+            # =================================================
+
+            send_command(
+                shell,
+                "spanning-tree mstp hello-time "
+                + HELLO_TIME
+            )
+
+
+            # =================================================
+            # MSTP Max Age
+            # =================================================
+
+            send_command(
+                shell,
+                "spanning-tree mstp max-age "
+                + MAX_AGE
+            )
+
+
+            # =================================================
+            # MSTP Forward Delay
+            # =================================================
+
+            send_command(
+                shell,
+                "spanning-tree mstp forward-time "
+                + FORWARD_DELAY
+            )
+
+
+            # =================================================
+            # MSTP Network Diameter
+            # =================================================
+
+            send_command(
+                shell,
+                "spanning-tree mstp network-diameter "
+                + NETWORK_DIAMETER
+            )
+
+
+            # =================================================
+            # MSTP Max Hops
+            # =================================================
+
+            send_command(
+                shell,
+                "spanning-tree mstp max-hops "
+                + MAX_HOPS
+            )
+
+
+            # =================================================
+            # MST Compatibility
+            #
+            # Confirmed switch commands:
+            #
+            # Enable:
+            # spanning-tree mstp mst-compatible
+            #
+            # Disable:
+            # no spanning-tree mstp mst-compatible
+            # =================================================
+
+            if MST_COMPATIBILITY == "Enable":
+
+                send_command(
+                    shell,
+                    "spanning-tree mstp mst-compatible"
+                )
+
+            else:
+
+                send_command(
+                    shell,
+                    "no spanning-tree mstp mst-compatible"
+                )
+
+
+            # =================================================
+            # BPDU Terminal
+            #
+            # Enable:
+            # spanning-tree bpdu-terminal
+            #
+            # Disable:
+            # no spanning-tree bpdu-terminal
+            # =================================================
+
+            if BPDU_TERMINAL == "Enable":
+
+                send_command(
+                    shell,
+                    "spanning-tree bpdu-terminal"
+                )
+
+            else:
+
+                send_command(
+                    shell,
+                    "no spanning-tree bpdu-terminal"
+                )
+
+
+            # =================================================
+            # Loop Guard
+            #
+            # Enable:
+            # spanning-tree loopguard default
+            #
+            # Disable:
+            # no spanning-tree loopguard default
+            # =================================================
+
+            if LOOP_GUARD == "Enable":
+
+                send_command(
+                    shell,
+                    "spanning-tree loopguard default"
+                )
+
+            else:
+
+                send_command(
+                    shell,
+                    "no spanning-tree loopguard default"
+                )
+
+
+            # =================================================
+            # Exit configuration mode
+            # =================================================
+
+            send_command(
+                shell,
+                "end"
+            )
+
+
+            # =================================================
+            # Save configuration
+            # =================================================
+
+            send_command(
+                shell,
+                "write"
+            )
+
+
+            # =================================================
+            # Verify configuration
+            #
+            # Verification is performed but the complete
+            # output is NOT stored in the result YAML.
+            # =================================================
+
+            verification = send_command(
+                shell,
+                "show spanning-tree",
+                delay=2,
+                timeout=15
+            )
+
+
+            # =================================================
+            # Successful result
+            # =================================================
+
+            result["status"] = "SUCCESS"
+
+
+        except Exception as exc:
+
+            # =================================================
+            # Failure result
+            # =================================================
+
+            result["status"] = "FAILED"
+
+            result["error"] = str(exc)
+
+            print(
+                "ERROR:",
+                type(exc).__name__,
+                str(exc)
+            )
+
+
+        finally:
+
+            # =================================================
+            # Close SSH connection
+            # =================================================
+
+            if client:
+
+                try:
+
+                    client.close()
+
+                except Exception:
+
+                    pass
+
+
+            # =================================================
+            # Write YAML result
+            # =================================================
+
+            with open(
+                OUTPUT_FILE,
+                "w"
+            ) as output:
+
+                yaml.safe_dump(
+                    result,
+                    output,
+                    sort_keys=False,
+                    default_flow_style=False
+                )
+
+
+            print(
+                "MSTP result written to:"
+            )
+
+            print(
+                OUTPUT_FILE
+            )
+
+
+        # ====================================================
+        # Return proper process exit code
+        #
+        # SUCCESS -> 0
+        # FAILED  -> 1
+        # ====================================================
+
+        if result["status"] == "SUCCESS":
+
+            sys.exit(0)
+
+        else:
+
+            sys.exit(1)
+
+        PY
+
+      args:
+        executable: /bin/bash
+
+      register: mstp_configuration
+
+      delegate_to: localhost
+
+      changed_when: true
+
+
+    # ========================================================
+    # 7. Display MSTP result
+    # ========================================================
+
+    - name: Display MSTP configuration result
+      ansible.builtin.debug:
+        msg: "{{ lookup('file', output_dir + '/' + ansible_host + '_mstp.yml') }}"
+      delegate_to: localhost

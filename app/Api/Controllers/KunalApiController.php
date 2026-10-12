@@ -3716,6 +3716,408 @@ public function getvlan($hostname)
         ]);
     }
 
+    #------------------------------------------------------------
+    #                PRIVATE VLAN - GET / SET / DELETE
+    #------------------------------------------------------------
+    /**
+     * setprivatevlan.yml / setprivatevlanport.yml overwrite the same output
+     * files their GET playbooks write, with just "SUCCESS"/"FAILED". So a
+     * cache file is only usable when it still holds the GET's list.
+     */
+    private function getPrivateVlanCached(string $playbook, string $hostname, string $yamlFile, string $key)
+    {
+        if (!function_exists('yaml_parse_file')) {
+            return $this->error("PHP YAML extension missing", null);
+        }
+
+        $hosts  = "{$this->pluginPath}/hosts/{$hostname}.yml";
+        $cached = file_exists($yamlFile) ? $this->parseYamlSafely($yamlFile) : null;
+
+        if (is_array($cached[$key] ?? null)) {
+            $this->runAnsibleAsync($playbook, $hosts);
+
+            return ['entries' => $cached[$key], 'cached' => true];
+        }
+
+        $output = $this->runAnsiblejs($playbook, $hosts);
+        $data   = file_exists($yamlFile) ? $this->parseYamlSafely($yamlFile) : null;
+
+        if (!is_array($data)) {
+            return $this->error("Private VLAN output file not found", $output);
+        }
+
+        return ['entries' => is_array($data[$key] ?? null) ? $data[$key] : [], 'cached' => false];
+    }
+
+    public function getprivatevlan($hostname)
+    {
+        $result = $this->getPrivateVlanCached(
+            "{$this->pluginPath}/playbooks/private_vlan/getprivatevlan.yml",
+            $hostname,
+            "{$this->pluginPath}/output/{$hostname}_privatevlan.yml",
+            'private_vlan'
+        );
+
+        if (!is_array($result)) {
+            return $result;
+        }
+
+        $result['entries'] = array_map(fn ($vlan) => [
+            'vlan_id'                 => $vlan['vlan_id'] ?? null,
+            'vlan_type'               => $vlan['vlan_type'] ?? null,
+            'associated_primary_vlan' => $vlan['associated_primary_vlan'] ?? '',
+        ], $result['entries']);
+
+        return $this->success($result);
+    }
+
+    public function setprivatevlan(Request $request, $hostname)
+    {
+        $rules = [
+            'operation' => 'required|string|in:add,delete',
+            'vlan_id'   => 'required|integer|min:1|max:4094',
+        ];
+
+        if ($request->input('operation') === 'add') {
+            $rules['vlan_type'] = 'required|string|in:primary,community,isolated';
+            // setprivatevlan.yml sends "private-vlan community|isolated <assoc>"
+            // without checking assoc is set, so require it here.
+            $rules['associated_primary_vlan'] = 'required_unless:vlan_type,primary|nullable|integer|min:1|max:4094|different:vlan_id';
+        }
+
+        $data = $request->validate($rules);
+
+        $playbook = "{$this->pluginPath}/playbooks/private_vlan/setprivatevlan.yml";
+        $hosts    = "{$this->pluginPath}/hosts/{$hostname}.yml";
+        $yamlFile = "{$this->pluginPath}/output/{$hostname}_privatevlan.yml";
+
+        $output = $this->runAnsiblejs($playbook, $hosts, array_filter([
+            'operation'               => $data['operation'],
+            'vlan_id'                 => $data['vlan_id'],
+            'vlan_type'               => $data['vlan_type'] ?? null,
+            'associated_primary_vlan' => ($data['vlan_type'] ?? 'primary') === 'primary' ? null : ($data['associated_primary_vlan'] ?? null),
+        ], fn ($value) => $value !== null && $value !== ''));
+
+        $status = file_exists($yamlFile) ? trim(file_get_contents($yamlFile)) : null;
+
+        // Refresh the GET cache synchronously - the set playbook just
+        // overwrote it with its SUCCESS/FAILED status.
+        $this->runAnsiblejs("{$this->pluginPath}/playbooks/private_vlan/getprivatevlan.yml", $hosts);
+
+        if (stripos($output, 'FAILED!') !== false || $status !== 'SUCCESS') {
+            return $this->error("Private VLAN {$data['operation']} failed for VLAN {$data['vlan_id']}", $output);
+        }
+
+        return $this->success([
+            "message" => "Private VLAN {$data['vlan_id']} {$data['operation']} completed successfully",
+            "raw"     => $output,
+        ]);
+    }
+
+    public function getprivatevlanport($hostname)
+    {
+        $result = $this->getPrivateVlanCached(
+            "{$this->pluginPath}/playbooks/private_vlan/getprivatevlanport.yml",
+            $hostname,
+            "{$this->pluginPath}/output/{$hostname}_privatevlanport.yml",
+            'private_vlan_port'
+        );
+
+        if (!is_array($result)) {
+            return $result;
+        }
+
+        // ext-yaml reads a bare "No"/"Yes" as a boolean.
+        $yesNo = fn ($value) => is_bool($value) ? ($value ? 'Yes' : 'No') : (strtolower((string) $value) === 'yes' ? 'Yes' : 'No');
+
+        $result['entries'] = array_map(fn ($port) => [
+            'port'                   => $port['port'] ?? null,
+            'vlan'                   => $port['vlan'] ?? null,
+            'private_vlan_port_mode' => $port['private_vlan_port_mode'] ?? null,
+            'primary_vlan'           => $port['primary_vlan'] ?? '',
+            'secondary_vlan'         => $port['secondary_vlan'] ?? '',
+            'outgoing_segment_tag'   => $yesNo($port['outcoming_segment_with_tag'] ?? 'No'),
+            'tag_pvid'               => $port['tag_pvid'] ?? '',
+            'tag_priority'           => $port['tag_priority'] ?? '',
+        ], $result['entries']);
+
+        return $this->success($result);
+    }
+
+    public function setprivatevlanport(Request $request, $hostname)
+    {
+        $data = $request->validate([
+            'port'                   => ['required', 'string', 'regex:/^t?g\d+\/\d+$/i'],
+            'port_vlan'              => 'required|integer|min:1|max:4094',
+            'private_vlan_port_mode' => 'required|string|in:regular,host,promiscuous',
+            'primary_vlan'           => 'required_unless:private_vlan_port_mode,regular|nullable|integer|min:1|max:4094',
+            'secondary_vlan'         => 'required_unless:private_vlan_port_mode,regular|nullable|integer|min:1|max:4094|different:primary_vlan',
+            'outgoing_segment_tag'   => 'required|string|in:Yes,No',
+            'tag_pvid'               => 'nullable|integer|min:1|max:4094',
+            'tag_priority'           => 'nullable|integer|min:0|max:7',
+        ]);
+
+        $isRegular = $data['private_vlan_port_mode'] === 'regular';
+
+        $playbook = "{$this->pluginPath}/playbooks/private_vlan/setprivatevlanport.yml";
+        $hosts    = "{$this->pluginPath}/hosts/{$hostname}.yml";
+        $yamlFile = "{$this->pluginPath}/output/{$hostname}_privatevlanport.yml";
+
+        $output = $this->runAnsiblejs($playbook, $hosts, array_filter([
+            'port'                   => strtolower($data['port']),
+            'port_vlan'              => $data['port_vlan'],
+            'private_vlan_port_mode' => $data['private_vlan_port_mode'],
+            'primary_vlan'           => $isRegular ? null : $data['primary_vlan'],
+            'secondary_vlan'         => $isRegular ? null : $data['secondary_vlan'],
+            'outgoing_segment_tag'   => $data['outgoing_segment_tag'],
+            'tag_pvid'               => $data['tag_pvid'] ?? null,
+            'tag_priority'           => $data['tag_priority'] ?? null,
+        ], fn ($value) => $value !== null && $value !== ''));
+
+        $status = file_exists($yamlFile) ? trim(file_get_contents($yamlFile)) : null;
+
+        $this->runAnsiblejs("{$this->pluginPath}/playbooks/private_vlan/getprivatevlanport.yml", $hosts);
+
+        if (stripos($output, 'FAILED!') !== false || $status !== 'SUCCESS') {
+            return $this->error("Private VLAN port configuration failed for {$data['port']}", $output);
+        }
+
+        return $this->success([
+            "message" => "Private VLAN port {$data['port']} updated successfully",
+            "raw"     => $output,
+        ]);
+    }
+
+    #------------------------------------------------------------
+    #                 IPv6 MLD SNOOPING - GET / SET
+    #------------------------------------------------------------
+    /**
+     * ipv6_mld_snooping_get.yml nests the six fields under "configuration",
+     * as "Enable"/"Disable" - lowercase them for the frontend <select>s.
+     */
+    private function formatMldSnooping(?array $data): ?array
+    {
+        $config = $data['configuration'] ?? null;
+        if (!is_array($config)) {
+            return null;
+        }
+
+        $toggle = fn ($value) => strtolower((string) $value) === 'enable' ? 'enable' : 'disable';
+
+        return [
+            'mld_snooping'       => $toggle($config['mld_snooping'] ?? ''),
+            'router_age_timer'   => $config['router_age_timer'] ?? '',
+            'response_age_timer' => $config['response_age_timer'] ?? '',
+            'querier'            => $toggle($config['querier'] ?? ''),
+            'querier_address'    => $config['querier_address'] ?? '',
+            'solicitation'       => $toggle($config['solicitation'] ?? ''),
+        ];
+    }
+
+    public function getmldsnooping($hostname)
+    {
+        if (!function_exists('yaml_parse_file')) {
+            return $this->error("PHP YAML extension missing", null);
+        }
+
+        $playbook = "{$this->pluginPath}/playbooks/ipv6_mld_snooping/ipv6_mld_snooping_get.yml";
+        $hosts    = "{$this->pluginPath}/hosts/{$hostname}.yml";
+        $yamlFile = "{$this->pluginPath}/output/{$hostname}_ipv6_mld_snooping_get.yml";
+
+        if (file_exists($yamlFile)) {
+            $cached = $this->parseYamlSafely($yamlFile);
+
+            $this->runAnsibleAsync($playbook, $hosts);
+
+            return $this->success([
+                "mld"    => $this->formatMldSnooping($cached),
+                "cached" => true,
+            ]);
+        }
+
+        $output = $this->runAnsiblejs($playbook, $hosts);
+
+        if (!file_exists($yamlFile)) {
+            return $this->error("IPv6 MLD snooping output file not found", $output);
+        }
+
+        return $this->success([
+            "mld"    => $this->formatMldSnooping($this->parseYamlSafely($yamlFile)),
+            "cached" => false,
+        ]);
+    }
+
+    public function setmldsnooping(Request $request, $hostname)
+    {
+        // ipv6_mld_snooping_set.yml requires and validates both timers even
+        // when mld_snooping is Disable, so they're always required here.
+        $data = $request->validate([
+            'mld_snooping'       => 'required|string|in:enable,disable',
+            'router_age_timer'   => 'required|integer|min:10|max:2147483647',
+            'response_age_timer' => 'required|integer|min:10|max:2147483647',
+            'querier'            => 'required|string|in:enable,disable',
+            'querier_address'    => 'nullable|ipv6',
+            'solicitation'       => 'required|string|in:enable,disable',
+        ]);
+
+        $playbook = "{$this->pluginPath}/playbooks/ipv6_mld_snooping/ipv6_mld_snooping_set.yml";
+        $hosts    = "{$this->pluginPath}/hosts/{$hostname}.yml";
+        $yamlFile = "{$this->pluginPath}/output/{$hostname}_ipv6_mld_snooping.yml";
+
+        $output = $this->runAnsiblejs($playbook, $hosts, array_filter([
+            'mld_snooping'       => ucfirst($data['mld_snooping']),
+            'router_age_timer'   => $data['router_age_timer'],
+            'response_age_timer' => $data['response_age_timer'],
+            'querier'            => ucfirst($data['querier']),
+            'querier_address'    => $data['querier_address'] ?? null,
+            'solicitation'       => ucfirst($data['solicitation']),
+        ], fn ($value) => $value !== null && $value !== ''));
+
+        $result = file_exists($yamlFile) ? $this->parseYamlSafely($yamlFile) : null;
+        if (stripos($output, 'FAILED!') !== false || !is_array($result) || ($result['status'] ?? null) !== 'success') {
+            return $this->error($result['error'] ?? "IPv6 MLD snooping configuration failed", $output);
+        }
+
+        $this->runAnsiblejs("{$this->pluginPath}/playbooks/ipv6_mld_snooping/ipv6_mld_snooping_get.yml", $hosts);
+
+        return $this->success([
+            "message" => "IPv6 MLD snooping configuration updated successfully",
+            "raw"     => $output,
+        ]);
+    }
+
+    #------------------------------------------------------------
+    #        MULTIPLE RING PROTECTION (MEAPS) - GET / SET / DELETE
+    #------------------------------------------------------------
+    private const MEAPS_RING_PORTS = [
+        'none',
+        'g0/1', 'g0/2', 'g0/3', 'g0/4', 'g0/5',
+        'g0/6', 'g0/7', 'g0/8', 'g0/9', 'g0/10',
+    ];
+
+    /**
+     * multiple_ring_protection_get.yml writes GUI-style keys ("Domain ID",
+     * "Failed Time", ...) - map them to snake_case for the frontend.
+     */
+    private function formatMultipleRing(array $ring): array
+    {
+        return [
+            'domain_id'        => $ring['Domain ID'] ?? null,
+            'ring_id'          => $ring['Ring ID'] ?? null,
+            'ring_type'        => $ring['Ring Type'] ?? null,
+            'node_type'        => $ring['Node Type'] ?? null,
+            'control_vlan'     => $ring['Control VLAN'] ?? null,
+            'hello_time'       => $ring['Hello Time'] ?? null,
+            'fail_time'        => $ring['Failed Time'] ?? null,
+            'pre_forward_time' => $ring['Pre Forward Time'] ?? null,
+            'primary_port'     => $ring['Primary Port'] ?? null,
+            'secondary_port'   => $ring['Secondary Port'] ?? null,
+        ];
+    }
+
+    public function getmultiplering($hostname)
+    {
+        if (!function_exists('yaml_parse_file')) {
+            return $this->error("PHP YAML extension missing", null);
+        }
+
+        $playbook = "{$this->pluginPath}/playbooks/multiple_ring_protection/multiple_ring_protection_get.yml";
+        $hosts    = "{$this->pluginPath}/hosts/{$hostname}.yml";
+        $yamlFile = "{$this->pluginPath}/output/{$hostname}_multiple_ring_protection_get.yml";
+
+        if (file_exists($yamlFile)) {
+            $cached = $this->parseYamlSafely($yamlFile);
+
+            $this->runAnsibleAsync($playbook, $hosts);
+
+            return $this->success([
+                "entries" => array_map([$this, 'formatMultipleRing'], is_array($cached['rings'] ?? null) ? $cached['rings'] : []),
+                "cached"  => true,
+            ]);
+        }
+
+        $output = $this->runAnsiblejs($playbook, $hosts);
+
+        if (!file_exists($yamlFile)) {
+            return $this->error("Multiple Ring Protection output file not found", $output);
+        }
+
+        $data = $this->parseYamlSafely($yamlFile);
+
+        return $this->success([
+            "entries" => array_map([$this, 'formatMultipleRing'], is_array($data['rings'] ?? null) ? $data['rings'] : []),
+            "cached"  => false,
+        ]);
+    }
+
+    public function setmultiplering(Request $request, $hostname)
+    {
+        $portRule = 'required|string|in:' . implode(',', self::MEAPS_RING_PORTS);
+
+        $rules = [
+            'operation' => 'required|string|in:add,edit,delete',
+            'domain_id' => 'required|integer|min:0|max:3',
+            'ring_id'   => 'required|integer|min:0|max:7',
+        ];
+
+        if ($request->input('operation') !== 'delete') {
+            // edit playbook requires ring_type/node_type too - it verifies
+            // they match the existing ring and refuses to change them.
+            $rules['ring_type']        = 'required|string|in:major ring,sub ring';
+            $rules['node_type']        = 'required|string|in:master node,transit node,edge node,assistant node';
+            $rules['control_vlan']     = 'required|integer|min:1|max:4094';
+            $rules['hello_time']       = 'required|integer|min:1|max:10';
+            $rules['fail_time']        = 'required|integer|min:3|max:30';
+            $rules['pre_forward_time'] = 'required|integer|min:3|max:30';
+            $rules['primary_port']     = $portRule;
+            $rules['secondary_port']   = $portRule;
+        }
+
+        $data = $request->validate($rules);
+
+        if ($data['operation'] !== 'delete'
+            && $data['primary_port'] !== 'none'
+            && $data['primary_port'] === $data['secondary_port']) {
+            return $this->error("Primary and Secondary Port must be different", null);
+        }
+
+        $playbook = match ($data['operation']) {
+            'add'    => 'multiple_ring_protection_set.yml',
+            'edit'   => 'multiple_ring_protection_edit.yml',
+            'delete' => 'multiple_ring_protection_delete.yml',
+        };
+        $playbook = "{$this->pluginPath}/playbooks/multiple_ring_protection/{$playbook}";
+        $hosts    = "{$this->pluginPath}/hosts/{$hostname}.yml";
+
+        $extraVars = array_filter([
+            'domain_id'        => $data['domain_id'],
+            'ring_id'          => $data['ring_id'],
+            'ring_type'        => $data['ring_type'] ?? null,
+            'node_type'        => $data['node_type'] ?? null,
+            'control_vlan'     => $data['control_vlan'] ?? null,
+            'hello_time'       => $data['hello_time'] ?? null,
+            'fail_time'        => $data['fail_time'] ?? null,
+            'pre_forward_time' => $data['pre_forward_time'] ?? null,
+            'primary_port'     => $data['primary_port'] ?? null,
+            'secondary_port'   => $data['secondary_port'] ?? null,
+        ], fn ($value) => $value !== null && $value !== '');
+
+        $output = $this->runAnsiblejs($playbook, $hosts, $extraVars);
+
+        $ringLabel = "domain {$data['domain_id']} ring {$data['ring_id']}";
+
+        if (stripos($output, 'FAILED!') !== false) {
+            return $this->error("Multiple Ring Protection {$data['operation']} failed for {$ringLabel}", $output);
+        }
+
+        $this->runAnsiblejs("{$this->pluginPath}/playbooks/multiple_ring_protection/multiple_ring_protection_get.yml", $hosts);
+
+        return $this->success([
+            "message" => "Multiple Ring Protection {$ringLabel} {$data['operation']} completed successfully",
+            "raw"     => $output,
+        ]);
+    }
+
     private function success(array $data)
     {
         return response()->json(["status" => "success"] + $data);

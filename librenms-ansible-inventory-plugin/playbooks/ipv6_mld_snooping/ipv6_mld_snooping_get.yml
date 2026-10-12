@@ -1,0 +1,356 @@
+# ==========================================
+# ipv6_mld_snooping_get.yml
+# Created on Sept 4, 2026 by Vikash Kumar (vikash.kumar@alphabrige.tech).
+# Copyright (c), ALPHA BRIDGE, Inc.
+# 357D, Udyog Vihar Industrial Area Phase VI, Sector 37, Gurugram, Haryana.
+#
+# All rights reserved.
+#
+# This software is the confidential and proprietary information of ALPHA BRIDGE,
+# Inc. ("Confidential Information"). You shall not disclose such Confidential
+# Information and shall use it only in accordance with the terms of the license
+# agreement you entered into with ALPHA BRIDGE.
+#
+# =============================================================================
+# Playbook Name : IPv6 MLD Snooping Basic Configuration (Get)
+# =============================================================================
+# Command: show run non-interface
+# Reports the six basic configuration fields used by the GUI.
+# Enabled commands map to Enable; absent or negated commands map to Disable.
+# Missing timer values and querier address remain blank; defaults are not guessed.
+# This playbook only reads configuration.
+# Example:
+# ansible-playbook -i inventory/192.168.2.245.yml \
+#   playbooks/ipv6_mld_snooping/ipv6_mld_snooping_get.yml
+# Output: output/<switch_ip>_ipv6_mld_snooping_get.yml
+# =============================================================================
+
+- name: Get IPv6 MLD snooping basic configuration
+  hosts: alphabridge_devices
+  gather_facts: false
+
+  vars:
+    project_root: "{{ playbook_dir }}/../.."
+    output_dir: "{{ project_root }}/output"
+    tmp_dir: "{{ project_root }}/tmp"
+
+  pre_tasks:
+    - name: Ensure helper and output directories exist
+      ansible.builtin.file:
+        path: "{{ item }}"
+        state: directory
+        mode: '0755'
+      loop:
+        - "{{ tmp_dir }}"
+        - "{{ output_dir }}"
+
+  tasks:
+    - name: Create IPv6 MLD snooping configuration getter
+      ansible.builtin.copy:
+        dest: "{{ tmp_dir }}/ipv6_mld_snooping_get_exec.py"
+        mode: '0700'
+        content: |
+          #!/usr/bin/env python3
+          import json
+          import os
+          import re
+          import sys
+          import time
+
+          import paramiko
+
+          HOST = os.environ["SWITCH_HOST"]
+          USER = os.environ["SWITCH_USER"]
+          PASSWORD = os.environ["SWITCH_PASSWORD"]
+
+          ANSI_RE = re.compile(r'\x1b(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])')
+          PROMPT_RE = re.compile(r'(?m)^[^\r\n\s]+[>#]\s*\Z')
+          ERROR_RE = re.compile(
+              r'(?im)^\s*(?:%\s*(?:err(?:or)?|invalid|unknown|unrecognized|'
+              r'incomplete)\b|error:|invalid (?:input|command)|unknown command)'
+          )
+          # ==========================================
+          # READ UNTIL SWITCH PROMPT
+          # ==========================================
+
+          def read_until_prompt(shell, timeout=60):
+              output = ''
+              deadline = time.monotonic() + timeout
+
+              while time.monotonic() < deadline:
+                  if shell.recv_ready():
+                      output += shell.recv(65535).decode(
+                          'utf-8', errors='replace'
+                      )
+                      clean = ANSI_RE.sub('', output).replace('\r', '')
+                      if re.search(r'--More--', clean, re.I):
+                          shell.send(' ')
+                          output = re.sub(r'--More--', '', clean, flags=re.I)
+                          clean = output
+
+                      if PROMPT_RE.search(clean):
+                          return clean
+                  else:
+                      time.sleep(0.1)
+
+              raise TimeoutError(
+                  'Timed out waiting for the switch prompt; output may be incomplete'
+              )
+
+          # ==========================================
+          # EXECUTE CLI COMMAND
+          # ==========================================
+
+          def command(shell, text, timeout=60):
+              shell.send(text + '\n')
+              output = read_until_prompt(shell, timeout)
+
+              if ERROR_RE.search(output):
+                  raise RuntimeError(
+                      'Switch rejected command: ' + text
+                  )
+
+              return output
+
+          # ==========================================
+          # PARSE MLD BASIC CONFIGURATION
+          # ==========================================
+
+          def parse_config(output):
+              if not re.search(r'(?m)^\s*!version\s+\S+', output):
+                  raise ValueError('Unrecognized or incomplete show run non-interface output')
+
+              result = {
+                  'mld_snooping': 'Disable',
+                  'router_age_timer': '',
+                  'response_age_timer': '',
+                  'querier': 'Disable',
+                  'querier_address': '',
+                  'solicitation': 'Disable'
+              }
+              flags = {
+                  'ipv6 mld-snooping': 'mld_snooping',
+                  'ipv6 mld-snooping querier': 'querier',
+                  'ipv6 mld-snooping solicitation': 'solicitation'
+              }
+              timers = {
+                  'router-age': 'router_age_timer',
+                  'response-time': 'response_age_timer'
+              }
+              for raw_line in output.splitlines():
+                  line = ' '.join(raw_line.strip().split())
+                  if line in flags:
+                      result[flags[line]] = 'Enable'
+                  elif line.startswith('no ') and line[3:] in flags:
+                      result[flags[line[3:]]] = 'Disable'
+                  else:
+                      match = re.fullmatch(
+                          r'ipv6 mld-snooping timer (router-age|response-time) ([0-9]+)', line
+                      )
+                      if match:
+                          value = int(match.group(2))
+                          if not 10 <= value <= 2147483647:
+                              raise ValueError('Invalid MLD timer in running configuration')
+                          result[timers[match.group(1)]] = value
+                      match = re.fullmatch(
+                          r'ipv6 mld-snooping querier address (\S+)', line
+                      )
+                      if match:
+                          result['querier_address'] = match.group(1)
+                      elif line == 'no ipv6 mld-snooping querier address':
+                          result['querier_address'] = ''
+              return result
+
+          # ==========================================
+          # SSH INITIALIZATION
+          # ==========================================
+
+          ssh = None
+          shell = None
+
+          try:
+
+              ssh = paramiko.SSHClient()
+
+              ssh.set_missing_host_key_policy(
+                  paramiko.AutoAddPolicy()
+              )
+
+              # ==================================
+              # SSH CONNECTION
+              # ==================================
+
+              ssh.connect(
+                  HOST,
+                  username=USER,
+                  password=PASSWORD,
+                  look_for_keys=False,
+                  allow_agent=False,
+                  timeout=10,
+                  auth_timeout=10,
+                  banner_timeout=10
+              )
+
+              shell = ssh.invoke_shell()
+
+              # ==================================
+              # INITIAL PROMPT
+              # ==================================
+
+              first_prompt = read_until_prompt(
+                  shell,
+                  timeout=10
+              )
+
+              # ==================================
+              # ENABLE MODE
+              # ==================================
+
+              if first_prompt.rstrip().endswith('>'):
+
+                  enabled = command(
+                      shell,
+                      'enable',
+                      timeout=10
+                  )
+
+                  if not enabled.rstrip().endswith('#'):
+                      raise RuntimeError(
+                          'Failed to enter privileged EXEC mode'
+                      )
+
+              elif not first_prompt.rstrip().endswith('#'):
+
+                  raise RuntimeError(
+                      'Unrecognized switch prompt'
+                  )
+
+              # ==================================
+              # DISABLE PAGING
+              # ==================================
+
+              command(
+                  shell,
+                  'terminal length 0',
+                  timeout=10
+              )
+
+              # ==================================
+              # SHOW RUNNING CONFIG
+              # ==================================
+
+              config = command(
+                  shell,
+                  'show run non-interface',
+                  timeout=60
+              )
+
+              # ==================================
+              # PARSE AND RETURN JSON
+              # ==================================
+
+              print(json.dumps({
+                  'ip': HOST,
+                  'configuration': parse_config(config),
+                  'status': 'success'
+              }))
+
+          # ==========================================
+          # EXCEPTION HANDLING
+          # ==========================================
+
+          except Exception as exc:
+
+              print(json.dumps({
+                  'ip': HOST,
+                  'status': 'failed',
+                  'error': str(exc)
+              }))
+
+              sys.exit(1)
+
+          # ==========================================
+          # CLOSE SSH
+          # ==========================================
+
+          finally:
+
+              if shell is not None:
+                  shell.close()
+
+              if ssh is not None:
+                  ssh.close()
+
+    # ==========================================
+    # EXECUTE PYTHON SCRIPT
+    # ==========================================
+
+    - name: Execute IPv6 MLD snooping configuration getter
+      ansible.builtin.command:
+        argv:
+          - /opt/librenms/librenms-ansible-inventory-plugin/bin/python3
+          - "{{ tmp_dir }}/ipv6_mld_snooping_get_exec.py"
+      environment:
+        SWITCH_HOST: "{{ ansible_host }}"
+        SWITCH_USER: "{{ ansible_user }}"
+        SWITCH_PASSWORD: "{{ ansible_password }}"
+      register: mld_raw
+      changed_when: false
+      failed_when: false
+      no_log: true
+
+    # ==========================================
+    # CHECK PYTHON OUTPUT
+    # ==========================================
+
+    - name: Check helper returned data
+      ansible.builtin.assert:
+        that:
+          - mld_raw.stdout | trim | length > 0
+        fail_msg: >-
+          IPv6 MLD snooping getter returned empty output.
+          Verify the Python interpreter, Paramiko installation
+          and SSH connectivity securely.
+
+    # ==========================================
+    # CONVERT JSON RESULT
+    # ==========================================
+
+    - name: Parse helper JSON
+      ansible.builtin.set_fact:
+        mld_result: "{{ mld_raw.stdout | from_json }}"
+
+    # ==========================================
+    # FAIL IF COMMAND FAILED
+    # ==========================================
+
+    - name: Fail on unsuccessful retrieval
+      ansible.builtin.fail:
+        msg: "{{ mld_result.error | default('Helper exited with nonzero status') }}"
+      when: mld_raw.rc != 0 or mld_result.status != 'success'
+
+    # ==========================================
+    # DISPLAY RESULT
+    # ==========================================
+
+    - name: Display IPv6 MLD snooping configuration
+      ansible.builtin.debug:
+        var: mld_result
+
+    # ==========================================
+    # SAVE RESULT
+    # ==========================================
+
+    - name: Save IPv6 MLD snooping configuration
+      ansible.builtin.copy:
+        dest: "{{ output_dir }}/{{ ansible_host }}_ipv6_mld_snooping_get.yml"
+        mode: '0644'
+        content: "{{ mld_result | to_nice_yaml(sort_keys=False) }}\n"
+
+    # ==========================================
+    # FINAL MESSAGE
+    # ==========================================
+
+    - name: Show report location
+      ansible.builtin.debug:
+        msg: "Saved output/{{ ansible_host }}_ipv6_mld_snooping_get.yml"

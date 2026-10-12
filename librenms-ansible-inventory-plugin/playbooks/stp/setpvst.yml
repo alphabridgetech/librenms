@@ -1,0 +1,821 @@
+---
+# ============================================================
+# PVST CONFIGURATION - SET
+# ============================================================
+# Configures:
+#   1. STP Mode      = PVST
+#   2. BPDU Terminal = Enable / Disable
+#   3. Loop Guard    = Enable / Disable
+#ansible-playbook -i inventory/192.168.200.245.yml playbooks/stp/setpvst.yml -e "protocol_type=PVST bpdu_terminal=Enable loop_guard=Enable"
+# ============================================================
+
+- name: PVST Configuration - SET
+  hosts: alphabridge_devices
+  gather_facts: false
+
+  vars:
+
+    # --------------------------------------------------------
+    # DEVICE CONNECTION VARIABLES
+    # --------------------------------------------------------
+    # Read username/password from Ansible inventory.
+    # If your inventory already defines ansible_user and
+    # ansible_password, these values will be used.
+    # --------------------------------------------------------
+
+    device_ip: "{{ ansible_host }}"
+    device_user: "{{ ansible_user }}"
+    device_password: "{{ ansible_password }}"
+
+    # --------------------------------------------------------
+    # LOCAL DIRECTORIES
+    # --------------------------------------------------------
+
+    output_dir: "{{ playbook_dir }}/../../output"
+    temp_dir: "{{ playbook_dir }}/../../tmp"
+
+    ssh_port: 22
+
+  tasks:
+
+    # ========================================================
+    # VALIDATE PARAMETERS
+    # ========================================================
+
+    - name: Validate PVST parameters
+      ansible.builtin.assert:
+        that:
+          - protocol_type is defined
+          - protocol_type | upper == "PVST"
+          - bpdu_terminal is defined
+          - bpdu_terminal | lower in ['enable', 'disable']
+          - loop_guard is defined
+          - loop_guard | lower in ['enable', 'disable']
+          - device_user is defined
+          - device_password is defined
+        fail_msg: >
+          Invalid PVST parameters or device credentials.
+          Required:
+          protocol_type=PVST,
+          bpdu_terminal=Enable|Disable,
+          loop_guard=Enable|Disable,
+          ansible_user,
+          ansible_password
+        success_msg: "All PVST parameters are valid."
+
+    # ========================================================
+    # CREATE OUTPUT DIRECTORY
+    # ========================================================
+
+    - name: Create output directory
+      ansible.builtin.file:
+        path: "{{ output_dir }}"
+        state: directory
+        mode: "0755"
+      delegate_to: localhost
+
+    # ========================================================
+    # CREATE TEMPORARY DIRECTORY
+    # ========================================================
+
+    - name: Create temporary directory
+      ansible.builtin.file:
+        path: "{{ temp_dir }}"
+        state: directory
+        mode: "0755"
+      delegate_to: localhost
+
+    # ========================================================
+    # CREATE PARAMIKO HELPER
+    # ========================================================
+
+    - name: Create PVST Paramiko helper
+      ansible.builtin.copy:
+        dest: "{{ temp_dir }}/set_pvst_paramiko.py"
+        mode: "0755"
+        content: |
+          #!/usr/bin/env python3
+
+          import sys
+          import time
+          import re
+          import paramiko
+
+          HOST = sys.argv[1]
+          USER = sys.argv[2]
+          PASSWORD = sys.argv[3]
+          ACTION = sys.argv[4]
+
+          PORT = 22
+
+          # ====================================================
+          # RESULT
+          # ====================================================
+
+          def print_result(status, output="", error=""):
+              print("RESULT_START")
+              print(f"STATUS={status}")
+              print("OUTPUT_START")
+              print(output)
+              print("OUTPUT_END")
+              print("ERROR_START")
+              print(error)
+              print("ERROR_END")
+              print("RESULT_END")
+
+          # ====================================================
+          # CONNECT WITH RETRY
+          # ====================================================
+
+          def connect_device(retries=30, retry_delay=3):
+
+              last_error = ""
+
+              for attempt in range(1, retries + 1):
+
+                  client = None
+
+                  try:
+
+                      client = paramiko.SSHClient()
+
+                      client.set_missing_host_key_policy(
+                          paramiko.AutoAddPolicy()
+                      )
+
+                      client.connect(
+                          hostname=HOST,
+                          port=PORT,
+                          username=USER,
+                          password=PASSWORD,
+                          timeout=15,
+                          banner_timeout=30,
+                          auth_timeout=15,
+                          look_for_keys=False,
+                          allow_agent=False
+                      )
+
+                      channel = client.invoke_shell(
+                          term="vt100",
+                          width=200,
+                          height=1000
+                      )
+
+                      channel.settimeout(2)
+
+                      time.sleep(1)
+
+                      return client, channel
+
+                  except Exception as exc:
+
+                      last_error = str(exc)
+
+                      if client:
+
+                          try:
+                              client.close()
+                          except Exception:
+                              pass
+
+                      if attempt < retries:
+                          time.sleep(retry_delay)
+
+              raise Exception(last_error)
+
+          # ====================================================
+          # READ DATA
+          # ====================================================
+
+          def read_data(channel, wait_time=1):
+
+              output = ""
+
+              time.sleep(wait_time)
+
+              while True:
+
+                  try:
+
+                      if channel.recv_ready():
+
+                          data = channel.recv(65535).decode(
+                              "utf-8",
+                              errors="ignore"
+                          )
+
+                          output += data
+
+                      else:
+                          break
+
+                  except Exception:
+                      break
+
+              return output
+
+          # ====================================================
+          # WAIT FOR PROMPT
+          # ====================================================
+
+          def wait_prompt(channel, timeout=8):
+
+              output = ""
+
+              start = time.time()
+
+              prompt_regex = re.compile(
+                  r"[A-Za-z0-9_.:/-]+(?:_config)?[>#]\s*$"
+              )
+
+              while time.time() - start < timeout:
+
+                  try:
+
+                      if channel.recv_ready():
+
+                          data = channel.recv(65535).decode(
+                              "utf-8",
+                              errors="ignore"
+                          )
+
+                          output += data
+
+                          lines = output.splitlines()
+
+                          for line in reversed(lines):
+
+                              line = line.strip()
+
+                              if prompt_regex.search(line):
+
+                                  return output
+
+                      else:
+
+                          time.sleep(0.2)
+
+                  except Exception:
+
+                      break
+
+              return output
+
+          # ====================================================
+          # SEND COMMAND
+          # ====================================================
+
+          def send_command(channel, command, wait=1):
+
+              channel.send(command + "\n")
+
+              time.sleep(wait)
+
+              return wait_prompt(
+                  channel,
+                  timeout=8
+              )
+
+          # ====================================================
+          # CHECK COMMAND ERROR
+          # ====================================================
+
+          def has_error(output):
+
+              error_patterns = [
+                  "Too many parameters",
+                  "Incomplete command",
+                  "Unknown command",
+                  "Invalid",
+                  "Error",
+                  "Failed",
+                  "Failure",
+                  "Unrecognized",
+                  "Ambiguous"
+              ]
+
+              lower_output = output.lower()
+
+              for pattern in error_patterns:
+
+                  if pattern.lower() in lower_output:
+                      return True
+
+              return False
+
+          # ====================================================
+          # ENTER CONFIGURATION MODE
+          # ====================================================
+
+          def enter_config(channel):
+
+              # Enter privileged mode.
+              send_command(
+                  channel,
+                  "enable",
+                  1
+              )
+
+              # Do NOT use:
+              # terminal length 0
+              #
+              # This command is unsupported on some ABOSS
+              # switches.
+
+              output = send_command(
+                  channel,
+                  "config",
+                  1
+              )
+
+              return output
+
+          # ====================================================
+          # CONFIGURE SINGLE COMMAND
+          # ====================================================
+
+          def configure_command(command):
+
+              client = None
+
+              try:
+
+                  client, channel = connect_device(
+                      retries=30,
+                      retry_delay=3
+                  )
+
+                  enter_config(channel)
+
+                  output = send_command(
+                      channel,
+                      command,
+                      2
+                  )
+
+                  if has_error(output):
+
+                      print_result(
+                          "FAILED",
+                          output,
+                          f"Command failed: {command}"
+                      )
+
+                      client.close()
+
+                      return 1
+
+                  print_result(
+                      "SUCCESS",
+                      output,
+                      ""
+                  )
+
+                  client.close()
+
+                  return 0
+
+              except Exception as exc:
+
+                  if client:
+
+                      try:
+                          client.close()
+                      except Exception:
+                          pass
+
+                  print_result(
+                      "FAILED",
+                      "",
+                      str(exc)
+                  )
+
+                  return 1
+
+          # ====================================================
+          # SAVE CONFIGURATION
+          # ====================================================
+
+          def save_configuration():
+
+              client = None
+
+              try:
+
+                  client, channel = connect_device(
+                      retries=30,
+                      retry_delay=3
+                  )
+
+                  send_command(
+                      channel,
+                      "enable",
+                      1
+                  )
+
+                  output = send_command(
+                      channel,
+                      "write",
+                      3
+                  )
+
+                  if (
+                      "OK!" in output
+                      or "Saving current configuration" in output
+                      or "success" in output.lower()
+                  ):
+
+                      print_result(
+                          "SUCCESS",
+                          output,
+                          ""
+                      )
+
+                      client.close()
+
+                      return 0
+
+                  print_result(
+                      "FAILED",
+                      output,
+                      "Configuration save was not confirmed."
+                  )
+
+                  client.close()
+
+                  return 1
+
+              except Exception as exc:
+
+                  if client:
+
+                      try:
+                          client.close()
+                      except Exception:
+                          pass
+
+                  print_result(
+                      "FAILED",
+                      "",
+                      str(exc)
+                  )
+
+                  return 1
+
+          # ====================================================
+          # VERIFY CONFIGURATION
+          # ====================================================
+
+          def verify_configuration():
+
+              client = None
+
+              try:
+
+                  client, channel = connect_device(
+                      retries=30,
+                      retry_delay=3
+                  )
+
+                  send_command(
+                      channel,
+                      "enable",
+                      1
+                  )
+
+                  output = send_command(
+                      channel,
+                      "show spanning-tree",
+                      3
+                  )
+
+                  if has_error(output):
+
+                      print_result(
+                          "FAILED",
+                          output,
+                          "show spanning-tree returned an error."
+                      )
+
+                      client.close()
+
+                      return 1
+
+                  print_result(
+                      "SUCCESS",
+                      output,
+                      ""
+                  )
+
+                  client.close()
+
+                  return 0
+
+              except Exception as exc:
+
+                  if client:
+
+                      try:
+                          client.close()
+                      except Exception:
+                          pass
+
+                  print_result(
+                      "FAILED",
+                      "",
+                      str(exc)
+                  )
+
+                  return 1
+
+          # ====================================================
+          # MAIN
+          # ====================================================
+
+          try:
+
+              # ------------------------------------------------
+              # PVST MODE
+              # ------------------------------------------------
+
+              if ACTION == "protocol":
+
+                  sys.exit(
+                      configure_command(
+                          "spanning-tree mode pvst"
+                      )
+                  )
+
+              # ------------------------------------------------
+              # BPDU TERMINAL ENABLE
+              # ------------------------------------------------
+
+              elif ACTION == "bpdu-enable":
+
+                  sys.exit(
+                      configure_command(
+                          "spanning-tree bpdu-terminal"
+                      )
+                  )
+
+              # ------------------------------------------------
+              # BPDU TERMINAL DISABLE
+              # ------------------------------------------------
+
+              elif ACTION == "bpdu-disable":
+
+                  sys.exit(
+                      configure_command(
+                          "no spanning-tree bpdu-terminal"
+                      )
+                  )
+
+              # ------------------------------------------------
+              # LOOP GUARD ENABLE
+              # ------------------------------------------------
+
+              elif ACTION == "loop-enable":
+
+                  sys.exit(
+                      configure_command(
+                          "spanning-tree loopguard default"
+                      )
+                  )
+
+              # ------------------------------------------------
+              # LOOP GUARD DISABLE
+              # ------------------------------------------------
+
+              elif ACTION == "loop-disable":
+
+                  sys.exit(
+                      configure_command(
+                          "no spanning-tree loopguard default"
+                      )
+                  )
+
+              # ------------------------------------------------
+              # SAVE
+              # ------------------------------------------------
+
+              elif ACTION == "save":
+
+                  sys.exit(
+                      save_configuration()
+                  )
+
+              # ------------------------------------------------
+              # VERIFY
+              # ------------------------------------------------
+
+              elif ACTION == "verify":
+
+                  sys.exit(
+                      verify_configuration()
+                  )
+
+              else:
+
+                  print_result(
+                      "FAILED",
+                      "",
+                      f"Unknown action: {ACTION}"
+                  )
+
+                  sys.exit(1)
+
+          except Exception as exc:
+
+              print_result(
+                  "FAILED",
+                  "",
+                  str(exc)
+              )
+
+              sys.exit(1)
+
+    # ========================================================
+    # CHECK SSH
+    # ========================================================
+
+    - name: Check SSH before PVST configuration
+      ansible.builtin.wait_for:
+        host: "{{ device_ip }}"
+        port: "{{ ssh_port }}"
+        state: started
+        timeout: 30
+        sleep: 2
+      delegate_to: localhost
+
+    # ========================================================
+    # SESSION 1 - PVST MODE
+    # ========================================================
+
+    - name: Session 1 - Change STP mode to PVST
+      ansible.builtin.command:
+        argv:
+          - python3
+          - "{{ temp_dir }}/set_pvst_paramiko.py"
+          - "{{ device_ip }}"
+          - "{{ device_user }}"
+          - "{{ device_password }}"
+          - "protocol"
+      register: pvst_protocol
+      changed_when: true
+      failed_when: pvst_protocol.rc != 0
+
+    - name: Display PVST mode change result
+      ansible.builtin.debug:
+        msg:
+          - "Output: {{ pvst_protocol.stdout }}"
+          - "Error: {{ pvst_protocol.stderr }}"
+
+    # ========================================================
+    # RECONNECT AFTER PVST MODE CHANGE
+    # ========================================================
+
+    - name: Wait for device SSH after PVST mode change
+      ansible.builtin.wait_for:
+        host: "{{ device_ip }}"
+        port: "{{ ssh_port }}"
+        state: started
+        timeout: 180
+        sleep: 5
+      delegate_to: localhost
+
+    - name: Wait for switch CLI to stabilize
+      ansible.builtin.pause:
+        seconds: 60
+
+    # ========================================================
+    # SESSION 2 - BPDU TERMINAL
+    # ========================================================
+
+    - name: Session 2 - Configure BPDU terminal
+      ansible.builtin.command:
+        argv:
+          - python3
+          - "{{ temp_dir }}/set_pvst_paramiko.py"
+          - "{{ device_ip }}"
+          - "{{ device_user }}"
+          - "{{ device_password }}"
+          - "{{ 'bpdu-enable' if bpdu_terminal | lower == 'enable' else 'bpdu-disable' }}"
+      register: pvst_bpdu
+      changed_when: true
+      failed_when: pvst_bpdu.rc != 0
+
+    - name: Display BPDU terminal result
+      ansible.builtin.debug:
+        msg:
+          - "Output: {{ pvst_bpdu.stdout }}"
+          - "Error: {{ pvst_bpdu.stderr }}"
+
+    # ========================================================
+    # SESSION 3 - LOOP GUARD
+    # ========================================================
+
+    - name: Session 3 - Configure Loop Guard
+      ansible.builtin.command:
+        argv:
+          - python3
+          - "{{ temp_dir }}/set_pvst_paramiko.py"
+          - "{{ device_ip }}"
+          - "{{ device_user }}"
+          - "{{ device_password }}"
+          - "{{ 'loop-enable' if loop_guard | lower == 'enable' else 'loop-disable' }}"
+      register: pvst_loopguard
+      changed_when: true
+      failed_when: pvst_loopguard.rc != 0
+
+    - name: Display Loop Guard result
+      ansible.builtin.debug:
+        msg:
+          - "Output: {{ pvst_loopguard.stdout }}"
+          - "Error: {{ pvst_loopguard.stderr }}"
+
+    # ========================================================
+    # WAIT BEFORE SAVE
+    # ========================================================
+
+    - name: Wait for switch CLI to stabilize before save
+      ansible.builtin.pause:
+        seconds: 5
+
+    # ========================================================
+    # SESSION 4 - SAVE
+    # ========================================================
+
+    - name: Session 4 - Save PVST configuration
+      ansible.builtin.command:
+        argv:
+          - python3
+          - "{{ temp_dir }}/set_pvst_paramiko.py"
+          - "{{ device_ip }}"
+          - "{{ device_user }}"
+          - "{{ device_password }}"
+          - "save"
+      register: pvst_save
+      changed_when: true
+      failed_when: pvst_save.rc != 0
+
+    - name: Display save result
+      ansible.builtin.debug:
+        msg:
+          - "Output: {{ pvst_save.stdout }}"
+          - "Error: {{ pvst_save.stderr }}"
+
+    # ========================================================
+    # SESSION 5 - VERIFY
+    # ========================================================
+
+    - name: Session 5 - Verify PVST configuration
+      ansible.builtin.command:
+        argv:
+          - python3
+          - "{{ temp_dir }}/set_pvst_paramiko.py"
+          - "{{ device_ip }}"
+          - "{{ device_user }}"
+          - "{{ device_password }}"
+          - "verify"
+      register: pvst_verify
+      changed_when: false
+      failed_when: pvst_verify.rc != 0
+
+    - name: Display PVST verification
+      ansible.builtin.debug:
+        msg:
+          - "Verification Output: {{ pvst_verify.stdout }}"
+          - "Verification Error: {{ pvst_verify.stderr }}"
+
+    # ========================================================
+    # FINAL OUTPUT FILE
+    # ========================================================
+
+    - name: Create PVST result file
+      ansible.builtin.copy:
+        dest: "{{ output_dir }}/{{ device_ip }}_pvst.yml"
+        mode: "0644"
+        content: |
+          device_ip: {{ device_ip }}
+          feature: pvst
+          status: SUCCESS
+          protocol_type: {{ protocol_type }}
+          bpdu_terminal: {{ bpdu_terminal }}
+          loop_guard: {{ loop_guard }}
+          message: PVST configuration completed successfully.
+      delegate_to: localhost
+
+    # ========================================================
+    # DISPLAY FINAL RESULT
+    # ========================================================
+
+    - name: Display final PVST result
+      ansible.builtin.debug:
+        msg:
+          status: SUCCESS
+          device_ip: "{{ device_ip }}"
+          feature: pvst
+          protocol_type: "{{ protocol_type }}"
+          bpdu_terminal: "{{ bpdu_terminal }}"
+          loop_guard: "{{ loop_guard }}"
+          output_file: "{{ output_dir }}/{{ device_ip }}_pvst.yml"

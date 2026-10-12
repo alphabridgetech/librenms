@@ -1,0 +1,490 @@
+# ==========================================
+# dhcp_vlan_config_get.yml
+# Created on Sept 19, 2026 by Vikash Kumar (vikash.kumar@alphabrige.tech).
+#
+# Copyright (c), ALPHA BRIDGE, Inc.
+# 357D, Udyog Vihar Industrial Area Phase VI, Sector 37, Gurugram, Haryana.
+#
+# All rights reserved.
+#
+# This software is the confidential and proprietary  information of
+# ALPHA BRIDGE, Inc. ("Confidential Information"). You shall not disclose
+# such Confidential Information and shall use it only in accordance with the
+# terms of the license agreement you entered into with
+# ALPHA BRIDGE.
+#
+# =============================================================================
+# Playbook Name : DHCP VLAN Configuration (Get)
+# =============================================================================
+#
+# Description:
+#   Read "show running-config non-interface" from an AlphaBridge switch and
+#   retrieve the three VLAN fields displayed on the DHCP Snooping VLAN GUI.
+#   Multiple configured lines are combined in their original order.
+#   An unconfigured field is returned as an empty string (blank GUI field).
+#
+# Command:
+#   show running-config non-interface
+#
+# Example:
+#   ansible-playbook -i inventory/192.168.2.245.yml \
+#     playbooks/dhcp_snooping/dhcp_vlan_config_get.yml
+#
+# Output:
+#   output/<switch_ip>_dhcp_vlan_config_get.yml
+# =============================================================================
+
+- name: Get DHCP snooping VLAN configuration
+  hosts: alphabridge_devices
+  gather_facts: false
+
+  vars:
+    project_root: "{{ playbook_dir }}/../.."
+    output_dir: "{{ project_root }}/output"
+    tmp_dir: "{{ project_root }}/tmp"
+
+  pre_tasks:
+    - name: Ensure helper and report directories exist
+      ansible.builtin.file:
+        path: "{{ item }}"
+        state: directory
+        mode: '0755'
+      loop:
+        - "{{ tmp_dir }}"
+        - "{{ output_dir }}"
+
+  tasks:
+
+    # ==========================================
+    # CREATE PYTHON SSH SCRIPT
+    # ==========================================
+
+    - name: Create DHCP VLAN configuration SSH helper
+      ansible.builtin.copy:
+        dest: "{{ tmp_dir }}/dhcp_vlan_config_get_exec.py"
+        mode: '0700'
+        content: |
+          #!/usr/bin/env python3
+
+          import json
+          import os
+          import re
+          import sys
+          import time
+
+          import paramiko
+
+          HOST = os.environ["SWITCH_HOST"]
+          USER = os.environ["SWITCH_USER"]
+          PASSWORD = os.environ["SWITCH_PASSWORD"]
+
+          # ==========================================
+          # REGULAR EXPRESSIONS
+          # ==========================================
+
+          ANSI_RE = re.compile(
+              r'\x1b(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])'
+          )
+
+          PROMPT_RE = re.compile(
+              r'(?m)^[^\r\n\s]+[>#]\s*\Z'
+          )
+
+          ERROR_RE = re.compile(
+              r'(?im)^\s*(?:%\s*(?:err(?:or)?|invalid|unknown|'
+              r'unrecognized|incomplete)\b|error:|invalid (?:input|command)'
+              r'|unknown command)'
+          )
+
+          # ==========================================
+          # GUI FIELD MAPPING
+          # ==========================================
+
+          VLAN_FIELDS = (
+              (
+                  "Enable DHCP Snooping VLAN",
+                  re.compile(
+                      r'^ip\s+dhcp-relay\s+snooping\s+vlan\s+(.+?)\s*$',
+                      re.IGNORECASE
+                  ),
+              ),
+              (
+                  "Enable Dynamic ARP Inspection VLAN",
+                  re.compile(
+                      r'^ip\s+arp\s+inspection\s+vlan\s+(.+?)\s*$',
+                      re.IGNORECASE
+                  ),
+              ),
+              (
+                  "Enable Verify Source VLAN",
+                  re.compile(
+                      r'^ip\s+verify\s+source\s+vlan\s+(.+?)\s*$',
+                      re.IGNORECASE
+                  ),
+              ),
+          )
+
+          # ==========================================
+          # READ OUTPUT UNTIL SWITCH PROMPT
+          # ==========================================
+
+          def read_until_prompt(shell, timeout=60):
+
+              output = ""
+
+              deadline = time.monotonic() + timeout
+
+              while time.monotonic() < deadline:
+
+                  if shell.recv_ready():
+
+                      output += shell.recv(65535).decode(
+                          "utf-8",
+                          errors="replace"
+                      )
+
+                      cleaned = ANSI_RE.sub(
+                          "",
+                          output
+                      ).replace("\r", "")
+
+                      if PROMPT_RE.search(cleaned):
+                          return cleaned
+
+                  else:
+                      time.sleep(0.1)
+
+              raise TimeoutError(
+                  "Timed out waiting for switch prompt; "
+                  "running-config might be incomplete"
+              )
+
+          # ==========================================
+          # EXECUTE CLI COMMAND
+          # ==========================================
+
+          def run_command(shell, command, timeout=60):
+
+              shell.send(command + "\n")
+
+              output = read_until_prompt(
+                  shell,
+                  timeout=timeout
+              )
+
+              if ERROR_RE.search(output):
+
+                  raise RuntimeError(
+                      "Switch rejected command: " + command
+                  )
+
+              return output
+
+          # ==========================================
+          # PARSE DHCP VLAN CONFIGURATION
+          # ==========================================
+
+          def parse_vlan_config(output):
+
+              # Validate configuration output
+              if not re.search(
+                  r'(?im)^\s*!version\s+\S+',
+                  output
+              ):
+
+                  raise ValueError(
+                      "Unrecognized running-config output: "
+                      "!version missing"
+                  )
+
+              results = {
+                  name: []
+                  for name, _ in VLAN_FIELDS
+              }
+
+              # ==========================================
+              # READ CONFIGURATION LINE BY LINE
+              # ==========================================
+
+              for raw_line in output.splitlines():
+
+                  line = raw_line.strip()
+
+                  for name, pattern in VLAN_FIELDS:
+
+                      match = pattern.fullmatch(line)
+
+                      if match is None:
+                          continue
+
+                      # ==================================
+                      # EXTRACT VLAN IDs
+                      #
+                      # Example:
+                      # ip dhcp-relay snooping vlan  20
+                      #
+                      # Result: 20
+                      # ==================================
+
+                      vlan_ids = re.sub(
+                          r'\s+',
+                          '',
+                          match.group(1)
+                      )
+
+                      # ==================================
+                      # VALIDATE VLAN LIST
+                      #
+                      # Supports:
+                      # 20
+                      # 10,20,30
+                      # 10-20
+                      # 10-20,30
+                      # ==================================
+
+                      if not re.fullmatch(
+                          r'\d+(?:-\d+)?(?:,\d+(?:-\d+)?)*',
+                          vlan_ids
+                      ):
+
+                          raise ValueError(
+                              "Unexpected VLAN list for " + name
+                          )
+
+                      # ==================================
+                      # PREVENT DUPLICATE ENTRIES
+                      # ==================================
+
+                      if vlan_ids not in results[name]:
+
+                          results[name].append(
+                              vlan_ids
+                          )
+
+                      break
+
+              # ==========================================
+              # RETURN GUI FIELD VALUES
+              #
+              # Missing command = empty string
+              # ==========================================
+
+              return {
+
+                  name: ",".join(results[name])
+
+                  for name, _ in VLAN_FIELDS
+
+              }
+
+          # ==========================================
+          # SSH INITIALIZATION
+          # ==========================================
+
+          ssh = None
+
+          shell = None
+
+          try:
+
+              ssh = paramiko.SSHClient()
+
+              ssh.set_missing_host_key_policy(
+                  paramiko.AutoAddPolicy()
+              )
+
+              # ==========================================
+              # CONNECT TO SWITCH
+              # ==========================================
+
+              ssh.connect(
+                  HOST,
+                  username=USER,
+                  password=PASSWORD,
+                  look_for_keys=False,
+                  allow_agent=False,
+                  timeout=10,
+                  auth_timeout=10,
+                  banner_timeout=10
+              )
+
+              shell = ssh.invoke_shell()
+
+              # ==========================================
+              # INITIAL PROMPT
+              # ==========================================
+
+              initial = read_until_prompt(
+                  shell,
+                  timeout=10
+              )
+
+              # ==========================================
+              # ENABLE MODE
+              # ==========================================
+
+              if initial.rstrip().endswith(">"):
+
+                  enabled_output = run_command(
+                      shell,
+                      "enable",
+                      timeout=10
+                  )
+
+                  if not enabled_output.rstrip().endswith("#"):
+
+                      raise RuntimeError(
+                          "Could not enter privileged EXEC mode"
+                      )
+
+              elif not initial.rstrip().endswith("#"):
+
+                  raise RuntimeError(
+                      "Unrecognized switch prompt"
+                  )
+
+              # ==========================================
+              # DISABLE PAGING
+              # ==========================================
+
+              run_command(
+                  shell,
+                  "terminal length 0",
+                  timeout=10
+              )
+
+              # ==========================================
+              # SHOW RUNNING CONFIG NON-INTERFACE
+              # ==========================================
+
+              config_output = run_command(
+                  shell,
+                  "show running-config non-interface",
+                  timeout=60
+              )
+
+              # ==========================================
+              # PARSE CONFIGURATION
+              # ==========================================
+
+              result = {
+                  "ip": HOST
+              }
+
+              result.update(
+                  parse_vlan_config(config_output)
+              )
+
+              result["status"] = "success"
+
+              # ==========================================
+              # RETURN JSON
+              # ==========================================
+
+              print(json.dumps(result))
+
+          # ==========================================
+          # EXCEPTION HANDLING
+          # ==========================================
+
+          except Exception as exc:
+
+              print(json.dumps({
+
+                  "ip": HOST,
+
+                  "status": "failed",
+
+                  "error": str(exc)
+
+              }))
+
+              sys.exit(1)
+
+          # ==========================================
+          # CLOSE SSH CONNECTION
+          # ==========================================
+
+          finally:
+
+              if shell is not None:
+                  shell.close()
+
+              if ssh is not None:
+                  ssh.close()
+
+    # ==========================================
+    # EXECUTE PYTHON SCRIPT
+    # ==========================================
+
+    - name: Execute DHCP VLAN configuration helper
+      ansible.builtin.command:
+        argv:
+          - "{{ project_root }}/bin/python3"
+          - "{{ tmp_dir }}/dhcp_vlan_config_get_exec.py"
+      environment:
+        SWITCH_HOST: "{{ ansible_host }}"
+        SWITCH_USER: "{{ ansible_user }}"
+        SWITCH_PASSWORD: "{{ ansible_password }}"
+      register: dhcp_vlan_raw
+      changed_when: false
+      failed_when: false
+      no_log: true
+
+    # ==========================================
+    # VALIDATE PYTHON OUTPUT
+    # ==========================================
+
+    - name: Check that the helper returned JSON
+      ansible.builtin.assert:
+        that:
+          - dhcp_vlan_raw.stdout | trim | length > 0
+        fail_msg: >-
+          DHCP VLAN helper returned no JSON.
+          Check Python interpreter, Paramiko installation
+          and SSH connectivity securely.
+
+    # ==========================================
+    # CONVERT JSON RESULT
+    # ==========================================
+
+    - name: Convert DHCP VLAN result to JSON
+      ansible.builtin.set_fact:
+        dhcp_vlan_result: "{{ dhcp_vlan_raw.stdout | from_json }}"
+
+    # ==========================================
+    # FAIL IF COMMAND FAILED
+    # ==========================================
+
+    - name: Fail if DHCP VLAN retrieval failed
+      ansible.builtin.fail:
+        msg: "{{ dhcp_vlan_result.error | default('Helper exited with a nonzero status') }}"
+      when: dhcp_vlan_result.status != 'success' or dhcp_vlan_raw.rc != 0
+
+    # ==========================================
+    # DISPLAY RESULT
+    # ==========================================
+
+    - name: Display DHCP VLAN configuration
+      ansible.builtin.debug:
+        var: dhcp_vlan_result
+
+    # ==========================================
+    # SAVE RESULT
+    # ==========================================
+
+    - name: Save DHCP VLAN configuration result
+      ansible.builtin.copy:
+        dest: "{{ output_dir }}/{{ ansible_host }}_dhcp_vlan_config_get.yml"
+        mode: '0644'
+        content: "{{ dhcp_vlan_result | to_nice_yaml(sort_keys=False) }}\n"
+
+    # ==========================================
+    # FINAL MESSAGE
+    # ==========================================
+
+    - name: Display result file
+      ansible.builtin.debug:
+        msg: >-
+          DHCP VLAN configuration retrieved from {{ ansible_host }}.
+          Saved to output/{{ ansible_host }}_dhcp_vlan_config_get.yml

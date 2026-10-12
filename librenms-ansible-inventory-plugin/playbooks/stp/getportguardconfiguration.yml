@@ -1,0 +1,744 @@
+---
+# ============================================================================
+# File        : getportguardconfiguration.yml
+# Feature     : Port Guard Configuration - GET
+#
+# Command:
+#   show running-config
+#
+# GUI:
+#   Port Guard Configuration
+#
+# Fields:
+#   - Port
+#   - BPDU Guard
+#   - Guard
+#
+# Supported:
+#   - GigaEthernet
+#   - TGigaEthernet
+#   - Port-aggregator
+#
+# Output:
+#   /opt/librenms/librenms-ansible-inventory-plugin/output/<device_ip>_port_guard_configuration.yml
+# ============================================================================
+
+- name: Port Guard Configuration - GET
+  hosts: alphabridge_devices
+  gather_facts: false
+
+  vars:
+
+    output_dir: "/opt/librenms/librenms-ansible-inventory-plugin/output"
+    temp_dir: "/opt/librenms/librenms-ansible-inventory-plugin/tmp"
+
+    script_path: "{{ temp_dir }}/{{ ansible_host }}_port_guard_get.py"
+    output_file: "{{ output_dir }}/{{ ansible_host }}_port_guard_configuration.yml"
+
+    python_bin: "/opt/librenms/librenms-ansible-inventory-plugin/bin/python3"
+
+    ssh_username: "{{ ansible_user }}"
+    ssh_password: "{{ ansible_password }}"
+
+  tasks:
+
+    # ========================================================================
+    # Create directories
+    # ========================================================================
+
+    - name: Create output directory
+      ansible.builtin.file:
+        path: "{{ output_dir }}"
+        state: directory
+        mode: "0755"
+      delegate_to: localhost
+
+    - name: Create temporary directory
+      ansible.builtin.file:
+        path: "{{ temp_dir }}"
+        state: directory
+        mode: "0755"
+      delegate_to: localhost
+
+    # ========================================================================
+    # Create Python GET script
+    # ========================================================================
+
+    - name: Create Port Guard GET Python script
+      ansible.builtin.copy:
+        dest: "{{ script_path }}"
+        mode: "0755"
+        content: |
+          #!/usr/bin/env python3
+
+          import paramiko
+          import re
+          import sys
+          import time
+          import yaml
+
+
+          HOST = "{{ ansible_host }}"
+          USERNAME = "{{ ssh_username }}"
+          PASSWORD = "{{ ssh_password }}"
+
+          OUTPUT_FILE = "{{ output_file }}"
+          RAW_CONFIG_FILE = "{{ temp_dir }}/{{ ansible_host }}_port_guard_running_config.txt"
+
+          SSH_PORT = 22
+
+
+          # ==================================================================
+          # Supported interface types
+          # ==================================================================
+
+          INTERFACE_PATTERN = re.compile(
+              r"^\s*interface\s+"
+              r"(GigaEthernet\d+/\d+|"
+              r"TGigaEthernet\d+/\d+|"
+              r"Port-aggregator\d+)"
+              r"\s*$",
+              re.IGNORECASE
+          )
+
+
+          # ==================================================================
+          # Convert device interface name to GUI name
+          # ==================================================================
+
+          def gui_port_name(interface_name):
+
+              name = interface_name.strip()
+
+              match = re.match(
+                  r"^GigaEthernet(\d+/\d+)$",
+                  name,
+                  re.IGNORECASE
+              )
+
+              if match:
+                  return "g" + match.group(1)
+
+              match = re.match(
+                  r"^TGigaEthernet(\d+/\d+)$",
+                  name,
+                  re.IGNORECASE
+              )
+
+              if match:
+                  return "tg" + match.group(1)
+
+              match = re.match(
+                  r"^Port-aggregator(\d+)$",
+                  name,
+                  re.IGNORECASE
+              )
+
+              if match:
+                  return "p" + match.group(1)
+
+              return name
+
+
+          # ==================================================================
+          # Sort interfaces dynamically
+          # ==================================================================
+
+          def interface_sort_key(item):
+
+              name = item["device_interface"]
+
+              match = re.match(
+                  r"^GigaEthernet(\d+)/(\d+)$",
+                  name,
+                  re.IGNORECASE
+              )
+
+              if match:
+                  return (
+                      1,
+                      int(match.group(1)),
+                      int(match.group(2))
+                  )
+
+              match = re.match(
+                  r"^TGigaEthernet(\d+)/(\d+)$",
+                  name,
+                  re.IGNORECASE
+              )
+
+              if match:
+                  return (
+                      2,
+                      int(match.group(1)),
+                      int(match.group(2))
+                  )
+
+              match = re.match(
+                  r"^Port-aggregator(\d+)$",
+                  name,
+                  re.IGNORECASE
+              )
+
+              if match:
+                  return (
+                      3,
+                      0,
+                      int(match.group(1))
+                  )
+
+              return (99, 0, 0)
+
+
+          # ==================================================================
+          # Read command output
+          # ==================================================================
+
+          def read_command_output(shell, wait_time=1.5):
+
+              output = ""
+
+              end_time = time.time() + 15
+
+              while time.time() < end_time:
+
+                  if shell.recv_ready():
+
+                      data = shell.recv(65535).decode(
+                          "utf-8",
+                          errors="ignore"
+                      )
+
+                      output += data
+
+                      if "--More--" in data or "-- More --" in data:
+                          shell.send(" ")
+
+                      if re.search(
+                          r"[^\r\n]+[>#]\s*$",
+                          output
+                      ):
+                          time.sleep(wait_time)
+
+                          if not shell.recv_ready():
+                              break
+
+                  else:
+
+                      if output:
+                          time.sleep(0.3)
+
+                          if not shell.recv_ready():
+                              break
+                      else:
+                          time.sleep(0.2)
+
+              return output
+
+
+          # ==================================================================
+          # Send command
+          # ==================================================================
+
+          def send_command(shell, command, wait_time=1.5):
+
+              shell.send(command + "\n")
+
+              return read_command_output(
+                  shell,
+                  wait_time
+              )
+
+
+          # ==================================================================
+          # Clean command output
+          # ==================================================================
+
+          def clean_output(output):
+
+              result = []
+
+              for line in output.splitlines():
+
+                  line = line.replace("--More--", "")
+                  line = line.replace("-- More --", "")
+
+                  result.append(line.rstrip())
+
+              return "\n".join(result)
+
+
+          # ==================================================================
+          # Parse Port Guard configuration
+          # ==================================================================
+
+          def parse_configuration(config):
+
+              interfaces = []
+
+              current_interface = None
+              current_lines = []
+
+
+              # --------------------------------------------------------------
+              # Store interface
+              # --------------------------------------------------------------
+
+              def store_interface():
+
+                  nonlocal current_interface
+                  nonlocal current_lines
+
+                  if not current_interface:
+                      return
+
+                  interface_name = current_interface
+
+                  port_name = gui_port_name(
+                      interface_name
+                  )
+
+                  # ----------------------------------------------------------
+                  # GUI defaults
+                  # ----------------------------------------------------------
+
+                  bpdu_guard = "Disable"
+                  guard = "Disable"
+
+
+                  # ----------------------------------------------------------
+                  # Parse interface commands
+                  # ----------------------------------------------------------
+
+                  for raw_line in current_lines:
+
+                      line = raw_line.strip()
+
+
+                      # ======================================================
+                      # BPDU Guard
+                      # ======================================================
+
+                      if re.match(
+                          r"^spanning-tree\s+bpduguard\s+enable\s*$",
+                          line,
+                          re.IGNORECASE
+                      ):
+
+                          bpdu_guard = "Enable"
+
+                      elif re.match(
+                          r"^spanning-tree\s+bpduguard\s+disable\s*$",
+                          line,
+                          re.IGNORECASE
+                      ):
+
+                          bpdu_guard = "Disable"
+
+                      elif re.match(
+                          r"^no\s+spanning-tree\s+bpduguard\s*$",
+                          line,
+                          re.IGNORECASE
+                      ):
+
+                          bpdu_guard = "Disable"
+
+
+                      # ======================================================
+                      # Guard
+                      # ======================================================
+
+                      if re.match(
+                          r"^spanning-tree\s+guard\s+loop\s*$",
+                          line,
+                          re.IGNORECASE
+                      ):
+
+                          guard = "loop"
+
+                      elif re.match(
+                          r"^spanning-tree\s+guard\s+root\s*$",
+                          line,
+                          re.IGNORECASE
+                      ):
+
+                          guard = "root"
+
+                      elif re.match(
+                          r"^spanning-tree\s+guard\s+none\s*$",
+                          line,
+                          re.IGNORECASE
+                      ):
+
+                          guard = "none"
+
+                      elif re.match(
+                          r"^no\s+spanning-tree\s+guard\s*$",
+                          line,
+                          re.IGNORECASE
+                      ):
+
+                          guard = "Disable"
+
+
+                  interfaces.append(
+                      {
+                          "port": port_name,
+                          "bpdu_guard": bpdu_guard,
+                          "guard": guard,
+                          "device_interface": interface_name
+                      }
+                  )
+
+                  current_interface = None
+                  current_lines = []
+
+
+              # --------------------------------------------------------------
+              # Read configuration
+              # --------------------------------------------------------------
+
+              for raw_line in config.splitlines():
+
+                  line = raw_line.rstrip()
+
+                  match = INTERFACE_PATTERN.match(line)
+
+                  if match:
+
+                      store_interface()
+
+                      current_interface = match.group(1)
+                      current_lines = []
+
+                      continue
+
+
+                  if (
+                      current_interface
+                      and line.strip() == "!"
+                  ):
+
+                      store_interface()
+                      continue
+
+
+                  if current_interface:
+
+                      current_lines.append(line)
+
+
+              # --------------------------------------------------------------
+              # Store last interface
+              # --------------------------------------------------------------
+
+              store_interface()
+
+
+              # --------------------------------------------------------------
+              # Remove duplicates
+              # --------------------------------------------------------------
+
+              unique = {}
+
+              for item in interfaces:
+
+                  key = item["device_interface"].lower()
+
+                  unique[key] = item
+
+              interfaces = list(
+                  unique.values()
+              )
+
+
+              # --------------------------------------------------------------
+              # Dynamic sorting
+              # --------------------------------------------------------------
+
+              interfaces.sort(
+                  key=interface_sort_key
+              )
+
+              return interfaces
+
+
+          # ==================================================================
+          # Main
+          # ==================================================================
+
+          def main():
+
+              client = paramiko.SSHClient()
+
+              client.set_missing_host_key_policy(
+                  paramiko.AutoAddPolicy()
+              )
+
+              try:
+
+                  # ----------------------------------------------------------
+                  # Normal SSH
+                  # ----------------------------------------------------------
+
+                  try:
+
+                      client.connect(
+                          hostname=HOST,
+                          port=SSH_PORT,
+                          username=USERNAME,
+                          password=PASSWORD,
+                          look_for_keys=False,
+                          allow_agent=False,
+                          timeout=10,
+                          auth_timeout=10,
+                          banner_timeout=10
+                      )
+
+                      shell = client.invoke_shell(
+                          term="vt100",
+                          width=200,
+                          height=1000
+                      )
+
+                  except Exception:
+
+                      # ------------------------------------------------------
+                      # Legacy SSH fallback
+                      # ------------------------------------------------------
+
+                      client.close()
+
+                      legacy_transport = paramiko.Transport(
+                          (HOST, SSH_PORT)
+                      )
+
+                      security = legacy_transport.get_security_options()
+
+                      security.key_types = [
+                          "ssh-rsa"
+                      ]
+
+                      security.kex = [
+                          "diffie-hellman-group14-sha1",
+                          "diffie-hellman-group1-sha1"
+                      ]
+
+                      legacy_transport.connect(
+                          username=USERNAME,
+                          password=PASSWORD
+                      )
+
+                      shell = legacy_transport.open_session()
+
+                      shell.get_pty(
+                          term="vt100",
+                          width=200,
+                          height=1000
+                      )
+
+                      shell.invoke_shell()
+
+
+                  time.sleep(1.5)
+
+                  initial = ""
+
+                  if shell.recv_ready():
+
+                      initial = shell.recv(65535).decode(
+                          "utf-8",
+                          errors="ignore"
+                      )
+
+
+                  # ----------------------------------------------------------
+                  # Enter enable mode if required
+                  # ----------------------------------------------------------
+
+                  if re.search(
+                      r">\s*$",
+                      initial
+                  ):
+
+                      send_command(
+                          shell,
+                          "enable"
+                      )
+
+
+                  # ----------------------------------------------------------
+                  # Disable pagination
+                  # ----------------------------------------------------------
+
+                  send_command(
+                      shell,
+                      "terminal length 0",
+                      wait_time=0.5
+                  )
+
+
+                  # ----------------------------------------------------------
+                  # IMPORTANT:
+                  # Only show running-config is used.
+                  # ----------------------------------------------------------
+
+                  config = send_command(
+                      shell,
+                      "show running-config",
+                      wait_time=2
+                  )
+
+                  config = clean_output(config)
+
+
+                  if not config.strip():
+
+                      raise RuntimeError(
+                          "show running-config returned empty output"
+                      )
+
+
+                  # ----------------------------------------------------------
+                  # Save raw configuration
+                  # ----------------------------------------------------------
+
+                  with open(
+                      RAW_CONFIG_FILE,
+                      "w",
+                      encoding="utf-8"
+                  ) as raw_file:
+
+                      raw_file.write(config)
+
+
+                  # ----------------------------------------------------------
+                  # Parse
+                  # ----------------------------------------------------------
+
+                  interfaces = parse_configuration(
+                      config
+                  )
+
+
+                  if not interfaces:
+
+                      raise RuntimeError(
+                          "No supported interfaces found in "
+                          "show running-config"
+                      )
+
+
+                  # ----------------------------------------------------------
+                  # SUCCESS
+                  # ----------------------------------------------------------
+
+                  result = {
+                      "status": "SUCCESS",
+                      "device_ip": HOST,
+                      "feature": "port_guard_configuration",
+                      "interfaces": interfaces
+                  }
+
+
+                  with open(
+                      OUTPUT_FILE,
+                      "w",
+                      encoding="utf-8"
+                  ) as output:
+
+                      yaml.safe_dump(
+                          result,
+                          output,
+                          sort_keys=False,
+                          default_flow_style=False
+                      )
+
+
+                  print(
+                      yaml.safe_dump(
+                          result,
+                          sort_keys=False,
+                          default_flow_style=False
+                      )
+                  )
+
+                  return 0
+
+
+              except Exception as exc:
+
+                  result = {
+                      "status": "FAILED",
+                      "device_ip": HOST,
+                      "feature": "port_guard_configuration",
+                      "reason": str(exc)
+                  }
+
+
+                  with open(
+                      OUTPUT_FILE,
+                      "w",
+                      encoding="utf-8"
+                  ) as output:
+
+                      yaml.safe_dump(
+                          result,
+                          output,
+                          sort_keys=False,
+                          default_flow_style=False
+                      )
+
+
+                  print(
+                      yaml.safe_dump(
+                          result,
+                          sort_keys=False,
+                          default_flow_style=False
+                      ),
+                      file=sys.stderr
+                  )
+
+                  return 1
+
+
+              finally:
+
+                  try:
+                      client.close()
+                  except Exception:
+                      pass
+
+
+          if __name__ == "__main__":
+              sys.exit(main())
+
+
+    # ========================================================================
+    # Execute
+    # ========================================================================
+
+    - name: Run Port Guard Configuration GET
+      ansible.builtin.command:
+        cmd: "{{ python_bin }} {{ script_path }}"
+      delegate_to: localhost
+      register: port_guard_get_result
+      changed_when: false
+
+    # ========================================================================
+    # Display
+    # ========================================================================
+
+    - name: Display Port Guard Configuration
+      ansible.builtin.debug:
+        msg: "{{ port_guard_get_result.stdout }}"
+
+    # ========================================================================
+    # Fail if GET failed
+    # ========================================================================
+
+    - name: Fail if Port Guard GET failed
+      ansible.builtin.fail:
+        msg: "{{ port_guard_get_result.stderr | default(port_guard_get_result.stdout) }}"
+      when: port_guard_get_result.rc != 0
+

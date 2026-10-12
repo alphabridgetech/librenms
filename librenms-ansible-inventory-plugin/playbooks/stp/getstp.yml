@@ -1,0 +1,447 @@
+---
+# ============================================================
+# STP CONFIGURATION - GET
+# ============================================================
+
+- name: STP Configuration - GET
+  hosts: alphabridge_devices
+  gather_facts: false
+
+  vars:
+    # ========================================================
+    # WORKSPACE-RELATIVE PATHS
+    # ========================================================
+
+    output_dir: "{{ playbook_dir }}/output"
+    temp_dir: "{{ playbook_dir }}/tmp"
+
+    device_ip: "{{ ansible_host }}"
+    device_user: "{{ ansible_user }}"
+    device_password: "{{ ansible_password }}"
+    ssh_port: 22
+
+  tasks:
+
+    # ========================================================
+    # CREATE OUTPUT DIRECTORY
+    # ========================================================
+
+    - name: Create output directory
+      ansible.builtin.file:
+        path: "{{ output_dir }}"
+        state: directory
+        mode: "0755"
+      delegate_to: localhost
+
+
+    # ========================================================
+    # CREATE TEMPORARY DIRECTORY
+    # ========================================================
+
+    - name: Create temporary directory
+      ansible.builtin.file:
+        path: "{{ temp_dir }}"
+        state: directory
+        mode: "0755"
+      delegate_to: localhost
+
+
+    # ========================================================
+    # CHECK SSH CONNECTIVITY
+    # ========================================================
+
+    - name: Check SSH before STP GET
+      ansible.builtin.wait_for:
+        host: "{{ device_ip }}"
+        port: "{{ ssh_port }}"
+        timeout: 10
+        state: started
+      delegate_to: localhost
+
+
+    # ========================================================
+    # CREATE PARAMIKO PYTHON SCRIPT
+    # ========================================================
+
+    - name: Create STP Paramiko script
+      ansible.builtin.copy:
+        dest: "{{ temp_dir }}/get_stp_paramiko.py"
+        mode: "0755"
+        content: |
+          import sys
+          import time
+          import paramiko
+
+          if len(sys.argv) != 4:
+              print("RESULT_START")
+              print("STATUS=FAILED")
+              print("ERROR_START")
+              print("Usage: get_stp_paramiko.py <ip> <username> <password>")
+              print("ERROR_END")
+              print("RESULT_END")
+              sys.exit(1)
+
+          host = sys.argv[1]
+          username = sys.argv[2]
+          password = sys.argv[3]
+
+          client = paramiko.SSHClient()
+          client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+
+          try:
+              client.connect(
+                  hostname=host,
+                  username=username,
+                  password=password,
+                  port=22,
+                  timeout=10,
+                  look_for_keys=False,
+                  allow_agent=False
+              )
+
+              shell = client.invoke_shell()
+              shell.settimeout(10)
+
+              time.sleep(1)
+
+              # Clear initial device output
+              if shell.recv_ready():
+                  shell.recv(65535)
+
+              # Enter enable mode
+              shell.send("enable\n")
+              time.sleep(1)
+
+              if shell.recv_ready():
+                  shell.recv(65535)
+
+              # ------------------------------------------------
+              # Do NOT use:
+              # terminal length 0
+              #
+              # This command is unsupported on the device.
+              # ------------------------------------------------
+
+              # Execute STP command
+              shell.send("show spanning-tree\n")
+              time.sleep(4)
+
+              output = ""
+
+              end_time = time.time() + 3
+
+              while time.time() < end_time:
+                  if shell.recv_ready():
+                      output += shell.recv(65535).decode(
+                          "utf-8",
+                          errors="ignore"
+                      )
+                      time.sleep(0.2)
+                  else:
+                      time.sleep(0.2)
+
+              print("RESULT_START")
+              print("STATUS=SUCCESS")
+              print("OUTPUT_START")
+              print(output)
+              print("OUTPUT_END")
+              print("ERROR_START")
+              print("")
+              print("ERROR_END")
+              print("RESULT_END")
+
+              client.close()
+
+          except Exception as e:
+              print("RESULT_START")
+              print("STATUS=FAILED")
+              print("ERROR_START")
+              print(str(e))
+              print("ERROR_END")
+              print("RESULT_END")
+
+              try:
+                  client.close()
+              except Exception:
+                  pass
+
+              sys.exit(1)
+
+
+    # ========================================================
+    # GET STP CONFIGURATION FROM DEVICE
+    # ========================================================
+
+    - name: Get STP configuration from device
+      ansible.builtin.command:
+        argv:
+          - python3
+          - "{{ temp_dir }}/get_stp_paramiko.py"
+          - "{{ device_ip }}"
+          - "{{ device_user }}"
+          - "{{ device_password }}"
+      register: stp_result
+      changed_when: false
+      failed_when: "'STATUS=SUCCESS' not in stp_result.stdout"
+      delegate_to: localhost
+
+
+    # ========================================================
+    # EXTRACT DEVICE OUTPUT
+    # ========================================================
+
+    - name: Extract STP command output
+      ansible.builtin.set_fact:
+        stp_output: >-
+          {{
+            stp_result.stdout.split('OUTPUT_START', 1)[1]
+            .split('OUTPUT_END', 1)[0]
+            | replace('\r', '')
+            | trim
+          }}
+
+
+    # ========================================================
+    # PARSE STP ROOT BRIDGE INFORMATION
+    # ========================================================
+
+    - name: Parse STP root bridge information
+      ansible.builtin.set_fact:
+
+        # ----------------------------------------------------
+        # STP PROTOCOL
+        # ----------------------------------------------------
+
+        protocol_type: >-
+          {{
+            (
+              stp_output
+              | regex_findall(
+                  '(?im)Spanning\s+tree\s+enabled\s+protocol\s+(\S+)'
+                )
+              | first
+            )
+            | default('Unknown', true)
+          }}
+
+        # ----------------------------------------------------
+        # ROOT BRIDGE PRIORITY
+        # ----------------------------------------------------
+
+        root_priority: >-
+          {{
+            (
+              stp_output
+              | regex_findall(
+                  '(?im)Root\s+ID[\s\S]{0,500}?Priority\s+(\d+)'
+                )
+              | first
+            )
+            | default('N/A', true)
+          }}
+
+        # ----------------------------------------------------
+        # ROOT BRIDGE MAC ADDRESS
+        # ----------------------------------------------------
+
+        root_mac: >-
+          {{
+            (
+              stp_output
+              | regex_findall(
+                  '(?im)Root\s+ID[\s\S]{0,500}?Address\s+([A-Fa-f0-9.:-]+)'
+                )
+              | first
+            )
+            | default('N/A', true)
+          }}
+
+        # ----------------------------------------------------
+        # ROOT BRIDGE STATUS
+        # ----------------------------------------------------
+
+        root_status: >-
+          {{
+            'This bridge is the root'
+            if (
+              stp_output
+              | regex_search(
+                  '(?im)This\s+bridge\s+is\s+the\s+root'
+                )
+            )
+            else 'N/A'
+          }}
+
+        # ----------------------------------------------------
+        # ROOT PORT
+        # ----------------------------------------------------
+
+        root_port: >-
+          {{
+            (
+              stp_output
+              | regex_findall(
+                  '(?im)Root\s+ID[\s\S]{0,500}?Root\s+Port\s+(\S+)'
+                )
+              | first
+            )
+            | default('Root', true)
+          }}
+
+        # ----------------------------------------------------
+        # ROOT COST
+        # ----------------------------------------------------
+
+        root_cost: >-
+          {{
+            (
+              stp_output
+              | regex_findall(
+                  '(?im)Root\s+ID[\s\S]{0,500}?Cost\s+(\d+)'
+                )
+              | first
+            )
+            | default('0', true)
+          }}
+
+        # ----------------------------------------------------
+        # HELLO TIME
+        # ----------------------------------------------------
+
+        hello_time: >-
+          {{
+            (
+              stp_output
+              | regex_findall(
+                  '(?im)Hello\s+Time\s+(\d+)\s*(?:sec|seconds)?'
+                )
+              | first
+            )
+            | default('N/A', true)
+          }}
+
+        # ----------------------------------------------------
+        # MAX AGE
+        # ----------------------------------------------------
+
+        max_age: >-
+          {{
+            (
+              stp_output
+              | regex_findall(
+                  '(?im)Max\s+Age\s+(\d+)\s*(?:sec|seconds)?'
+                )
+              | first
+            )
+            | default('N/A', true)
+          }}
+
+        # ----------------------------------------------------
+        # FORWARD DELAY
+        # ----------------------------------------------------
+
+        forward_delay: >-
+          {{
+            (
+              stp_output
+              | regex_findall(
+                  '(?im)Forward\s+Delay\s+(\d+)\s*(?:sec|seconds)?'
+                )
+              | first
+            )
+            | default('N/A', true)
+          }}
+
+
+    # ========================================================
+    # PARSE STP INTERFACE TABLE
+    # ========================================================
+
+    - name: Parse STP interface table
+      ansible.builtin.set_fact:
+        stp_interfaces: >-
+          {{
+            stp_output
+            | regex_findall(
+                '(?im)^\s*((?:GigaEthernet|TGigaEthernet|g|tg)\S*)\s+'
+                '(\S+)\s+'
+                '(\S+)\s+'
+                '(\d+)\s+'
+                '(\S+)\s+'
+                '(\S+)\s*$'
+              )
+          }}
+
+
+    # ========================================================
+    # DISPLAY PARSED STP INFORMATION
+    # ========================================================
+
+    - name: Display parsed STP information
+      ansible.builtin.debug:
+        msg:
+          protocol_type: "{{ protocol_type }}"
+          root_priority: "{{ root_priority }}"
+          root_mac: "{{ root_mac }}"
+          root_status: "{{ root_status }}"
+          root_port: "{{ root_port }}"
+          root_cost: "{{ root_cost }}"
+          hello_time: "{{ hello_time }}"
+          max_age: "{{ max_age }}"
+          forward_delay: "{{ forward_delay }}"
+          stp_interfaces: "{{ stp_interfaces }}"
+
+
+    # ========================================================
+    # WRITE OUTPUT YAML
+    # ========================================================
+
+    - name: Write STP output YAML
+      ansible.builtin.copy:
+        dest: "{{ output_dir }}/{{ device_ip }}_stp.yml"
+        mode: "0644"
+        content: |
+          status: SUCCESS
+          device_ip: {{ device_ip }}
+          feature: stp_configuration
+
+          root_stp_configuration:
+            spanning_tree_priority: {{ root_priority }}
+            mac_address: {{ root_mac }}
+            root_port: {{ root_port }}
+            root_cost: {{ root_cost }}
+            protocol: {{ protocol_type }}
+            hello_time: {{ hello_time }}
+            max_age: {{ max_age }}
+            forward_delay: {{ forward_delay }}
+            root_status: {{ root_status }}
+
+          stp_ports_state:
+          {% if stp_interfaces | length > 0 %}
+          {% for i in stp_interfaces %}
+            - interface: {{ i.0 }}
+              role: {{ i.1 }}
+              status: {{ i.2 }}
+              cost: {{ i.3 }}
+              priority_number: {{ i.4 }}
+              type: {{ i.5 }}
+          {% endfor %}
+          {% else %}
+            - interface: None
+              role: "-"
+              status: "-"
+              cost: "-"
+              priority_number: "-"
+              type: "-"
+          {% endif %}
+      delegate_to: localhost
+
+
+    # ========================================================
+    # DISPLAY FINAL OUTPUT
+    # ========================================================
+
+    - name: Display final STP output
+      ansible.builtin.debug:
+        msg: "{{ lookup('file', output_dir + '/' + device_ip + '_stp.yml') }}"
+      delegate_to: localhost

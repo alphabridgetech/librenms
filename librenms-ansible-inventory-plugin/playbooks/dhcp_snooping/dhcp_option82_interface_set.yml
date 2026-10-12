@@ -74,12 +74,9 @@
 # Example:
 # ansible-playbook -i inventory/192.168.2.245.yml \
 #   playbooks/dhcp_option82_interface_config.yml \
-#   -e port=g0/1 -e circuit_id_type=string \
-#   -e circuit_id_value=5 -e remote_id_type=string \
-#   -e remote_id_value=5 \
-#   -e vendor_specific_type=string \
-#   -e vendor_specific_value=5 \
-#   -e drop=Enable -e replace=Enable -e transmit=Enable
+#   -e "port=g0/1  circuit_id_type=string circuit_id_value=5 
+#   remote_id_type=string  remote_id_value=5 vendor_specific_type=string 
+#   vendor_specific_value=5 drop=Enable  replace=Enable  transmit=Enable"
 #
 # Output:
 # output/<switch_ip>_dhcp_option82_interface_config.yml
@@ -88,6 +85,22 @@
 - name: DHCP snooping interface Option82 config
   hosts: alphabridge_devices
   gather_facts: no
+
+  vars:
+    # Resolve paths from this checkout, including the Jenkins workspace.
+    project_root: "{{ playbook_dir }}/../.."
+    output_dir: "{{ project_root }}/output"
+    tmp_dir: "{{ project_root }}/tmp"
+
+  pre_tasks:
+    - name: Ensure script and report directories exist
+      ansible.builtin.file:
+        path: "{{ item }}"
+        state: directory
+        mode: '0755'
+      loop:
+        - "{{ tmp_dir }}"
+        - "{{ output_dir }}"
 
   tasks:
 
@@ -243,8 +256,7 @@
         Create Python SSH Script for DHCP Option82
         interface config
       ansible.builtin.copy:
-        dest: "/opt/librenms/librenms-ansible-inventory-plugin/tmp/\
-               dhcp_option82_interface_config_exec.py"
+        dest: "{{ tmp_dir }}/dhcp_option82_interface_config_exec.py"
         mode: '0755'
         content: |
           #!/usr/bin/env python3
@@ -582,10 +594,9 @@
 
     - name: Execute DHCP Option82 interface config script
       ansible.builtin.command:
-        cmd: >
-          /opt/librenms/librenms-ansible-inventory-plugin/bin/python3
-          /opt/librenms/librenms-ansible-inventory-plugin/\
-          tmp/dhcp_option82_interface_config_exec.py
+        argv:
+          - /usr/bin/python3
+          - "{{ tmp_dir }}/dhcp_option82_interface_config_exec.py"
       register: option82_raw
       changed_when: false
       failed_when: false
@@ -612,8 +623,7 @@
 
     - name: Save DHCP Option82 result
       ansible.builtin.copy:
-        dest: "/opt/librenms/librenms-ansible-inventory-plugin/output/\
-              {{ ansible_host }}_dhcp_option82_interface_config.yml"
+        dest: "{{ output_dir }}/{{ ansible_host }}_dhcp_option82_interface_config.yml"
         content: |
           {{ option82_result | to_nice_yaml }}
 

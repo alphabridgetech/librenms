@@ -1,0 +1,1058 @@
+---
+# ============================================================================
+# File        : getstpportconfiguration.yml
+# Feature     : STP Port Configuration - GET
+#
+# Description :
+#   Reads STP port configuration from the switch using ONLY:
+#
+#       show running-config
+#
+#   Dynamically discovers:
+#       - GigaEthernet
+#       - TGigaEthernet
+#       - Port-aggregator
+#
+#   No interface/port list is hardcoded.
+#
+#   GUI Mapping:
+#       Protocol Status
+#       Priority
+#       Path-Cost
+#       Edge Port
+#       RSTP Ring
+#       BPDU Filter
+#
+#   RSTP Ring command:
+#       spanning-tree loopfast
+#
+#   Output:
+#       /opt/librenms/librenms-ansible-inventory-plugin/output/<device_ip>_stp_port_configuration.yml
+# ============================================================================
+
+- name: STP Port Configuration - GET
+  hosts: alphabridge_devices
+  gather_facts: false
+
+  vars:
+
+    # ------------------------------------------------------------------------
+    # Local directories
+    # ------------------------------------------------------------------------
+    output_dir: "/opt/librenms/librenms-ansible-inventory-plugin/output"
+    temp_dir: "/opt/librenms/librenms-ansible-inventory-plugin/tmp"
+
+    # ------------------------------------------------------------------------
+    # Generated Python script
+    # ------------------------------------------------------------------------
+    script_path: "{{ temp_dir }}/{{ ansible_host }}_stp_port_configuration_get.py"
+
+    # ------------------------------------------------------------------------
+    # Final YAML output
+    # ------------------------------------------------------------------------
+    output_file: "{{ output_dir }}/{{ ansible_host }}_stp_port_configuration.yml"
+
+    # ------------------------------------------------------------------------
+    # Python virtual environment
+    # ------------------------------------------------------------------------
+    python_bin: "/opt/librenms/librenms-ansible-inventory-plugin/bin/python3"
+
+    # ------------------------------------------------------------------------
+    # SSH credentials from inventory
+    # ------------------------------------------------------------------------
+    ssh_username: "{{ ansible_user }}"
+    ssh_password: "{{ ansible_password }}"
+
+  tasks:
+
+    # ========================================================================
+    # Create output directory
+    # ========================================================================
+    - name: Create output directory
+      ansible.builtin.file:
+        path: "{{ output_dir }}"
+        state: directory
+        mode: "0755"
+      delegate_to: localhost
+
+    # ========================================================================
+    # Create temporary directory
+    # ========================================================================
+    - name: Create temporary directory
+      ansible.builtin.file:
+        path: "{{ temp_dir }}"
+        state: directory
+        mode: "0755"
+      delegate_to: localhost
+
+    # ========================================================================
+    # Create Python GET script
+    # ========================================================================
+    - name: Create STP Port Configuration GET Python script
+      ansible.builtin.copy:
+        dest: "{{ script_path }}"
+        mode: "0755"
+        content: |
+          #!/usr/bin/env python3
+
+          import paramiko
+          import re
+          import sys
+          import time
+          import yaml
+
+
+          # ==================================================================
+          # Connection details
+          # ==================================================================
+
+          HOST = "{{ ansible_host }}"
+          USERNAME = "{{ ssh_username }}"
+          PASSWORD = "{{ ssh_password }}"
+
+          OUTPUT_FILE = "{{ output_file }}"
+
+          SSH_PORT = 22
+
+
+          # ==================================================================
+          # GUI default values
+          #
+          # These are used when the corresponding STP command is not present
+          # inside an interface configuration block.
+          # ==================================================================
+
+          DEFAULT_PRIORITY = "128"
+          DEFAULT_PATH_COST = "0"
+          DEFAULT_EDGE_PORT = "Disable"
+          DEFAULT_RSTP_RING = "Disable"
+          DEFAULT_BPDU_FILTER = "Disable"
+
+
+          # ==================================================================
+          # Supported interface pattern
+          #
+          # IMPORTANT:
+          # No interface number is hardcoded.
+          #
+          # Examples automatically detected:
+          #
+          #   interface GigaEthernet0/1
+          #   interface GigaEthernet0/24
+          #   interface TGigaEthernet0/1
+          #   interface TGigaEthernet0/8
+          #   interface Port-aggregator1
+          #   interface Port-aggregator10
+          #
+          # Any interface matching these device interface types is accepted.
+          # ==================================================================
+
+          INTERFACE_PATTERN = re.compile(
+              r"^\s*interface\s+"
+              r"(GigaEthernet\d+/\d+|"
+              r"TGigaEthernet\d+/\d+|"
+              r"Port-aggregator\d+)"
+              r"\s*$",
+              re.IGNORECASE
+          )
+
+
+          # ==================================================================
+          # Convert device interface name to GUI port name
+          #
+          # GigaEthernet0/1     -> g0/1
+          # TGigaEthernet0/1    -> tg0/1
+          # Port-aggregator1    -> p1
+          # ==================================================================
+
+          def gui_port_name(interface_name):
+
+              name = interface_name.strip()
+
+              # --------------------------------------------------------------
+              # GigaEthernet
+              # --------------------------------------------------------------
+              match = re.match(
+                  r"^GigaEthernet(\d+/\d+)$",
+                  name,
+                  re.IGNORECASE
+              )
+
+              if match:
+                  return "g" + match.group(1)
+
+              # --------------------------------------------------------------
+              # TGigaEthernet
+              # --------------------------------------------------------------
+              match = re.match(
+                  r"^TGigaEthernet(\d+/\d+)$",
+                  name,
+                  re.IGNORECASE
+              )
+
+              if match:
+                  return "tg" + match.group(1)
+
+              # --------------------------------------------------------------
+              # Port-aggregator
+              # --------------------------------------------------------------
+              match = re.match(
+                  r"^Port-aggregator(\d+)$",
+                  name,
+                  re.IGNORECASE
+              )
+
+              if match:
+                  return "p" + match.group(1)
+
+              return name
+
+
+          # ==================================================================
+          # Read command output from SSH shell
+          # ==================================================================
+
+          def read_command_output(shell, wait_time=1.5):
+
+              output = ""
+
+              end_time = time.time() + 15
+
+              while time.time() < end_time:
+
+                  if shell.recv_ready():
+
+                      data = shell.recv(65535).decode(
+                          "utf-8",
+                          errors="ignore"
+                      )
+
+                      output += data
+
+                      # ------------------------------------------------------
+                      # Handle pagination if device still sends it
+                      # ------------------------------------------------------
+
+                      if "--More--" in data or "-- More --" in data:
+
+                          shell.send(" ")
+
+                      # ------------------------------------------------------
+                      # If prompt is received, wait briefly for remaining data
+                      # ------------------------------------------------------
+
+                      if re.search(
+                          r"[^\r\n]+[>#]\s*$",
+                          output
+                      ):
+
+                          time.sleep(wait_time)
+
+                          if not shell.recv_ready():
+                              break
+
+                  else:
+
+                      if output:
+                          time.sleep(0.3)
+
+                          if not shell.recv_ready():
+                              break
+
+                      else:
+                          time.sleep(0.2)
+
+              return output
+
+
+          # ==================================================================
+          # Send command to switch
+          # ==================================================================
+
+          def send_command(shell, command, wait_time=1.5):
+
+              shell.send(command + "\n")
+
+              return read_command_output(
+                  shell,
+                  wait_time=wait_time
+              )
+
+
+          # ==================================================================
+          # Clean command output
+          # ==================================================================
+
+          def clean_output(output):
+
+              cleaned_lines = []
+
+              for line in output.splitlines():
+
+                  # Remove pagination markers
+                  line = line.replace("--More--", "")
+                  line = line.replace("-- More --", "")
+
+                  cleaned_lines.append(line.rstrip())
+
+              return "\n".join(cleaned_lines)
+
+
+          # ==================================================================
+          # Detect global STP status
+          #
+          # Example:
+          #
+          #   spanning-tree mode rstp
+          #
+          # means STP/RSTP is globally enabled.
+          # ==================================================================
+
+          def global_stp_enabled(config):
+
+              pattern = re.compile(
+                  r"^\s*spanning-tree\s+mode\s+\S+",
+                  re.IGNORECASE
+              )
+
+              for line in config.splitlines():
+
+                  if pattern.search(line):
+                      return True
+
+              return False
+
+
+          # ==================================================================
+          # Sort interfaces dynamically
+          #
+          # Order:
+          #   1. GigaEthernet
+          #   2. TGigaEthernet
+          #   3. Port-aggregator
+          #
+          # Interface numbers are sorted numerically.
+          # ==================================================================
+
+          def interface_sort_key(item):
+
+              interface_name = item["device_interface"]
+
+              # --------------------------------------------------------------
+              # GigaEthernet
+              # --------------------------------------------------------------
+              match = re.match(
+                  r"^GigaEthernet(\d+)/(\d+)$",
+                  interface_name,
+                  re.IGNORECASE
+              )
+
+              if match:
+
+                  return (
+                      1,
+                      int(match.group(1)),
+                      int(match.group(2))
+                  )
+
+              # --------------------------------------------------------------
+              # TGigaEthernet
+              # --------------------------------------------------------------
+              match = re.match(
+                  r"^TGigaEthernet(\d+)/(\d+)$",
+                  interface_name,
+                  re.IGNORECASE
+              )
+
+              if match:
+
+                  return (
+                      2,
+                      int(match.group(1)),
+                      int(match.group(2))
+                  )
+
+              # --------------------------------------------------------------
+              # Port-aggregator
+              # --------------------------------------------------------------
+              match = re.match(
+                  r"^Port-aggregator(\d+)$",
+                  interface_name,
+                  re.IGNORECASE
+              )
+
+              if match:
+
+                  return (
+                      3,
+                      0,
+                      int(match.group(1))
+                  )
+
+              return (
+                  99,
+                  0,
+                  0
+              )
+
+
+          # ==================================================================
+          # Parse STP configuration
+          # ==================================================================
+
+          def parse_stp_configuration(config):
+
+              global_enabled = global_stp_enabled(config)
+
+              interfaces = []
+
+              current_interface = None
+              current_lines = []
+
+
+              # =================================================================
+              # Store current interface
+              # =================================================================
+
+              def store_interface():
+
+                  nonlocal current_interface
+                  nonlocal current_lines
+
+                  if not current_interface:
+                      return
+
+                  interface_name = current_interface
+
+                  # ------------------------------------------------------------
+                  # Convert device interface to GUI name
+                  # ------------------------------------------------------------
+
+                  port_name = gui_port_name(interface_name)
+
+
+                  # ------------------------------------------------------------
+                  # Default values
+                  # ------------------------------------------------------------
+
+                  protocol_status = (
+                      "Enable"
+                      if global_enabled
+                      else "Disable"
+                  )
+
+                  priority = DEFAULT_PRIORITY
+                  path_cost = DEFAULT_PATH_COST
+                  edge_port = DEFAULT_EDGE_PORT
+                  rstp_ring = DEFAULT_RSTP_RING
+                  bpdu_filter = DEFAULT_BPDU_FILTER
+
+
+                  # =============================================================
+                  # Parse commands inside this interface
+                  # =============================================================
+
+                  for raw_line in current_lines:
+
+                      line = raw_line.strip()
+
+
+                      # =========================================================
+                      # Protocol Status
+                      # =========================================================
+
+                      if re.match(
+                          r"^no\s+spanning-tree\s*$",
+                          line,
+                          re.IGNORECASE
+                      ):
+
+                          protocol_status = "Disable"
+
+                      elif re.match(
+                          r"^spanning-tree\s*$",
+                          line,
+                          re.IGNORECASE
+                      ):
+
+                          protocol_status = "Enable"
+
+
+                      # =========================================================
+                      # Priority
+                      #
+                      # Command:
+                      #   spanning-tree port-priority <value>
+                      #
+                      # GUI range:
+                      #   0 - 240
+                      # =========================================================
+
+                      match = re.match(
+                          r"^spanning-tree\s+port-priority\s+(\d+)\s*$",
+                          line,
+                          re.IGNORECASE
+                      )
+
+                      if match:
+
+                          value = int(match.group(1))
+
+                          if 0 <= value <= 240:
+                              priority = str(value)
+
+
+                      # =========================================================
+                      # Path Cost
+                      #
+                      # Command:
+                      #   spanning-tree cost <value>
+                      #
+                      # GUI:
+                      #   0 means automatically calculated by STP.
+                      # =========================================================
+
+                      match = re.match(
+                          r"^spanning-tree\s+cost\s+(\d+)\s*$",
+                          line,
+                          re.IGNORECASE
+                      )
+
+                      if match:
+
+                          value = int(match.group(1))
+
+                          if 1 <= value <= 65535:
+                              path_cost = str(value)
+
+
+                      # =========================================================
+                      # Edge Port
+                      #
+                      # Enable:
+                      #   spanning-tree rstp edge
+                      #
+                      # Disable:
+                      #   no spanning-tree rstp edge
+                      # =========================================================
+
+                      if re.match(
+                          r"^no\s+spanning-tree\s+rstp\s+edge\s*$",
+                          line,
+                          re.IGNORECASE
+                      ):
+
+                          edge_port = "Disable"
+
+                      elif re.match(
+                          r"^spanning-tree\s+rstp\s+edge\s*$",
+                          line,
+                          re.IGNORECASE
+                      ):
+
+                          edge_port = "Enable"
+
+
+                      # =========================================================
+                      # RSTP Ring
+                      #
+                      # GUI:
+                      #   RSTP Ring
+                      #
+                      # Device command:
+                      #   spanning-tree loopfast
+                      # =========================================================
+
+                      if re.match(
+                          r"^no\s+spanning-tree\s+loopfast\s*$",
+                          line,
+                          re.IGNORECASE
+                      ):
+
+                          rstp_ring = "Disable"
+
+                      elif re.match(
+                          r"^spanning-tree\s+loopfast\s*$",
+                          line,
+                          re.IGNORECASE
+                      ):
+
+                          rstp_ring = "Enable"
+
+
+                      # =========================================================
+                      # BPDU Filter
+                      #
+                      # Enable:
+                      #   spanning-tree bpdufilter enable
+                      #
+                      # Disable:
+                      #   no spanning-tree bpdufilter
+                      # =========================================================
+
+                      if re.match(
+                          r"^no\s+spanning-tree\s+bpdufilter\s*$",
+                          line,
+                          re.IGNORECASE
+                      ):
+
+                          bpdu_filter = "Disable"
+
+                      elif re.match(
+                          r"^spanning-tree\s+bpdufilter\s+enable\s*$",
+                          line,
+                          re.IGNORECASE
+                      ):
+
+                          bpdu_filter = "Enable"
+
+
+                  # =========================================================
+                  # Add interface result
+                  # =========================================================
+
+                  interfaces.append(
+                      {
+                          "port": port_name,
+                          "protocol_status": protocol_status,
+                          "priority": priority,
+                          "path_cost": path_cost,
+                          "edge_port": edge_port,
+                          "rstp_ring": rstp_ring,
+                          "bpdu_filter": bpdu_filter,
+                          "device_interface": interface_name
+                      }
+                  )
+
+                  current_interface = None
+                  current_lines = []
+
+
+              # =================================================================
+              # Parse complete running configuration
+              # =================================================================
+
+              for raw_line in config.splitlines():
+
+                  line = raw_line.rstrip()
+
+
+                  # =============================================================
+                  # Detect new supported interface
+                  # =============================================================
+
+                  match = INTERFACE_PATTERN.match(line)
+
+                  if match:
+
+                      # Save previous interface first
+                      store_interface()
+
+                      current_interface = match.group(1)
+                      current_lines = []
+
+                      continue
+
+
+                  # =============================================================
+                  # Interface block separator
+                  # =============================================================
+
+                  if (
+                      current_interface
+                      and line.strip() == "!"
+                  ):
+
+                      store_interface()
+                      continue
+
+
+                  # =============================================================
+                  # Store commands belonging to current interface
+                  # =============================================================
+
+                  if current_interface:
+
+                      current_lines.append(line)
+
+
+              # =================================================================
+              # Save last interface
+              # =================================================================
+
+              store_interface()
+
+
+              # =================================================================
+              # Remove duplicate interfaces if the same interface appears more
+              # than once in the command output.
+              # =================================================================
+
+              unique_interfaces = {}
+
+              for item in interfaces:
+
+                  unique_interfaces[
+                      item["device_interface"].lower()
+                  ] = item
+
+              interfaces = list(
+                  unique_interfaces.values()
+              )
+
+
+              # =================================================================
+              # Dynamic sorting
+              # =================================================================
+
+              interfaces.sort(
+                  key=interface_sort_key
+              )
+
+
+              return interfaces
+
+
+          # ==================================================================
+          # Main
+          # ==================================================================
+
+          def main():
+
+              client = paramiko.SSHClient()
+
+              client.set_missing_host_key_policy(
+                  paramiko.AutoAddPolicy()
+              )
+
+
+              try:
+
+                  # ============================================================
+                  # Connect to switch
+                  # ============================================================
+
+                  try:
+
+                      client.connect(
+                          hostname=HOST,
+                          port=SSH_PORT,
+                          username=USERNAME,
+                          password=PASSWORD,
+                          look_for_keys=False,
+                          allow_agent=False,
+                          timeout=10,
+                          auth_timeout=10,
+                          banner_timeout=10
+                      )
+
+                  except Exception as first_error:
+
+                      # --------------------------------------------------------
+                      # Legacy SSH compatibility
+                      #
+                      # Required by some older Alpha Bridge switches.
+                      # --------------------------------------------------------
+
+                      client.close()
+
+                      client = paramiko.SSHClient()
+
+                      client.set_missing_host_key_policy(
+                          paramiko.AutoAddPolicy()
+                      )
+
+                      legacy_transport = paramiko.Transport(
+                          (HOST, SSH_PORT)
+                      )
+
+                      legacy_transport.get_security_options().key_types = [
+                          "ssh-rsa"
+                      ]
+
+                      legacy_transport.get_security_options().kex = [
+                          "diffie-hellman-group14-sha1",
+                          "diffie-hellman-group1-sha1"
+                      ]
+
+                      legacy_transport.connect(
+                          username=USERNAME,
+                          password=PASSWORD
+                      )
+
+                      channel = legacy_transport.open_session()
+
+                      channel.get_pty(
+                          term="vt100",
+                          width=200,
+                          height=1000
+                      )
+
+                      channel.invoke_shell()
+
+                      shell = channel
+
+                  else:
+
+                      # ========================================================
+                      # Interactive shell
+                      # ========================================================
+
+                      shell = client.invoke_shell(
+                          term="vt100",
+                          width=200,
+                          height=1000
+                      )
+
+                  # ============================================================
+                  # Wait for login prompt
+                  # ============================================================
+
+                  time.sleep(1.5)
+
+                  initial_output = ""
+
+                  if shell.recv_ready():
+
+                      initial_output = shell.recv(65535).decode(
+                          "utf-8",
+                          errors="ignore"
+                      )
+
+
+                  # ============================================================
+                  # Enter enable mode when required
+                  # ============================================================
+
+                  if re.search(
+                      r">\s*$",
+                      initial_output
+                  ):
+
+                      send_command(
+                          shell,
+                          "enable"
+                      )
+
+
+                  # ============================================================
+                  # Disable terminal pagination
+                  # ============================================================
+
+                  send_command(
+                      shell,
+                      "terminal length 0",
+                      wait_time=0.5
+                  )
+
+
+                  # ============================================================
+                  # IMPORTANT:
+                  #
+                  # Only this command is used to collect the configuration.
+                  #
+                  # Do NOT replace this with:
+                  #   show interface brief
+                  #
+                  # ============================================================
+
+                  config_output = send_command(
+                      shell,
+                      "show running-config",
+                      wait_time=2
+                  )
+
+                  config_output = clean_output(
+                      config_output
+                  )
+
+
+                  # ============================================================
+                  # Save raw configuration for debugging
+                  # ============================================================
+
+                  raw_config_file = (
+                      "{{ temp_dir }}/"
+                      "{{ ansible_host }}_stp_running_config.txt"
+                  )
+
+                  with open(
+                      raw_config_file,
+                      "w",
+                      encoding="utf-8"
+                  ) as raw_file:
+
+                      raw_file.write(config_output)
+
+
+                  # ============================================================
+                  # Validate command response
+                  # ============================================================
+
+                  if not config_output.strip():
+
+                      raise RuntimeError(
+                          "show running-config returned empty output"
+                      )
+
+
+                  # ============================================================
+                  # Parse STP configuration
+                  # ============================================================
+
+                  interfaces = parse_stp_configuration(
+                      config_output
+                  )
+
+
+                  # ============================================================
+                  # IMPORTANT:
+                  #
+                  # There is NO hardcoded interface list here.
+                  #
+                  # Every supported interface found in:
+                  #
+                  #   show running-config
+                  #
+                  # is returned automatically.
+                  # ============================================================
+
+                  if not interfaces:
+
+                      raise RuntimeError(
+                          "No supported STP interfaces were discovered "
+                          "from 'show running-config'. "
+                          "The running configuration does not contain "
+                          "GigaEthernet, TGigaEthernet or Port-aggregator "
+                          "interface entries."
+                      )
+
+
+                  # ============================================================
+                  # SUCCESS result
+                  # ============================================================
+
+                  result = {
+                      "status": "SUCCESS",
+                      "device_ip": HOST,
+                      "feature": "stp_port_configuration",
+                      "interfaces": interfaces
+                  }
+
+
+                  # ============================================================
+                  # Write YAML file
+                  # ============================================================
+
+                  with open(
+                      OUTPUT_FILE,
+                      "w",
+                      encoding="utf-8"
+                  ) as output:
+
+                      yaml.safe_dump(
+                          result,
+                          output,
+                          sort_keys=False,
+                          default_flow_style=False
+                      )
+
+
+                  # ============================================================
+                  # Display result
+                  # ============================================================
+
+                  print(
+                      yaml.safe_dump(
+                          result,
+                          sort_keys=False,
+                          default_flow_style=False
+                      )
+                  )
+
+
+                  return 0
+
+
+              except Exception as exc:
+
+                  # ============================================================
+                  # FAILED result
+                  # ============================================================
+
+                  result = {
+                      "status": "FAILED",
+                      "device_ip": HOST,
+                      "feature": "stp_port_configuration",
+                      "reason": str(exc)
+                  }
+
+
+                  with open(
+                      OUTPUT_FILE,
+                      "w",
+                      encoding="utf-8"
+                  ) as output:
+
+                      yaml.safe_dump(
+                          result,
+                          output,
+                          sort_keys=False,
+                          default_flow_style=False
+                      )
+
+
+                  print(
+                      yaml.safe_dump(
+                          result,
+                          sort_keys=False,
+                          default_flow_style=False
+                      ),
+                      file=sys.stderr
+                  )
+
+
+                  return 1
+
+
+              finally:
+
+                  try:
+                      client.close()
+                  except Exception:
+                      pass
+
+
+          # ==================================================================
+          # Entry point
+          # ==================================================================
+
+          if __name__ == "__main__":
+              sys.exit(main())
+
+
+    # ========================================================================
+    # Execute Python GET script
+    # ========================================================================
+    - name: Run STP Port Configuration GET
+      ansible.builtin.command:
+        cmd: "{{ python_bin }} {{ script_path }}"
+      delegate_to: localhost
+      register: stp_get_result
+      changed_when: false
+
+    # ========================================================================
+    # Display result
+    # ========================================================================
+    - name: Display STP Port Configuration
+      ansible.builtin.debug:
+        msg: "{{ stp_get_result.stdout }}"
+
+    # ========================================================================
+    # Fail Ansible task if Python GET failed
+    # ========================================================================
+    - name: Fail if STP GET failed
+      ansible.builtin.fail:
+        msg: "{{ stp_get_result.stderr | default(stp_get_result.stdout) }}"
+      when: stp_get_result.rc != 0
+

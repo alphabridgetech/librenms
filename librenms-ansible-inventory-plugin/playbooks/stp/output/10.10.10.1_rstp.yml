@@ -1,0 +1,12 @@
+status: SUCCESS
+device_ip: 10.10.10.1
+root_stp_configuration:
+  spanning_tree_priority: '53248'
+  mac_address: C86B.BCA0.D0F3
+  root_port: Root
+  root_cost: '0'
+  hello_time: '9'
+  max_age: '40'
+  forward_delay: '25'
+  root_status: This bridge is the root
+stp_ports_state: []

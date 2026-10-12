@@ -1,0 +1,567 @@
+# ==========================================
+# ipv6_mld_snooping.yml
+# Created on Sept 3, 2026 by Vikash Kumar (vikash.kumar@alphabrige.tech).
+#
+# Copyright (c), ALPHA BRIDGE, Inc.
+# 357D, Udyog Vihar Industrial Area Phase VI, Sector 37, Gurugram, Haryana.
+#
+# All rights reserved.
+#
+# This software is the confidential and proprietary information of ALPHA BRIDGE,
+# Inc. ("Confidential Information"). You shall not disclose such Confidential
+# Information and shall use it only in accordance with the terms of the license
+# agreement you entered into with ALPHA BRIDGE.
+#
+# =============================================================================
+# Playbook Name : IPv6 MLD Snooping Basic Configuration
+# =============================================================================
+#
+# Description:
+# Configures IPv6 Multicast Listener Discovery (MLD)
+# Snooping basic settings on AlphaBridge switches over SSH.
+#
+# Input vars:
+#   mld_snooping    - "Enable" or "Disable"
+#   router_age_timer - 10 to 2147483647 (seconds)
+#   response_age_timer - 10 to 2147483647 (seconds)
+#   querier          - "Enable" or "Disable"
+#   querier_address  - (optional) an IPv6 address, e.g.
+#                       "FE80::30C0:657B:CFB5:CDFE" - sent
+#                       lower-cased, matching the confirmed
+#                       device log casing
+#   solicitation     - "Enable" or "Disable"
+#
+# Command sequence sent for both mld_snooping states
+# (confirmed order from device logs):
+#   config
+#   [ipv6 mld-snooping | no ipv6 mld-snooping]
+#   ipv6 mld-snooping timer router-age <router_age_timer>
+#   ipv6 mld-snooping timer response-time
+#   <response_age_timer>
+#   [ipv6 mld-snooping querier | no ipv6 mld-snooping
+#   querier]
+#   ipv6 mld-snooping querier address <querier_address>
+#     (only sent if querier_address is supplied - the UI
+#     screenshot shows this field can hold a value even
+#     while Querier itself is Disabled, so it's applied
+#     independently of the querier enable/disable state)
+#   [ipv6 mld-snooping solicitation | no ipv6 mld-snooping
+#   solicitation]
+#   exit
+#   write
+#
+# Timers, querier, querier address and solicitation are
+# applied independently of the mld_snooping enable/disable state.
+#
+# Example:
+# ansible-playbook -i inventory/192.168.2.245.yml \
+#   playbooks/ipv6_mld_snooping.yml \
+#   -e mld_snooping=Enable -e router_age_timer=20 \
+#   -e response_age_timer=20 -e querier=Disable \
+#   -e querier_address=FE80::30C0:657B:CFB5:CDFE \
+#   -e solicitation=Disable
+#
+# Output:
+# output/<switch_ip>_ipv6_mld_snooping.yml
+# =============================================================================
+
+- name: IPv6 MLD snooping basic configuration
+  hosts: alphabridge_devices
+  gather_facts: no
+
+  vars:
+    # Resolve paths from this checkout, including the Jenkins workspace.
+    project_root: "{{ playbook_dir }}/../.."
+    output_dir: "{{ project_root }}/output"
+    tmp_dir: "{{ project_root }}/tmp"
+
+  pre_tasks:
+    - name: Ensure script and report directories exist
+      ansible.builtin.file:
+        path: "{{ item }}"
+        state: directory
+        mode: '0755'
+      loop:
+        - "{{ tmp_dir }}"
+        - "{{ output_dir }}"
+
+  tasks:
+
+    # ==========================================
+    # Validate required input variables are present
+    # ==========================================
+
+    - name: Validate required input variables are provided
+      ansible.builtin.assert:
+        that:
+          - mld_snooping is defined
+          - router_age_timer is defined
+          - response_age_timer is defined
+          - querier is defined
+          - solicitation is defined
+        fail_msg: >
+          You must pass mld_snooping, router_age_timer,
+          response_age_timer, querier and solicitation.
+
+    # ==========================================
+    # Validate mld_snooping
+    # ==========================================
+
+    - name: Normalize mld_snooping
+      ansible.builtin.set_fact:
+        mld_snooping_normalized: >-
+          {{ mld_snooping | lower | trim }}
+
+    - name: Validate mld_snooping is Enable or Disable
+      ansible.builtin.assert:
+        that:
+          - mld_snooping_normalized in ['enable', 'disable']
+        fail_msg: >
+          mld_snooping must be 'Enable' or 'Disable'
+          (got: {{ mld_snooping }})
+
+    # ==========================================
+    # Validate router_age_timer / response_age_timer
+    # (10-2147483647)
+    # ==========================================
+
+    - name: Validate age timer values are numeric
+      ansible.builtin.assert:
+        that:
+          - item.value | string is match('^[0-9]+$')
+        fail_msg: >
+          {{ item.name }} must be a whole number
+          (got: {{ item.value }})
+      loop:
+        - { name: "router_age_timer",
+            value: "{{ router_age_timer }}" }
+        - { name: "response_age_timer",
+            value: "{{ response_age_timer }}" }
+      loop_control:
+        label: "{{ item.name }}"
+
+    - name: >-
+        Validate age timer values are in range
+        10-2147483647
+      ansible.builtin.assert:
+        that:
+          - (item.value | int) >= 10
+          - (item.value | int) <= 2147483647
+        fail_msg: >
+          {{ item.name }} must be between 10 and
+          2147483647 (got: {{ item.value }})
+      loop:
+        - { name: "router_age_timer",
+            value: "{{ router_age_timer }}" }
+        - { name: "response_age_timer",
+            value: "{{ response_age_timer }}" }
+      loop_control:
+        label: "{{ item.name }}"
+
+    # ==========================================
+    # Validate querier
+    # ==========================================
+
+    - name: Normalize querier
+      ansible.builtin.set_fact:
+        querier_normalized: "{{ querier | lower | trim }}"
+
+    - name: Validate querier is Enable or Disable
+      ansible.builtin.assert:
+        that:
+          - querier_normalized in ['enable', 'disable']
+        fail_msg: >
+          querier must be 'Enable' or 'Disable'
+          (got: {{ querier }})
+
+    # ==========================================
+    # Validate querier_address (optional, IPv6)
+    # ==========================================
+
+    - name: Normalize querier_address
+      ansible.builtin.set_fact:
+        querier_address_normalized: >-
+          {{ (querier_address | default(''))
+          | lower | trim }}
+
+    - name: Validate querier_address looks like IPv6
+      ansible.builtin.assert:
+        that:
+          - >-
+            querier_address_normalized is match(
+            '^[0-9a-f:]+$')
+        fail_msg: >
+          querier_address must be a valid IPv6 address
+          (got: {{ querier_address }})
+      when: querier_address_normalized != ""
+
+    # ==========================================
+    # Validate solicitation
+    # ==========================================
+
+    - name: Normalize solicitation
+      ansible.builtin.set_fact:
+        solicitation_normalized: >-
+          {{ solicitation | lower | trim }}
+
+    - name: Validate solicitation is Enable or Disable
+      ansible.builtin.assert:
+        that:
+          - solicitation_normalized in ['enable', 'disable']
+        fail_msg: >
+          solicitation must be 'Enable' or 'Disable'
+          (got: {{ solicitation }})
+
+    # ==========================================
+    # Create Python SSH Script
+    # ==========================================
+
+    - name: >-
+        Create Python SSH Script for IPv6 MLD snooping
+        config
+      ansible.builtin.copy:
+        dest: "{{ tmp_dir }}/ipv6_mld_snooping_exec.py"
+        mode: '0755'
+        content: |
+          #!/usr/bin/env python3
+
+          import paramiko
+          import time
+          import re
+          import json
+
+          HOST = "{{ ansible_host }}"
+          USER = "{{ ansible_user }}"
+          PASSWORD = "{{ ansible_password }}"
+
+          MLD_SNOOPING = "{{ mld_snooping_normalized }}"
+          ROUTER_AGE_TIMER = "{{ router_age_timer }}"
+          RESPONSE_AGE_TIMER = "{{ response_age_timer }}"
+          QUERIER = "{{ querier_normalized }}"
+          QUERIER_ADDRESS = (
+              "{{ querier_address_normalized }}"
+          )
+          SOLICITATION = "{{ solicitation_normalized }}"
+
+          PROMPT_RE = r'[>#]\s*$'
+
+
+          def read_until_prompt(shell, prompt_re, timeout=10):
+              buf = ""
+              end_time = time.time() + timeout
+
+              while time.time() < end_time:
+                  if shell.recv_ready():
+                      chunk = shell.recv(65535).decode(
+                          errors="ignore"
+                      )
+                      buf += chunk
+
+                      if re.search(prompt_re, buf):
+                          return buf
+                  else:
+                      time.sleep(0.1)
+
+              return buf
+
+
+          def send_cmd(
+              shell, cmd, timeout=10, check_errors=True
+          ):
+              """Send a CLI command, wait for the prompt,
+              optionally raise on switch-reported errors.
+              Returns the raw output."""
+              shell.send(
+                  cmd if cmd.endswith("\n") else cmd + "\n"
+              )
+              output = read_until_prompt(
+                  shell, PROMPT_RE, timeout=timeout
+              )
+
+              if check_errors and re.search(
+                  r'%err|invalid|error', output, re.IGNORECASE
+              ):
+                  raise Exception(
+                      f"'{cmd.strip()}' rejected by switch: "
+                      f"{output.strip()}"
+                  )
+
+              return output
+
+
+          shell = None
+          ssh = None
+
+          try:
+              # ==================================
+              # RE-VALIDATE INPUTS (defense in
+              # depth, in case this script is ever
+              # invoked outside the playbook)
+              # ==================================
+
+              if MLD_SNOOPING not in ("enable", "disable"):
+                  raise Exception(
+                      f"Invalid mld_snooping "
+                      f"'{MLD_SNOOPING}'"
+                  )
+
+              for label, value in (
+                  ("router_age_timer", ROUTER_AGE_TIMER),
+                  ("response_age_timer",
+                   RESPONSE_AGE_TIMER),
+              ):
+                  if not (
+                      value.isdigit()
+                      and 10 <= int(value) <= 2147483647
+                  ):
+                      raise Exception(
+                          f"Invalid {label} '{value}': "
+                          f"must be 10-2147483647"
+                      )
+
+              if QUERIER not in ("enable", "disable"):
+                  raise Exception(
+                      f"Invalid querier '{QUERIER}'"
+                  )
+
+              if QUERIER_ADDRESS and not re.match(
+                  r'^[0-9a-f:]+$', QUERIER_ADDRESS
+              ):
+                  raise Exception(
+                      f"Invalid querier_address "
+                      f"'{QUERIER_ADDRESS}'"
+                  )
+
+              if SOLICITATION not in ("enable", "disable"):
+                  raise Exception(
+                      f"Invalid solicitation "
+                      f"'{SOLICITATION}'"
+                  )
+
+              # ==================================
+              # SSH CONNECTION
+              # ==================================
+
+              ssh = paramiko.SSHClient()
+              ssh.set_missing_host_key_policy(
+                  paramiko.AutoAddPolicy()
+              )
+
+              ssh.connect(
+                  HOST,
+                  username=USER,
+                  password=PASSWORD,
+                  look_for_keys=False,
+                  allow_agent=False,
+                  timeout=10
+              )
+
+              shell = ssh.invoke_shell()
+              time.sleep(0.5)
+
+              # ==================================
+              # LOGIN BANNER / INITIAL PROMPT
+              # ==================================
+
+              read_until_prompt(shell, PROMPT_RE, timeout=5)
+
+              # ==================================
+              # ENABLE, DISABLE PAGING, ENTER CONFIG
+              # ==================================
+
+              send_cmd(
+                  shell, "enable",
+                  timeout=5, check_errors=False
+              )
+              send_cmd(
+                  shell, "terminal length 0",
+                  timeout=5, check_errors=False
+              )
+              send_cmd(shell, "config", timeout=10)
+
+              # ==================================
+              # APPLY MLD SNOOPING GLOBAL CONFIG
+              # ==================================
+
+              if MLD_SNOOPING == "enable":
+                  send_cmd(
+                      shell, "ipv6 mld-snooping",
+                      timeout=10
+                  )
+              else:
+                  send_cmd(
+                      shell, "no ipv6 mld-snooping",
+                      timeout=10, check_errors=False
+                  )
+
+              send_cmd(
+                  shell,
+                  "ipv6 mld-snooping timer "
+                  f"router-age {ROUTER_AGE_TIMER}",
+                  timeout=10
+              )
+              send_cmd(
+                  shell,
+                  "ipv6 mld-snooping timer "
+                  f"response-time "
+                  f"{RESPONSE_AGE_TIMER}",
+                  timeout=10
+              )
+
+              if QUERIER == "enable":
+                  send_cmd(
+                      shell,
+                      "ipv6 mld-snooping querier",
+                      timeout=10
+                  )
+              else:
+                  # NOTE: disable form not confirmed
+                  # in a device log.
+                  send_cmd(
+                      shell,
+                      "no ipv6 mld-snooping querier",
+                      timeout=10, check_errors=False
+                  )
+
+              if QUERIER_ADDRESS:
+                  send_cmd(
+                      shell,
+                      "ipv6 mld-snooping querier "
+                      f"address {QUERIER_ADDRESS}",
+                      timeout=10
+                  )
+
+              if SOLICITATION == "enable":
+                  send_cmd(
+                      shell,
+                      "ipv6 mld-snooping solicitation",
+                      timeout=10
+                  )
+              else:
+                  # NOTE: disable form not confirmed
+                  # in a device log.
+                  send_cmd(
+                      shell,
+                      "no ipv6 mld-snooping "
+                      "solicitation",
+                      timeout=10, check_errors=False
+                  )
+
+              # ==================================
+              # EXIT CONFIG MODE
+              # ==================================
+
+              send_cmd(
+                  shell, "exit",
+                  timeout=5, check_errors=False
+              )
+
+              # ==================================
+              # SAVE CONFIG (persist running-config)
+              # NOTE: "write" was not shown in the
+              # confirmed log for this command;
+              # included for consistency with other
+              # config playbooks. Remove if not
+              # applicable here.
+              # ==================================
+
+              write_output = send_cmd(
+                  shell, "write",
+                  timeout=15, check_errors=False
+              )
+              if re.search(
+                  r'%err|invalid|error|fail',
+                  write_output, re.IGNORECASE
+              ):
+                  raise Exception(
+                      "'write' (save config) rejected "
+                      f"by switch: {write_output.strip()}"
+                  )
+
+              # ==================================
+              # CLOSE SSH / RETURN JSON
+              # ==================================
+
+              shell.close()
+              ssh.close()
+
+              print(json.dumps({
+                  "ip": HOST,
+                  "status": "success",
+              }))
+
+          except Exception as e:
+              try:
+                  if shell:
+                      shell.close()
+                  if ssh:
+                      ssh.close()
+              except:
+                  pass
+
+              print(json.dumps({
+                  "ip": HOST,
+                  "status": "failed",
+                  "error": str(e)
+              }))
+
+    # ==========================================
+    # EXECUTE PYTHON SCRIPT
+    # ==========================================
+
+    - name: Execute IPv6 MLD snooping config script
+      ansible.builtin.command:
+        argv:
+          - "{{ playbook_dir }}/../../bin/python3"
+          - "{{ tmp_dir }}/ipv6_mld_snooping_exec.py"
+      register: mld_raw
+      changed_when: false
+      failed_when: false
+
+    # ==========================================
+    # CONVERT JSON RESULT
+    # ==========================================
+
+    - name: Convert IPv6 MLD snooping result to JSON
+      ansible.builtin.set_fact:
+        mld_result: "{{ mld_raw.stdout | from_json }}"
+
+    # ==========================================
+    # DISPLAY RESULT
+    # ==========================================
+
+    - name: Display IPv6 MLD snooping result
+      ansible.builtin.debug:
+        var: mld_result
+
+    # ==========================================
+    # SAVE RESULT
+    # ==========================================
+
+    - name: Save IPv6 MLD snooping result
+      ansible.builtin.copy:
+        dest: "{{ output_dir }}/{{ ansible_host }}_ipv6_mld_snooping.yml"
+        content: |
+          {{ mld_result | to_nice_yaml }}
+
+    # ==========================================
+    # FAIL IF COMMAND FAILED
+    # ==========================================
+
+    - name: Fail if IPv6 MLD snooping config failed
+      ansible.builtin.fail:
+        msg: "{{ mld_result.error }}"
+      when: mld_result.status == "failed"
+
+    # ==========================================
+    # FINAL MESSAGE
+    # ==========================================
+
+    - name: Display result file
+      ansible.builtin.debug:
+        msg: >
+          IPv6 MLD snooping config applied on
+          {{ ansible_host }} (mld_snooping=
+          {{ mld_snooping }}). Result saved to
+          output/{{ ansible_host }}_ipv6_mld_snooping.yml
+

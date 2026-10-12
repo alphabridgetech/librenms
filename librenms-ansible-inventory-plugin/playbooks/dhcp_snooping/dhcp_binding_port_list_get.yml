@@ -1,0 +1,460 @@
+# ==========================================
+# dhcp_binding_port_list_get.yml
+# Created on Sept 19, 2026 by Vikash Kumar (vikash.kumar@alphabrige.tech).
+#
+# Copyright (c), ALPHA BRIDGE, Inc.
+# 357D, Udyog Vihar Industrial Area Phase VI, Sector 37, Gurugram, Haryana.
+#
+# All rights reserved.
+#
+# This software is the confidential and proprietary information of ALPHA BRIDGE,
+# Inc. ("Confidential Information"). You shall not disclose such Confidential
+# Information and shall use it only in accordance with the
+# terms of the license agreement you entered into with
+# ALPHA BRIDGE.
+#
+# =============================================================================
+# Playbook Name : DHCP Binding Details (Show)
+# =============================================================================
+#
+# Description:
+#   Read static IP source bindings from "show running-config" over SSH.
+#   One "ip source binding ..." line produces one GUI table row.
+#   If no bindings are configured, return total_entries: 0 and bindings: [].
+#   Does not change the switch configuration.
+#
+# Optional input vars:
+#   vlan_id     - filter bindings by VLAN ID
+#   mac_address - filter bindings by MAC (case-insensitive)
+#
+# Output: output/<switch_ip>_dhcp_binding_details.yml
+# =============================================================================
+
+- name: DHCP binding details (show)
+  hosts: alphabridge_devices
+  gather_facts: false
+
+  vars:
+    project_root: "{{ playbook_dir }}/../.."
+    output_dir: "{{ project_root }}/output"
+    tmp_dir: "{{ project_root }}/tmp"
+
+  pre_tasks:
+    - name: Ensure script and report directories exist
+      ansible.builtin.file:
+        path: "{{ item }}"
+        state: directory
+        mode: '0755'
+      loop:
+        - "{{ tmp_dir }}"
+        - "{{ output_dir }}"
+
+  tasks:
+    - name: Validate optional VLAN filter
+      ansible.builtin.assert:
+        that:
+          - vlan_id | string is match('^[0-9]+$')
+        fail_msg: "vlan_id must be a whole number"
+      when: vlan_id is defined and vlan_id | string | length > 0
+
+    # ==========================================
+    # CREATE PYTHON SSH SCRIPT
+    # ==========================================
+    - name: Create Python SSH script for DHCP binding details
+      ansible.builtin.copy:
+        dest: "{{ tmp_dir }}/dhcp_binding_details_exec.py"
+        mode: '0700'
+        content: |
+          #!/usr/bin/env python3
+          import json
+          import os
+          import re
+          import sys
+          import time
+          import paramiko
+
+          HOST = os.environ["SWITCH_HOST"]
+          USER = os.environ["SWITCH_USER"]
+          PASSWORD = os.environ["SWITCH_PASSWORD"]
+          VLAN_FILTER = os.environ.get("VLAN_FILTER", "").strip()
+          MAC_FILTER = os.environ.get("MAC_FILTER", "").strip().lower()
+
+          ANSI_RE = re.compile(r'\x1b(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])')
+          PROMPT_RE = re.compile(r'(?m)^[^\r\n\s]+[>#]\s*\Z')
+          CLI_ERROR_RE = re.compile(
+              r'(?im)^\s*(?:%\s*(?:error|invalid|unknown|unrecognized)\b'
+              r'|error:|invalid (?:input|command)|unknown command)'
+          )
+
+          # Example:
+          # ip source binding f4:ee:08:ea:ea:1d 192.168.12.10 interface GigaEthernet0/5 vlan 12
+
+          BINDING_RE = re.compile(
+              r'^ip\s+source\s+binding\s+(\S+)\s+(\S+)\s+'
+              r'interface\s+(.+?)\s+vlan\s+(\d+)\s*$',
+              re.IGNORECASE
+          )
+
+          # ==========================================
+          # READ OUTPUT UNTIL SWITCH PROMPT
+          # ==========================================
+
+          def read_until_prompt(shell, timeout=60):
+
+              output = ""
+              deadline = time.monotonic() + timeout
+
+              while time.monotonic() < deadline:
+
+                  if shell.recv_ready():
+
+                      output += shell.recv(65535).decode(
+                          "utf-8", errors="replace"
+                      )
+
+                      cleaned = ANSI_RE.sub(
+                          "", output
+                      ).replace("\r", "")
+
+                      if PROMPT_RE.search(cleaned):
+                          return cleaned
+
+                  else:
+                      time.sleep(0.1)
+
+              raise TimeoutError(
+                  "Timed out waiting for switch prompt; running-config may be incomplete"
+              )
+
+          # ==========================================
+          # EXECUTE CLI COMMAND
+          # ==========================================
+
+          def run_command(shell, command, timeout=60):
+
+              shell.send(command + "\n")
+
+              output = read_until_prompt(shell, timeout)
+
+              if CLI_ERROR_RE.search(output):
+
+                  raise RuntimeError(
+                      "Switch rejected command: " + command
+                  )
+
+              return output
+
+          # ==========================================
+          # PARSE IP SOURCE BINDINGS
+          # ==========================================
+
+          def parse_bindings(output):
+
+              # Validate running configuration output.
+              # Missing binding entries are valid only
+              # when running-config was retrieved.
+
+              if not re.search(
+                  r'(?im)^\s*Current configuration\s*:', output
+              ):
+
+                  raise ValueError(
+                      "Unrecognized show running-config output"
+                  )
+
+              bindings = []
+
+              # ==========================================
+              # READ CONFIGURATION LINE BY LINE
+              # ==========================================
+
+              for raw_line in output.splitlines():
+
+                  line = raw_line.strip()
+
+                  # Check only IP source binding lines.
+
+                  if not re.match(
+                      r'^ip\s+source\s+binding\b',
+                      line,
+                      re.I
+                  ):
+                      continue
+
+                  # ==================================
+                  # EXTRACT BINDING DETAILS
+                  # ==================================
+
+                  match = BINDING_RE.fullmatch(line)
+
+                  if match is None:
+
+                      raise ValueError(
+                          "Unrecognized ip source binding format"
+                      )
+
+                  mac, ip_addr, interface, vlan = match.groups()
+
+                  # ==================================
+                  # MAP VALUES TO GUI FIELDS
+                  # ==================================
+
+                  bindings.append({
+
+                      "MAC Address": mac,
+
+                      "IP Address": ip_addr,
+
+                      "Port": interface,
+
+                      "VLAN": int(vlan)
+
+                  })
+
+              # ==========================================
+              # APPLY OPTIONAL VLAN FILTER
+              # ==========================================
+
+              if VLAN_FILTER:
+
+                  bindings = [
+
+                      entry for entry in bindings
+
+                      if entry["VLAN"] == int(VLAN_FILTER)
+
+                  ]
+
+              # ==========================================
+              # APPLY OPTIONAL MAC FILTER
+              # ==========================================
+
+              if MAC_FILTER:
+
+                  bindings = [
+
+                      entry for entry in bindings
+
+                      if entry["MAC Address"].lower() == MAC_FILTER
+
+                  ]
+
+              return bindings
+
+          # ==========================================
+          # SSH INITIALIZATION
+          # ==========================================
+
+          ssh = None
+          shell = None
+
+          try:
+
+              ssh = paramiko.SSHClient()
+
+              # Retains the original playbook's host-key policy.
+              # Use trusted host-key verification in production.
+
+              ssh.set_missing_host_key_policy(
+                  paramiko.AutoAddPolicy()
+              )
+
+              # ==========================================
+              # CONNECT TO SWITCH
+              # ==========================================
+
+              ssh.connect(
+                  HOST,
+                  username=USER,
+                  password=PASSWORD,
+                  look_for_keys=False,
+                  allow_agent=False,
+                  timeout=10,
+                  auth_timeout=10,
+                  banner_timeout=10
+              )
+
+              shell = ssh.invoke_shell()
+
+              # ==========================================
+              # INITIAL PROMPT
+              # ==========================================
+
+              initial = read_until_prompt(
+                  shell,
+                  timeout=10
+              )
+
+              # ==========================================
+              # ENABLE MODE
+              # ==========================================
+
+              if initial.rstrip().endswith(">"):
+
+                  enabled = run_command(
+                      shell,
+                      "enable",
+                      timeout=10
+                  )
+
+                  if not enabled.rstrip().endswith("#"):
+
+                      raise RuntimeError(
+                          "Could not enter privileged EXEC mode"
+                      )
+
+              elif not initial.rstrip().endswith("#"):
+
+                  raise RuntimeError(
+                      "Unrecognized switch prompt"
+                  )
+
+              # ==========================================
+              # DISABLE PAGING
+              # ==========================================
+
+              run_command(
+                  shell,
+                  "terminal length 0",
+                  timeout=10
+              )
+
+              # ==========================================
+              # SHOW RUNNING CONFIGURATION
+              # ==========================================
+
+              config = run_command(
+                  shell,
+                  "show running-config",
+                  timeout=60
+              )
+
+              # ==========================================
+              # PARSE BINDINGS
+              # ==========================================
+
+              bindings = parse_bindings(config)
+
+              # ==========================================
+              # RETURN JSON RESULT
+              # ==========================================
+
+              print(json.dumps({
+
+                  "ip": HOST,
+
+                  "status": "success",
+
+                  "total_entries": len(bindings),
+
+                  "bindings": bindings
+
+              }))
+
+          # ==========================================
+          # EXCEPTION HANDLING
+          # ==========================================
+
+          except Exception as exc:
+
+              print(json.dumps({
+
+                  "ip": HOST,
+
+                  "status": "failed",
+
+                  "error": str(exc)
+
+              }))
+
+              sys.exit(1)
+
+          # ==========================================
+          # CLOSE SSH CONNECTION
+          # ==========================================
+
+          finally:
+
+              if shell is not None:
+                  shell.close()
+
+              if ssh is not None:
+                  ssh.close()
+
+    # ==========================================
+    # EXECUTE PYTHON SCRIPT
+    # ==========================================
+
+    - name: Execute DHCP binding details script
+      ansible.builtin.command:
+        argv:
+          - "{{ playbook_dir }}/../../bin/python3"
+          - "{{ tmp_dir }}/dhcp_binding_details_exec.py"
+      environment:
+        SWITCH_HOST: "{{ ansible_host }}"
+        SWITCH_USER: "{{ ansible_user }}"
+        SWITCH_PASSWORD: "{{ ansible_password }}"
+        VLAN_FILTER: "{{ vlan_id | default('') }}"
+        MAC_FILTER: "{{ mac_address | default('') }}"
+      register: dhcp_raw
+      changed_when: false
+      failed_when: false
+      no_log: true
+
+    # ==========================================
+    # VALIDATE JSON RESULT
+    # ==========================================
+
+    - name: Check helper returned JSON
+      ansible.builtin.assert:
+        that:
+          - dhcp_raw.stdout | trim | length > 0
+        fail_msg: >-
+          DHCP binding helper returned empty stdout.
+          Check the interpreter, Paramiko installation,
+          and SSH connectivity securely.
+
+    # ==========================================
+    # CONVERT JSON RESULT
+    # ==========================================
+
+    - name: Convert DHCP binding details result to JSON
+      ansible.builtin.set_fact:
+        dhcp_result: "{{ dhcp_raw.stdout | from_json }}"
+
+    # ==========================================
+    # FAIL IF COMMAND FAILED
+    # ==========================================
+
+    - name: Fail if DHCP binding details show failed
+      ansible.builtin.fail:
+        msg: "{{ dhcp_result.error | default('Helper exited with a nonzero status') }}"
+      when: dhcp_raw.rc != 0 or dhcp_result.status != 'success'
+
+    # ==========================================
+    # DISPLAY RESULT
+    # ==========================================
+
+    - name: Display DHCP binding details result
+      ansible.builtin.debug:
+        var: dhcp_result
+
+    # ==========================================
+    # SAVE RESULT
+    # ==========================================
+
+    - name: Save DHCP binding details result
+      ansible.builtin.copy:
+        dest: "{{ output_dir }}/{{ ansible_host }}_dhcp_binding_details.yml"
+        mode: '0644'
+        content: "{{ dhcp_result | to_nice_yaml(sort_keys=False) }}\n"
+
+    # ==========================================
+    # FINAL MESSAGE
+    # ==========================================
+
+    - name: Display result file
+      ansible.builtin.debug:
+        msg: >-
+          DHCP binding details retrieved from {{ ansible_host }}.
+          Result saved to output/{{ ansible_host }}_dhcp_binding_details.yml

@@ -1,0 +1,664 @@
+# ============================================================================
+# File        : setportguardconfiguration.yml
+# Feature     : STP Port Guard Configuration - SET
+#
+# ============================================================================
+# ANSIBLE COMMAND
+# ============================================================================
+#
+# LOOP GUARD:
+#
+# ansible-playbook -i inventory/192.168.2.245.yml \
+# playbooks/stp/setportguardconfiguration.yml \
+# -e "interface=GigaEthernet0/1 bpdu_guard=Enable guard=loop"
+#
+#
+# ROOT GUARD:
+#
+# ansible-playbook -i inventory/192.168.2.245.yml \
+# playbooks/stp/setportguardconfiguration.yml \
+# -e "interface=GigaEthernet0/1 bpdu_guard=Enable guard=root"
+#
+#
+# NO GUARD:
+#
+# ansible-playbook -i inventory/192.168.2.245.yml \
+# playbooks/stp/setportguardconfiguration.yml \
+# -e "interface=GigaEthernet0/1 bpdu_guard=Disable guard=none"
+#
+# ============================================================================
+#
+# Supported interface formats:
+#
+#   GigaEthernet0/1
+#   GigaEthernet 0/1
+#   g0/1
+#   g 0/1
+#
+#   TGigaEthernet0/1
+#   TGigaEthernet 0/1
+#   tg0/1
+#   tg 0/1
+#
+# ============================================================================
+#
+# BPDU Guard:
+#
+#   Enable:
+#       spanning-tree bpduguard enable
+#
+#   Disable:
+#       no spanning-tree bpduguard
+#
+# ============================================================================
+#
+# STP Guard:
+#
+#   loop:
+#       spanning-tree guard loop
+#
+#   root:
+#       spanning-tree guard root
+#
+#   none:
+#       spanning-tree guard none
+#
+# ============================================================================
+#
+# Output:
+#
+# /opt/librenms/librenms-ansible-inventory-plugin/output/192.168.2.245_port_guard_set.yml
+#
+# Contains ONLY:
+#
+# status: SUCCESS
+# device_ip: 192.168.2.245
+#
+# ============================================================================
+
+
+- name: Port Guard Configuration - SET
+  hosts: alphabridge_devices
+  gather_facts: no
+
+  vars:
+
+    output_dir: "/opt/librenms/librenms-ansible-inventory-plugin/output"
+    temp_dir: "/opt/librenms/librenms-ansible-inventory-plugin/tmp"
+
+  tasks:
+
+    # ========================================================================
+    # Validate parameters
+    # ========================================================================
+
+    - name: Validate Port Guard parameters
+      ansible.builtin.assert:
+        that:
+
+          - interface is defined
+          - interface | length > 0
+
+          - bpdu_guard is defined
+          - bpdu_guard in ['Enable', 'Disable']
+
+          - guard is defined
+          - guard in ['loop', 'root', 'none']
+
+        fail_msg: >
+          Invalid Port Guard parameters.
+          Valid values:
+          bpdu_guard = Enable/Disable
+          guard = loop/root/none
+
+        success_msg: "All assertions passed"
+
+
+    # ========================================================================
+    # Create output directory
+    # ========================================================================
+
+    - name: Create output directory
+      ansible.builtin.file:
+        path: "{{ output_dir }}"
+        state: directory
+        mode: "0755"
+      delegate_to: localhost
+
+
+    # ========================================================================
+    # Create temporary directory
+    # ========================================================================
+
+    - name: Create temporary directory
+      ansible.builtin.file:
+        path: "{{ temp_dir }}"
+        state: directory
+        mode: "0755"
+      delegate_to: localhost
+
+
+    # ========================================================================
+    # Normalize GigaEthernet interface
+    # ========================================================================
+
+    - name: Normalize GigaEthernet interface
+      ansible.builtin.set_fact:
+        normalized_interface: >-
+          {{
+            'GigaEthernet 0/' +
+            (
+              interface
+              | regex_replace(
+                  '(?i)^gigaethernet\s*0/',
+                  ''
+                )
+              | regex_replace(
+                  '(?i)^g\s*0/',
+                  ''
+                )
+            )
+          }}
+      when:
+        - interface | lower is match(
+            '^\s*(gigaethernet|g)\s*0/[0-9]+\s*$'
+          )
+
+
+    # ========================================================================
+    # Normalize TGigaEthernet interface
+    # ========================================================================
+
+    - name: Normalize TGigaEthernet interface
+      ansible.builtin.set_fact:
+        normalized_interface: >-
+          {{
+            'TGigaEthernet 0/' +
+            (
+              interface
+              | regex_replace(
+                  '(?i)^tgigaethernet\s*0/',
+                  ''
+                )
+              | regex_replace(
+                  '(?i)^tg\s*0/',
+                  ''
+                )
+            )
+          }}
+      when:
+        - interface | lower is match(
+            '^\s*(tgigaethernet|tg)\s*0/[0-9]+\s*$'
+          )
+
+
+    # ========================================================================
+    # Validate normalized interface
+    # ========================================================================
+
+    - name: Validate normalized interface
+      ansible.builtin.assert:
+        that:
+
+          - normalized_interface is defined
+
+          - normalized_interface is match(
+              '^(GigaEthernet|TGigaEthernet) 0/[0-9]+$'
+            )
+
+        fail_msg: >
+          Invalid interface '{{ interface }}'.
+          Supported examples:
+          GigaEthernet0/1,
+          GigaEthernet 0/1,
+          g0/1,
+          TGigaEthernet0/1,
+          TGigaEthernet 0/1,
+          tg0/1.
+
+        success_msg:
+          "Normalized interface: {{ normalized_interface }}"
+
+
+    # ========================================================================
+    # Build BPDU Guard command
+    # ========================================================================
+
+    - name: Build BPDU Guard command
+      ansible.builtin.set_fact:
+        bpdu_command: >-
+          {{
+            'spanning-tree bpduguard enable'
+            if bpdu_guard == 'Enable'
+            else
+            'no spanning-tree bpduguard'
+          }}
+
+
+    # ========================================================================
+    # Build STP Guard command
+    # ========================================================================
+
+    - name: Build Guard command
+      ansible.builtin.set_fact:
+        guard_command: >-
+          {{
+            'spanning-tree guard loop'
+            if guard == 'loop'
+            else
+            'spanning-tree guard root'
+            if guard == 'root'
+            else
+            'spanning-tree guard none'
+          }}
+
+
+    # ========================================================================
+    # Generate Python script
+    # ========================================================================
+
+    - name: Generate Port Guard Python script
+      ansible.builtin.copy:
+
+        dest: "{{ temp_dir }}/{{ inventory_hostname }}_port_guard_set.py"
+
+        mode: "0755"
+
+        content: |
+
+          import time
+          import re
+          import sys
+          import paramiko
+
+
+          # ==================================================================
+          # Device details
+          # ==================================================================
+
+          HOST = "{{ ansible_host }}"
+          USER = "{{ ansible_user }}"
+          PASSWORD = "{{ ansible_password }}"
+
+
+          # ==================================================================
+          # Configuration
+          # ==================================================================
+
+          INTERFACE = "{{ normalized_interface }}"
+
+          BPDU_COMMAND = "{{ bpdu_command }}"
+
+          GUARD_COMMAND = "{{ guard_command }}"
+
+
+          # ==================================================================
+          # Debug file
+          # ==================================================================
+
+          DEBUG_FILE = (
+              "{{ output_dir }}/"
+              "{{ ansible_host }}_port_guard_set_debug.txt"
+          )
+
+
+          # ==================================================================
+          # Commands
+          # ==================================================================
+
+          commands = [
+
+              "enable",
+
+              "terminal length 0",
+
+              "config",
+
+              f"interface {INTERFACE}",
+
+              BPDU_COMMAND,
+
+              GUARD_COMMAND,
+
+              "exit",
+
+              "exit",
+
+          ]
+
+
+          # ==================================================================
+          # Error patterns
+          # ==================================================================
+
+          error_patterns = [
+
+              r"Too many parameters",
+
+              r"Unknown command",
+
+              r"Incomplete command",
+
+              r"Invalid input",
+
+              r"Invalid command",
+
+              r"Invalid parameter",
+
+              r"Command rejected",
+
+              r"Error",
+
+              r"Failed",
+
+          ]
+
+
+          # ==================================================================
+          # Debug storage
+          # ==================================================================
+
+          debug_output = []
+
+          command_errors = []
+
+
+          # ==================================================================
+          # Send command
+          # ==================================================================
+
+          def send_command(channel, command, wait=1.0):
+
+              debug_output.append(
+                  "\nCOMMAND: " + command
+              )
+
+              channel.send(
+                  command + "\n"
+              )
+
+              time.sleep(wait)
+
+              response = ""
+
+              while channel.recv_ready():
+
+                  response += (
+                      channel.recv(65535)
+                      .decode(
+                          "utf-8",
+                          errors="ignore"
+                      )
+                  )
+
+              debug_output.append(response)
+
+              return response
+
+
+          # ==================================================================
+          # Main
+          # ==================================================================
+
+          client = None
+
+
+          try:
+
+              # ================================================================
+              # SSH connection
+              # ================================================================
+
+              client = paramiko.SSHClient()
+
+              client.set_missing_host_key_policy(
+                  paramiko.AutoAddPolicy()
+              )
+
+              client.connect(
+
+                  HOST,
+
+                  port=22,
+
+                  username=USER,
+
+                  password=PASSWORD,
+
+                  look_for_keys=False,
+
+                  allow_agent=False,
+
+                  timeout=10
+
+              )
+
+
+              # ================================================================
+              # Interactive shell
+              # ================================================================
+
+              channel = client.invoke_shell()
+
+              time.sleep(1)
+
+
+              # ================================================================
+              # Read banner
+              # ================================================================
+
+              if channel.recv_ready():
+
+                  banner = (
+                      channel.recv(65535)
+                      .decode(
+                          "utf-8",
+                          errors="ignore"
+                      )
+                  )
+
+                  debug_output.append(
+                      banner
+                  )
+
+
+              # ================================================================
+              # Execute commands
+              # ================================================================
+
+              for command in commands:
+
+                  response = send_command(
+                      channel,
+                      command
+                  )
+
+
+                  # ============================================================
+                  # Check configuration commands
+                  # ============================================================
+
+                  if command in [
+
+                      BPDU_COMMAND,
+
+                      GUARD_COMMAND
+
+                  ]:
+
+                      for pattern in error_patterns:
+
+                          if re.search(
+                              pattern,
+                              response,
+                              re.IGNORECASE
+                          ):
+
+                              command_errors.append(
+
+                                  command +
+                                  ": " +
+                                  pattern
+
+                              )
+
+
+              # ================================================================
+              # Close connection
+              # ================================================================
+
+              client.close()
+
+
+              # ================================================================
+              # Write debug output
+              # ================================================================
+
+              with open(
+                  DEBUG_FILE,
+                  "w"
+              ) as debug_file:
+
+                  debug_file.write(
+                      "\n".join(debug_output)
+                  )
+
+
+              # ================================================================
+              # Result
+              # ================================================================
+
+              if command_errors:
+
+                  print("STATUS=FAILED")
+
+                  print(
+                      "ERRORS=" +
+                      " | ".join(command_errors)
+                  )
+
+                  sys.exit(1)
+
+
+              print("STATUS=SUCCESS")
+
+              sys.exit(0)
+
+
+          except Exception as exc:
+
+              if client:
+
+                  try:
+
+                      client.close()
+
+                  except Exception:
+
+                      pass
+
+
+              # ================================================================
+              # Write exception
+              # ================================================================
+
+              with open(
+                  DEBUG_FILE,
+                  "a"
+              ) as debug_file:
+
+                  debug_file.write(
+                      "\nEXCEPTION:\n"
+                  )
+
+                  debug_file.write(
+                      str(exc)
+                  )
+
+
+              print("STATUS=FAILED")
+
+              print(
+                  "ERRORS=" +
+                  str(exc)
+              )
+
+              sys.exit(1)
+
+
+    # ========================================================================
+    # Execute configuration
+    # ========================================================================
+
+    - name: Execute Port Guard configuration
+      ansible.builtin.command:
+        cmd: >
+          python3
+          {{ temp_dir }}/{{ inventory_hostname }}_port_guard_set.py
+
+      delegate_to: localhost
+
+      register: port_guard_result
+
+      changed_when: port_guard_result.rc == 0
+
+      failed_when: false
+
+
+    # ========================================================================
+    # Display Python result
+    # ========================================================================
+
+    - name: Display Python execution result
+      ansible.builtin.debug:
+        var: port_guard_result.stdout_lines
+
+
+    # ========================================================================
+    # Set final status
+    # ========================================================================
+
+    - name: Set final status
+      ansible.builtin.set_fact:
+        port_guard_status: >-
+          {{
+            'SUCCESS'
+            if port_guard_result.rc == 0
+            else
+            'FAILED'
+          }}
+
+
+    # ========================================================================
+    # Create output YAML
+    #
+    # ONLY:
+    #   status
+    #   device_ip
+    # ========================================================================
+
+    - name: Create Port Guard result file
+      ansible.builtin.copy:
+
+        dest: "{{ output_dir }}/{{ ansible_host }}_port_guard_set.yml"
+
+        mode: "0644"
+
+        content: |
+          status: {{ port_guard_status }}
+          device_ip: {{ ansible_host }}
+
+      delegate_to: localhost
+
+
+    # ========================================================================
+    # Display final result
+    # ========================================================================
+
+    - name: Display Port Guard Configuration Result
+      ansible.builtin.debug:
+
+        msg: |
+          status: {{ port_guard_status }}
+          device_ip: {{ ansible_host }}
+

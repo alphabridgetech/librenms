@@ -1,0 +1,276 @@
+# ==========================================
+# dhcp_interface_config_set.yml
+# Created on Sept 4, 2026 by Vikash Kumar (vikash.kumar@alphabrige.tech).
+#
+# Copyright (c), ALPHA BRIDGE, Inc.
+# 357D, Udyog Vihar Industrial Area Phase VI, Sector 37, Gurugram, Haryana.
+#
+# All rights reserved.
+#
+# This software is the confidential and proprietary information of ALPHA BRIDGE,
+# Inc. ("Confidential Information"). You shall not disclose such Confidential
+# Information and shall use it only in accordance with the terms of the license
+# agreement you entered into with ALPHA BRIDGE.
+#
+# =============================================================================
+# Playbook Name : DHCP Snooping Interface Configuration
+# =============================================================================
+#
+# Description:
+# Configures per-interface DHCP Trust, ARP Inspection Trust, and
+# IP Source Trust on AlphaBridge switches over SSH.
+#
+# Input vars (all optional, comma-separated interface names):
+#   dhcp_trust_ports          - DHCP trust
+#   dhcp_distrust_ports       - remove DHCP trust
+#   arp_trust_ports           - ARP inspection trust
+#   arp_distrust_ports        - remove ARP inspection trust
+#   ip_source_trust_ports     - IP source trust
+#   ip_source_distrust_ports  - remove IP source trust
+#
+# Interface names are passed to the switch exactly as entered (after trimming).
+# Examples: g0/1, tg0/1, GigaEthernet0/1, TenGigaEthernet0/1.
+# Only supplied interfaces are configured; there is no hardcoded port list.
+# An interface cannot be both trusted and distrusted for the same feature.
+#
+# Example:
+# ansible-playbook -i inventory/192.168.2.245.yml \
+#   playbooks/dhcp_interface_config.yml \
+#   -e 'dhcp_trust_ports=g0/1,tg0/1' \
+#   -e 'arp_trust_ports=GigaEthernet0/1'
+#
+# Output:
+# output/<switch_ip>_dhcp_interface_config.yml
+# =============================================================================
+
+- name: DHCP snooping interface configuration
+  hosts: alphabridge_devices
+  gather_facts: false
+
+  vars:
+    project_root: "{{ playbook_dir }}/../.."
+    output_dir: "{{ project_root }}/output"
+    tmp_dir: "{{ project_root }}/tmp"
+
+  pre_tasks:
+    - name: Ensure script and report directories exist
+      ansible.builtin.file:
+        path: "{{ item }}"
+        state: directory
+        mode: '0755'
+      loop:
+        - "{{ tmp_dir }}"
+        - "{{ output_dir }}"
+
+  tasks:
+    # Split user-provided comma-separated values; do not validate interface names.
+    - name: Split interface lists
+      ansible.builtin.set_fact:
+        dhcp_trust_port_list: "{{ (dhcp_trust_ports | default('')).split(',') | map('trim') | reject('equalto', '') | list }}"
+        dhcp_distrust_port_list: "{{ (dhcp_distrust_ports | default('')).split(',') | map('trim') | reject('equalto', '') | list }}"
+        arp_trust_port_list: "{{ (arp_trust_ports | default('')).split(',') | map('trim') | reject('equalto', '') | list }}"
+        arp_distrust_port_list: "{{ (arp_distrust_ports | default('')).split(',') | map('trim') | reject('equalto', '') | list }}"
+        ip_source_trust_port_list: "{{ (ip_source_trust_ports | default('')).split(',') | map('trim') | reject('equalto', '') | list }}"
+        ip_source_distrust_port_list: "{{ (ip_source_distrust_ports | default('')).split(',') | map('trim') | reject('equalto', '') | list }}"
+
+    # Preserve the functional conflict check, not a port-name validation.
+    - name: Prevent contradictory trust and distrust settings
+      ansible.builtin.assert:
+        that:
+          - "(dhcp_trust_port_list | intersect(dhcp_distrust_port_list)) | length == 0"
+          - "(arp_trust_port_list | intersect(arp_distrust_port_list)) | length == 0"
+          - "(ip_source_trust_port_list | intersect(ip_source_distrust_port_list)) | length == 0"
+        fail_msg: "The same interface cannot be in both trust and distrust lists for one feature."
+
+    - name: Create Python SSH script for DHCP interface configuration
+      ansible.builtin.copy:
+        dest: "{{ tmp_dir }}/dhcp_interface_config_exec.py"
+        mode: '0700'
+        content: |
+          #!/usr/bin/env python3
+          import json
+          import os
+          import re
+          import sys
+          import time
+          import paramiko
+
+          HOST = os.environ["SWITCH_HOST"]
+          USER = os.environ["SWITCH_USER"]
+          PASSWORD = os.environ["SWITCH_PASSWORD"]
+
+          # Read literal interface names from JSON, avoiding Python string
+          # interpolation in the generated helper script.
+          DHCP_TRUST_PORTS = json.loads(os.environ["DHCP_TRUST_PORTS"])
+          DHCP_DISTRUST_PORTS = json.loads(os.environ["DHCP_DISTRUST_PORTS"])
+          ARP_TRUST_PORTS = json.loads(os.environ["ARP_TRUST_PORTS"])
+          ARP_DISTRUST_PORTS = json.loads(os.environ["ARP_DISTRUST_PORTS"])
+          IP_SOURCE_TRUST_PORTS = json.loads(os.environ["IP_SOURCE_TRUST_PORTS"])
+          IP_SOURCE_DISTRUST_PORTS = json.loads(os.environ["IP_SOURCE_DISTRUST_PORTS"])
+
+          PROMPT_RE = re.compile(r'(?m)^[^\r\n\s]+[>#]\s*\Z')
+          ERROR_RE = re.compile(
+              r'(?im)^\s*(?:%\s*(?:err(?:or)?|invalid|unknown|unrecognized)\b'
+              r'|error:|invalid (?:input|command)|unknown command)'
+          )
+          ANSI_RE = re.compile(r'\x1b(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])')
+
+          def read_until_prompt(shell, timeout=10):
+              buffer = ""
+              deadline = time.monotonic() + timeout
+              while time.monotonic() < deadline:
+                  if shell.recv_ready():
+                      buffer += shell.recv(65535).decode(errors="replace")
+                      clean = ANSI_RE.sub("", buffer).replace("\r", "")
+                      if PROMPT_RE.search(clean):
+                          return clean
+                  else:
+                      time.sleep(0.1)
+              raise TimeoutError("Timed out waiting for switch prompt")
+
+          def send_cmd(shell, command, timeout=10):
+              shell.send(command + "\n")
+              output = read_until_prompt(shell, timeout=timeout)
+              if ERROR_RE.search(output):
+                  raise RuntimeError(
+                      "Switch rejected command {!r}: {}".format(
+                          command, output.strip()
+                      )
+                  )
+              return output
+
+          # Keep the order from the user lists and visit each interface once.
+          all_ports = list(dict.fromkeys(
+              DHCP_TRUST_PORTS + DHCP_DISTRUST_PORTS +
+              ARP_TRUST_PORTS + ARP_DISTRUST_PORTS +
+              IP_SOURCE_TRUST_PORTS + IP_SOURCE_DISTRUST_PORTS
+          ))
+
+          applied = {
+              "dhcp_trust": [], "dhcp_distrust": [],
+              "arp_trust": [], "arp_distrust": [],
+              "ip_source_trust": [], "ip_source_distrust": []
+          }
+          ssh = None
+          shell = None
+
+          try:
+              # No port-name allowlist or short-name-to-full-name mapping.
+              # Prevent multiline CLI commands; let the switch validate names.
+              for port in all_ports:
+                  if "\n" in port or "\r" in port:
+                      raise ValueError("Interface names must be a single CLI line")
+
+              ssh = paramiko.SSHClient()
+              ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+              ssh.connect(
+                  HOST, username=USER, password=PASSWORD,
+                  look_for_keys=False, allow_agent=False, timeout=10
+              )
+              shell = ssh.invoke_shell()
+              read_until_prompt(shell, timeout=5)
+              send_cmd(shell, "enable", timeout=5)
+              send_cmd(shell, "terminal length 0", timeout=5)
+
+              # Do not enter config mode or save when no interfaces were supplied.
+              if all_ports:
+                  send_cmd(shell, "config", timeout=10)
+                  for port in all_ports:
+                      # Use the exact name supplied: g0/1, tg0/1, or full name.
+                      send_cmd(shell, "interface " + port, timeout=10)
+
+                      if port in DHCP_TRUST_PORTS:
+                          send_cmd(shell, "dhcp snooping trust")
+                          applied["dhcp_trust"].append(port)
+                      elif port in DHCP_DISTRUST_PORTS:
+                          send_cmd(shell, "no dhcp snooping trust")
+                          applied["dhcp_distrust"].append(port)
+
+                      if port in ARP_TRUST_PORTS:
+                          send_cmd(shell, "arp inspection trust")
+                          applied["arp_trust"].append(port)
+                      elif port in ARP_DISTRUST_PORTS:
+                          send_cmd(shell, "no arp inspection trust")
+                          applied["arp_distrust"].append(port)
+
+                      if port in IP_SOURCE_TRUST_PORTS:
+                          send_cmd(shell, "ip-source trust")
+                          applied["ip_source_trust"].append(port)
+                      elif port in IP_SOURCE_DISTRUST_PORTS:
+                          send_cmd(shell, "no ip-source trust")
+                          applied["ip_source_distrust"].append(port)
+
+                      send_cmd(shell, "exit", timeout=5)
+
+                  send_cmd(shell, "exit", timeout=5)
+                  send_cmd(shell, "write", timeout=15)
+
+              print(json.dumps({
+                  "ip": HOST,
+                  "applied": applied,
+                  "status": "success"
+              }))
+
+          except Exception as exc:
+              print(json.dumps({
+                  "ip": HOST,
+                  "status": "failed",
+                  "error": str(exc)
+              }))
+              sys.exit(1)
+          finally:
+              if shell is not None:
+                  shell.close()
+              if ssh is not None:
+                  ssh.close()
+
+    - name: Execute DHCP interface configuration script
+      ansible.builtin.command:
+        argv:
+          - "{{ playbook_dir }}/../../bin/python3"
+          - "{{ tmp_dir }}/dhcp_interface_config_exec.py"
+      environment:
+        SWITCH_HOST: "{{ ansible_host }}"
+        SWITCH_USER: "{{ ansible_user }}"
+        SWITCH_PASSWORD: "{{ ansible_password }}"
+        DHCP_TRUST_PORTS: "{{ dhcp_trust_port_list | to_json }}"
+        DHCP_DISTRUST_PORTS: "{{ dhcp_distrust_port_list | to_json }}"
+        ARP_TRUST_PORTS: "{{ arp_trust_port_list | to_json }}"
+        ARP_DISTRUST_PORTS: "{{ arp_distrust_port_list | to_json }}"
+        IP_SOURCE_TRUST_PORTS: "{{ ip_source_trust_port_list | to_json }}"
+        IP_SOURCE_DISTRUST_PORTS: "{{ ip_source_distrust_port_list | to_json }}"
+      register: dhcp_raw
+      changed_when: false
+      failed_when: false
+      no_log: true
+
+    - name: Check Python script returned JSON
+      ansible.builtin.assert:
+        that:
+          - dhcp_raw.stdout | trim | length > 0
+        fail_msg: "DHCP interface script returned empty stdout; check Python/Paramiko on the execution host."
+
+    - name: Convert DHCP interface config result to JSON
+      ansible.builtin.set_fact:
+        dhcp_result: "{{ dhcp_raw.stdout | from_json }}"
+
+    - name: Fail if DHCP interface configuration failed
+      ansible.builtin.fail:
+        msg: "{{ dhcp_result.error | default('Helper returned a non-zero exit code') }}"
+      when: dhcp_raw.rc != 0 or dhcp_result.status != 'success'
+
+    - name: Display DHCP interface config result
+      ansible.builtin.debug:
+        var: dhcp_result
+
+    - name: Save DHCP interface config result
+      ansible.builtin.copy:
+        dest: "{{ output_dir }}/{{ ansible_host }}_dhcp_interface_config.yml"
+        mode: '0644'
+        content: "{{ dhcp_result | to_nice_yaml(sort_keys=False) }}\n"
+
+    - name: Display result file
+      ansible.builtin.debug:
+        msg: >-
+          DHCP snooping interface config applied on {{ ansible_host }}.
+          Result saved to output/{{ ansible_host }}_dhcp_interface_config.yml
