@@ -58,14 +58,26 @@
 
     mst_max_hops: "{{ max_hops | default(20) }}"
 
-    mst_compatibility: "{{ mst_compatibility | default('Disable') }}"
-
     mst_bpdu_terminal: "{{ bpdu_terminal | default('Disable') }}"
 
     mst_loop_guard: "{{ loop_guard | default('Disable') }}"
 
 
   tasks:
+
+    # ========================================================
+    # 0. Parameter defaults
+    #
+    # mst_compatibility is set here, not in play vars: as a play var
+    #   mst_compatibility: "{{ mst_compatibility | default('Disable') }}"
+    # refers to itself and fails with "Recursive loop detected in
+    # template" whenever it isn't passed with -e. set_fact is evaluated
+    # once, and an -e value still takes precedence.
+    # ========================================================
+
+    - name: Apply parameter defaults
+      ansible.builtin.set_fact:
+        mst_compatibility: "{{ mst_compatibility | default('Disable') }}"
 
     # ========================================================
     # 1. Validate MSTP parameters

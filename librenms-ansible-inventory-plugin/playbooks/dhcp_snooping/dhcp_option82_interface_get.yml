@@ -380,7 +380,7 @@
     - name: Execute DHCP Option82 interface information getter
       ansible.builtin.command:
         argv:
-          - /usr/bin/python3
+          - "{{ playbook_dir }}/../../bin/python3"
           - "{{ tmp_dir }}/dhcp_option82_interface_get_exec.py"
       environment:
         SWITCH_HOST: "{{ ansible_host }}"

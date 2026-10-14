@@ -283,23 +283,30 @@
           def has_error(output):
 
               error_patterns = [
-                  "Too many parameters",
-                  "Incomplete command",
-                  "Unknown command",
-                  "Invalid",
-                  "Error",
-                  "Failed",
-                  "Failure",
-                  "Unrecognized",
-                  "Ambiguous"
+                  r"^\s*%\s*.+",
+                  r"^\s*Too many parameters\b",
+                  r"^\s*Incomplete command\b",
+                  r"^\s*Unknown command\b",
+                  r"^\s*Invalid(?:\s|$|:)",
+                  r"^\s*Error(?:\s|$|:)",
+                  r"^\s*Failed(?:\s|$|:)",
+                  r"^\s*Failure(?:\s|$|:)",
+                  r"^\s*Unrecognized command\b",
+                  r"^\s*Ambiguous command\b",
+                  r"^\s*Command not supported\b",
+                  r"^\s*Unsupported command\b"
               ]
 
-              lower_output = output.lower()
+              for line in output.splitlines():
 
-              for pattern in error_patterns:
+                  for pattern in error_patterns:
 
-                  if pattern.lower() in lower_output:
-                      return True
+                      if re.search(
+                          pattern,
+                          line,
+                          re.IGNORECASE
+                      ):
+                          return True
 
               return False
 
@@ -361,8 +368,6 @@
                           f"Command failed: {command}"
                       )
 
-                      client.close()
-
                       return 1
 
                   print_result(
@@ -371,18 +376,9 @@
                       ""
                   )
 
-                  client.close()
-
                   return 0
 
               except Exception as exc:
-
-                  if client:
-
-                      try:
-                          client.close()
-                      except Exception:
-                          pass
 
                   print_result(
                       "FAILED",
@@ -391,6 +387,15 @@
                   )
 
                   return 1
+
+              finally:
+
+                  if client:
+
+                      try:
+                          client.close()
+                      except Exception:
+                          pass
 
           # ====================================================
           # SAVE CONFIGURATION
@@ -431,8 +436,6 @@
                           ""
                       )
 
-                      client.close()
-
                       return 0
 
                   print_result(
@@ -441,18 +444,9 @@
                       "Configuration save was not confirmed."
                   )
 
-                  client.close()
-
                   return 1
 
               except Exception as exc:
-
-                  if client:
-
-                      try:
-                          client.close()
-                      except Exception:
-                          pass
 
                   print_result(
                       "FAILED",
@@ -461,6 +455,15 @@
                   )
 
                   return 1
+
+              finally:
+
+                  if client:
+
+                      try:
+                          client.close()
+                      except Exception:
+                          pass
 
           # ====================================================
           # VERIFY CONFIGURATION
@@ -494,31 +497,60 @@
                       print_result(
                           "FAILED",
                           output,
-                          "show spanning-tree returned an error."
+                          "show spanning-tree returned a CLI error."
                       )
 
-                      client.close()
+                      return 1
+
+                  protocol_match = re.search(
+                      r"^\s*Spanning\s+tree\s+enabled\s+protocol\s+(.+?)\s*$",
+                      output,
+                      re.IGNORECASE | re.MULTILINE
+                  )
+
+                  if not protocol_match:
+
+                      print_result(
+                          "FAILED",
+                          output,
+                          "Could not identify the active spanning-tree protocol."
+                      )
+
+                      return 1
+
+                  protocol = re.sub(
+                      r"\s+",
+                      " ",
+                      protocol_match.group(1)
+                  ).strip().upper()
+
+                  if protocol not in (
+                      "PVST",
+                      "RAPID PVST"
+                  ):
+
+                      print_result(
+                          "FAILED",
+                          output,
+                          (
+                              f"PVST configuration was not verified. "
+                              f"Active protocol: {protocol}. "
+                              f"The switch may require different command "
+                              f"syntax or may not support the requested mode."
+                          )
+                      )
 
                       return 1
 
                   print_result(
                       "SUCCESS",
                       output,
-                      ""
+                      f"Verified spanning-tree protocol: {protocol}"
                   )
-
-                  client.close()
 
                   return 0
 
               except Exception as exc:
-
-                  if client:
-
-                      try:
-                          client.close()
-                      except Exception:
-                          pass
 
                   print_result(
                       "FAILED",
@@ -527,6 +559,15 @@
                   )
 
                   return 1
+
+              finally:
+
+                  if client:
+
+                      try:
+                          client.close()
+                      except Exception:
+                          pass
 
           # ====================================================
           # MAIN
@@ -688,6 +729,29 @@
         seconds: 60
 
     # ========================================================
+    # VERIFY PVST MODE BEFORE CONFIGURING OTHER SETTINGS
+    # ========================================================
+
+    - name: Verify PVST mode before configuring other settings
+      ansible.builtin.command:
+        argv:
+          - python3
+          - "{{ temp_dir }}/set_pvst_paramiko.py"
+          - "{{ device_ip }}"
+          - "{{ device_user }}"
+          - "{{ device_password }}"
+          - "verify"
+      register: pvst_mode_verify
+      changed_when: false
+      failed_when: pvst_mode_verify.rc != 0
+
+    - name: Display PVST mode verification result
+      ansible.builtin.debug:
+        msg:
+          - "Verification Output: {{ pvst_mode_verify.stdout }}"
+          - "Verification Error: {{ pvst_mode_verify.stderr }}"
+
+    # ========================================================
     # SESSION 2 - BPDU TERMINAL
     # ========================================================
 
@@ -819,3 +883,5 @@
           bpdu_terminal: "{{ bpdu_terminal }}"
           loop_guard: "{{ loop_guard }}"
           output_file: "{{ output_dir }}/{{ device_ip }}_pvst.yml"
+
+

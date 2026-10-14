@@ -1,8 +1,10 @@
+#ansible-playbook -i inventory/10.10.10.1.yml playbooks/stp/setrstp.yml   -e "protocol_type=RSTP spanning_tree_priority=53248 hello_time=9 max_age=20 forward_delay=25 bpdu_terminal=Enable loop_guard=Enable"
 ---
 # ============================================================
 # setrstp.yml
 #
 # Configure and Verify RSTP
+
 # ============================================================
 
 - name: Configure and verify RSTP
@@ -17,9 +19,9 @@
 
     project_root: "{{ playbook_dir }}/../.."
 
-    output_dir: "{{ project_root }}/output"
+    output_dir: "{{ project_root }}/../../output"
 
-    tmp_dir: "{{ project_root }}/tmp"
+    tmp_dir: "{{ project_root }}/../../tmp"
 
   tasks:
 
@@ -931,4 +933,5 @@
       ansible.builtin.fail:
         msg: "RSTP configuration or verification failed."
       when: rstp_result.status != "SUCCESS"
+
 

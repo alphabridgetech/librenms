@@ -1,6 +1,4 @@
-<link rel="stylesheet" href="//cdn.datatables.net/1.10.25/css/dataTables.bootstrap.min.css">
-<script src="//cdn.datatables.net/1.10.25/js/jquery.dataTables.min.js"></script>
-<script src="//cdn.datatables.net/1.10.25/js/dataTables.bootstrap.min.js"></script>
+@include('device.tabs.datatablepath.offline-datatable')
 
 <style>
     .spinner-border {

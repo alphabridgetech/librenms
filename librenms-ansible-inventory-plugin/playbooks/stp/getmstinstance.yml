@@ -179,8 +179,11 @@
                     # Detect switch prompt
                     # ----------------------------------------
 
+                    # Any hostname, e.g. "AS210T#", "AS210T_config#",
+                    # "Switch>" - matching only "Switch" made every
+                    # command wait its full timeout on other hostnames.
                     if re.search(
-                        r'(Switch(?:_config)?[#>])\s*$',
+                        r'^[A-Za-z0-9_.:()/-]+[#>]\s*$',
                         output,
                         re.MULTILINE
                     ):

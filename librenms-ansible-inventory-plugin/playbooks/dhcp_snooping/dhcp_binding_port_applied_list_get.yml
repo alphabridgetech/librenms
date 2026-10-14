@@ -332,7 +332,7 @@
     - name: Execute DHCP binding details script
       ansible.builtin.command:
         argv:
-          - /usr/bin/python3
+          - "{{ playbook_dir }}/../../bin/python3"
           - "{{ tmp_dir }}/dhcp_binding_details_exec.py"
       register: dhcp_raw
       changed_when: false

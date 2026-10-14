@@ -595,7 +595,7 @@
     - name: Execute DHCP Option82 interface config script
       ansible.builtin.command:
         argv:
-          - /usr/bin/python3
+          - "{{ playbook_dir }}/../../bin/python3"
           - "{{ tmp_dir }}/dhcp_option82_interface_config_exec.py"
       register: option82_raw
       changed_when: false

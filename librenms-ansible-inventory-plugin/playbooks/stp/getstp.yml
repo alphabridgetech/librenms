@@ -12,8 +12,8 @@
     # WORKSPACE-RELATIVE PATHS
     # ========================================================
 
-    output_dir: "{{ playbook_dir }}/output"
-    temp_dir: "{{ playbook_dir }}/tmp"
+    output_dir: "{{ playbook_dir }}/../../output"
+    temp_dir: "{{ playbook_dir }}/../../tmp"
 
     device_ip: "{{ ansible_host }}"
     device_user: "{{ ansible_user }}"

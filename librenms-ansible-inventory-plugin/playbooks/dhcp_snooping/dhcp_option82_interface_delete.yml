@@ -363,7 +363,7 @@
     - name: Execute DHCP Option82 interface delete script
       ansible.builtin.command:
         argv:
-          - /usr/bin/python3
+          - "{{ playbook_dir }}/../../bin/python3"
           - "{{ tmp_dir }}/dhcp_option82_interface_delete_exec.py"
       register: option82_raw
       changed_when: false
