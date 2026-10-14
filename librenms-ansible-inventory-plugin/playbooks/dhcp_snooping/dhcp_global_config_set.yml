@@ -52,6 +52,22 @@
   hosts: alphabridge_devices
   gather_facts: no
 
+  vars:
+    # Resolve paths from this checkout, including the Jenkins workspace.
+    project_root: "{{ playbook_dir }}/../.."
+    output_dir: "{{ project_root }}/output"
+    tmp_dir: "{{ project_root }}/tmp"
+
+  pre_tasks:
+    - name: Ensure script and report directories exist
+      ansible.builtin.file:
+        path: "{{ item }}"
+        state: directory
+        mode: '0755'
+      loop:
+        - "{{ tmp_dir }}"
+        - "{{ output_dir }}"
+
   tasks:
 
     # ==========================================
@@ -156,7 +172,7 @@
     - name: >-
         Create Python SSH Script for DHCP global config
       ansible.builtin.copy:
-        dest: "/opt/librenms/librenms-ansible-inventory-plugin/tmp/dhcp_global_config_exec.py"
+        dest: "{{ tmp_dir }}/dhcp_global_config_exec.py"
         mode: '0755'
         content: |
           #!/usr/bin/env python3
@@ -443,9 +459,9 @@
 
     - name: Execute DHCP global config script
       ansible.builtin.command:
-        cmd: >
-          /opt/librenms/librenms-ansible-inventory-plugin/bin/python3
-          /opt/librenms/librenms-ansible-inventory-plugin/tmp/dhcp_global_config_exec.py
+        argv:
+          - "{{ playbook_dir }}/../../bin/python3"
+          - "{{ tmp_dir }}/dhcp_global_config_exec.py"
       register: dhcp_raw
       changed_when: false
       failed_when: false
@@ -472,8 +488,7 @@
 
     - name: Save DHCP global config result
       ansible.builtin.copy:
-        dest: "/opt/librenms/librenms-ansible-inventory-plugin/output/\
-              {{ ansible_host }}_dhcp_global_config.yml"
+        dest: "{{ output_dir }}/{{ ansible_host }}_dhcp_global_config.yml"
         content: |
           {{ dhcp_result | to_nice_yaml }}
 

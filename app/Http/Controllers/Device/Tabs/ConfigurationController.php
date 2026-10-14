@@ -334,9 +334,14 @@ class ConfigurationController implements DeviceTab
             $tabs[] = ['name' => __('PDP configuration'), 'url' => 'pdpconfig'];
             $tabs[] = ['name' => __('MQTT configuration'), 'url' => 'mqttconfig'];
             $tabs[] = ['name' => __('GVRP Configuration'), 'url' => 'gvrpconfig'];
+            $tabs[] = ['name' => __('Private VLAN'), 'url' => 'privatevlanconfig'];
             $tabs[] = ['name' => __('DDM Configuration'), 'url' => 'ddm'];
             $tabs[] = ['name' => __('IGMP Configuration'), 'url' => 'igmpconfig'];
+            $tabs[] = ['name' => __('IPv6 MLD Snooping'), 'url' => 'mldsnoopingconfig'];
+            $tabs[] = ['name' => __('DHCP Snooping'), 'url' => 'dhcpsnoopingconfig'];
+            $tabs[] = ['name' => __('STP Configuration'), 'url' => 'stpconfig'];
             $tabs[] = ['name' => __('Ring Protection'), 'url' => 'ringprotection'];
+            $tabs[] = ['name' => __('Multiple Ring Protection'), 'url' => 'multipleringprotection'];
         }
 
         return $tabs;
@@ -356,7 +361,7 @@ class ConfigurationController implements DeviceTab
     {
         $tabs = [
             ['name' => __('System Software'), 'url' => 'systemsoftware'],
-            
+            ['name' => __('NTP'), 'url' => 'ntp'],
         ];
 
         if ($device->macs()->exists()) {

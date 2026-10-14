@@ -1,0 +1,1135 @@
+---
+# ============================================================
+# STP CONFIGURATION - SET
+# ============================================================
+#
+# Workflow:
+#
+# 1. Validate STP parameters
+# 2. Create output/temp directories
+# 3. Create Paramiko helper
+# 4. Session 1:
+#       Change STP mode to SSTP
+#       Device may disconnect SSH
+# 5. Wait for SSH to return
+# 6. Session 2:
+#       Set SSTP priority
+# 7. Session 3:
+#       Set SSTP hello time
+# 8. Session 4:
+#       Set SSTP max age
+# 9. Session 5:
+#       Set SSTP forward time
+# 10. Session 6:
+#       Set BPDU terminal
+# 11. Session 7:
+#       Set Loop Guard DEFAULT
+# 12. Wait for SSH again
+# 13. Session 8:
+#       Save configuration
+# 14. Session 9:
+#       Verify show spanning-tree
+# 15. Verify requested values
+# 16. Create output YAML
+# ansible-playbook -i inventory/192.168.200.245.yml playbooks/stp/setstp.yml -e "protocol=SSTP priority=53248 hello_time=9 max_age=40 forward_delay=25 bpdu_terminal=Enable loop_guard=Enable"
+
+#
+# ============================================================
+
+- name: STP Configuration - SET
+  hosts: alphabridge_devices
+  gather_facts: false
+
+  vars:
+
+    # --------------------------------------------------------
+    # STP PARAMETERS
+    # --------------------------------------------------------
+
+    protocol: "{{ protocol | default('SSTP') }}"
+    priority: "{{ priority | default(53248) | int }}"
+    hello_time: "{{ hello_time | default(9) | int }}"
+    max_age: "{{ max_age | default(40) | int }}"
+    forward_delay: "{{ forward_delay | default(25) | int }}"
+
+    bpdu_terminal: "{{ bpdu_terminal | default('Enable') }}"
+    loop_guard: "{{ loop_guard | default('Enable') }}"
+
+    # --------------------------------------------------------
+    # DIRECTORIES
+    # --------------------------------------------------------
+
+    output_dir: "{{ playbook_dir }}/../../output"
+    temp_dir: "{{ playbook_dir }}/../../tmp"
+
+    # --------------------------------------------------------
+    # DEVICE
+    # --------------------------------------------------------
+
+    device_ip: "{{ ansible_host }}"
+    device_user: "{{ ansible_user }}"
+    device_password: "{{ ansible_password }}"
+
+    ssh_port: 22
+
+  tasks:
+
+    # ========================================================
+    # 1. VALIDATE PARAMETERS
+    # ========================================================
+
+    - name: Validate STP parameters
+      ansible.builtin.assert:
+        that:
+
+          - protocol | upper == "SSTP"
+
+          - priority | int >= 0
+          - priority | int <= 61440
+          - (priority | int) % 4096 == 0
+
+          - hello_time | int >= 1
+          - hello_time | int <= 10
+
+          - max_age | int >= 6
+          - max_age | int <= 40
+
+          - forward_delay | int >= 4
+          - forward_delay | int <= 30
+
+          - bpdu_terminal | lower in ['enable', 'disable']
+
+          - loop_guard | lower in ['enable', 'disable']
+
+        fail_msg: "Invalid STP configuration parameters."
+
+    # ========================================================
+    # 2. CREATE DIRECTORIES
+    # ========================================================
+
+    - name: Create output directory
+      ansible.builtin.file:
+        path: "{{ output_dir }}"
+        state: directory
+        mode: "0755"
+      delegate_to: localhost
+
+    - name: Create temporary directory
+      ansible.builtin.file:
+        path: "{{ temp_dir }}"
+        state: directory
+        mode: "0755"
+      delegate_to: localhost
+
+    # ========================================================
+    # 3. CREATE PARAMIKO HELPER
+    # ========================================================
+
+    - name: Create STP Paramiko helper
+      ansible.builtin.copy:
+        dest: "{{ temp_dir }}/set_stp_paramiko.py"
+        mode: "0755"
+        content: |
+          #!/usr/bin/env python3
+
+          import sys
+          import time
+          import re
+          import socket
+          import paramiko
+
+
+          # ==================================================
+          # ARGUMENTS FROM ANSIBLE
+          # ==================================================
+
+          HOST = sys.argv[1]
+          USER = sys.argv[2]
+          PASSWORD = sys.argv[3]
+          ACTION = sys.argv[4]
+
+          # Dynamic STP values
+          PRIORITY = sys.argv[5]
+          HELLO_TIME = sys.argv[6]
+          MAX_AGE = sys.argv[7]
+          FORWARD_DELAY = sys.argv[8]
+
+          PORT = 22
+          CONNECT_TIMEOUT = 10
+
+
+          # ==================================================
+          # PRINT RESULT
+          # ==================================================
+
+          def print_result(success, output="", error=""):
+
+              print("RESULT_START")
+
+              if success:
+                  print("STATUS=SUCCESS")
+              else:
+                  print("STATUS=FAILED")
+
+              print("OUTPUT_START")
+              print(output.strip())
+              print("OUTPUT_END")
+
+              print("ERROR_START")
+              print(error.strip())
+              print("ERROR_END")
+
+              print("RESULT_END")
+
+
+          # ==================================================
+          # CONNECT TO DEVICE
+          # ==================================================
+
+          def connect_device():
+
+              client = paramiko.SSHClient()
+
+              client.set_missing_host_key_policy(
+                  paramiko.AutoAddPolicy()
+              )
+
+              client.connect(
+                  hostname=HOST,
+                  port=PORT,
+                  username=USER,
+                  password=PASSWORD,
+                  timeout=CONNECT_TIMEOUT,
+                  banner_timeout=CONNECT_TIMEOUT,
+                  auth_timeout=CONNECT_TIMEOUT,
+                  look_for_keys=False,
+                  allow_agent=False
+              )
+
+              channel = client.invoke_shell(
+                  term="vt100",
+                  width=200,
+                  height=1000
+              )
+
+              channel.settimeout(2)
+
+              return client, channel
+
+
+          # ==================================================
+          # READ DATA
+          # ==================================================
+
+          def read_data(channel, wait=1):
+
+              output = ""
+
+              end_time = time.time() + wait
+
+              while time.time() < end_time:
+
+                  try:
+
+                      if channel.recv_ready():
+
+                          data = channel.recv(65535)
+
+                          if not data:
+                              break
+
+                          output += data.decode(
+                              "utf-8",
+                              errors="ignore"
+                          )
+
+                          end_time = time.time() + 0.3
+
+                      else:
+
+                          time.sleep(0.05)
+
+                  except socket.timeout:
+                      break
+
+                  except Exception:
+                      break
+
+              return output
+
+
+          # ==================================================
+          # WAIT FOR CLI PROMPT
+          # ==================================================
+
+          def wait_prompt(channel, timeout=8):
+
+              output = ""
+
+              end_time = time.time() + timeout
+
+              prompt_regex = re.compile(
+                  r"(?m)(?:"
+                  r"^[^\r\n#>]+\>\s*$"
+                  r"|^[^\r\n#>]+_config#\s*$"
+                  r"|^(?!.*_config#)[^\r\n#>]+#\s*$"
+                  r")"
+              )
+
+              while time.time() < end_time:
+
+                  try:
+
+                      if channel.recv_ready():
+
+                          data = channel.recv(65535)
+
+                          if not data:
+                              break
+
+                          text = data.decode(
+                              "utf-8",
+                              errors="ignore"
+                          )
+
+                          output += text
+
+                          if prompt_regex.search(output):
+                              return output
+
+                      else:
+
+                          time.sleep(0.05)
+
+                  except socket.timeout:
+
+                      continue
+
+                  except Exception:
+
+                      break
+
+              return output
+
+
+          # ==================================================
+          # SEND COMMAND
+          # ==================================================
+
+          def send_command(channel, command, timeout=8):
+
+              channel.send(command + "\n")
+
+              return wait_prompt(
+                  channel,
+                  timeout
+              )
+
+
+          # ==================================================
+          # CHECK CLI ERROR
+          # ==================================================
+
+          def has_error(output):
+
+              error_patterns = [
+
+                  r"Too many parameters",
+                  r"Incomplete command",
+                  r"Unknown command",
+                  r"Invalid",
+                  r"Error",
+                  r"Failed",
+                  r"Failure",
+                  r"Unrecognized",
+                  r"Ambiguous"
+              ]
+
+              for pattern in error_patterns:
+
+                  if re.search(
+                      pattern,
+                      output,
+                      re.IGNORECASE
+                  ):
+
+                      return True
+
+              return False
+
+
+          # ==================================================
+          # ENTER CONFIG MODE
+          # ==================================================
+
+          def enter_config(channel):
+
+              output = ""
+
+              output += wait_prompt(
+                  channel,
+                  8
+              )
+
+              output += send_command(
+                  channel,
+                  "enable",
+                  8
+              )
+
+              output += send_command(
+                  channel,
+                  "config",
+                  8
+              )
+
+              return output
+
+
+          # ==================================================
+          # SINGLE CONFIG COMMAND
+          # ==================================================
+
+          def single_config_command(command):
+
+              client = None
+
+              try:
+
+                  client, channel = connect_device()
+
+                  login_output = enter_config(channel)
+
+                  command_output = send_command(
+                      channel,
+                      command,
+                      8
+                  )
+
+                  complete_output = (
+                      login_output +
+                      command_output
+                  )
+
+                  if has_error(command_output):
+
+                      print_result(
+                          False,
+                          complete_output,
+                          "Device returned an error for: "
+                          + command
+                      )
+
+                      client.close()
+
+                      return 1
+
+                  print_result(
+                      True,
+                      complete_output,
+                      ""
+                  )
+
+                  client.close()
+
+                  return 0
+
+              except Exception as exc:
+
+                  if client:
+
+                      try:
+                          client.close()
+                      except Exception:
+                          pass
+
+                  print_result(
+                      False,
+                      "",
+                      str(exc)
+                  )
+
+                  return 1
+
+
+          # ==================================================
+          # CHANGE STP MODE
+          # ==================================================
+
+          def change_protocol():
+
+              client = None
+
+              try:
+
+                  client, channel = connect_device()
+
+                  enter_config(channel)
+
+                  channel.send(
+                      "spanning-tree mode SSTP\n"
+                  )
+
+                  # The switch may close SSH after changing
+                  # the spanning-tree protocol.
+                  time.sleep(2)
+
+                  output = read_data(
+                      channel,
+                      3
+                  )
+
+                  try:
+                      client.close()
+                  except Exception:
+                      pass
+
+                  print_result(
+                      True,
+                      output,
+                      ""
+                  )
+
+                  return 0
+
+              except Exception as exc:
+
+                  message = str(exc)
+
+                  # SSH disconnect/timeout is expected after
+                  # changing STP mode.
+
+                  if (
+                      "closed" in message.lower()
+                      or
+                      "eof" in message.lower()
+                      or
+                      "timeout" in message.lower()
+                      or
+                      "socket" in message.lower()
+                  ):
+
+                      print_result(
+                          True,
+                          "",
+                          "SSH disconnected after SSTP mode change."
+                      )
+
+                      return 0
+
+                  print_result(
+                      False,
+                      "",
+                      message
+                  )
+
+                  return 1
+
+
+          # ==================================================
+          # SAVE CONFIGURATION
+          # ==================================================
+
+          def save_configuration():
+
+              client = None
+
+              try:
+
+                  client, channel = connect_device()
+
+                  wait_prompt(
+                      channel,
+                      8
+                  )
+
+                  output = send_command(
+                      channel,
+                      "enable",
+                      8
+                  )
+
+                  output += send_command(
+                      channel,
+                      "write",
+                      10
+                  )
+
+                  client.close()
+
+                  if (
+                      "OK!" not in output
+                      and
+                      "Saving current configuration" not in output
+                  ):
+
+                      print_result(
+                          False,
+                          output,
+                          "Configuration save confirmation not found."
+                      )
+
+                      return 1
+
+                  print_result(
+                      True,
+                      output,
+                      ""
+                  )
+
+                  return 0
+
+              except Exception as exc:
+
+                  if client:
+
+                      try:
+                          client.close()
+                      except Exception:
+                          pass
+
+                  print_result(
+                      False,
+                      "",
+                      str(exc)
+                  )
+
+                  return 1
+
+
+          # ==================================================
+          # VERIFY STP
+          # ==================================================
+
+          def verify_stp():
+
+              client = None
+
+              try:
+
+                  client, channel = connect_device()
+
+                  wait_prompt(
+                      channel,
+                      8
+                  )
+
+                  output = send_command(
+                      channel,
+                      "enable",
+                      8
+                  )
+
+                  output += send_command(
+                      channel,
+                      "show spanning-tree",
+                      10
+                  )
+
+                  client.close()
+
+                  if has_error(output):
+
+                      print_result(
+                          False,
+                          output,
+                          "show spanning-tree returned an error."
+                      )
+
+                      return 1
+
+                  print_result(
+                      True,
+                      output,
+                      ""
+                  )
+
+                  return 0
+
+              except Exception as exc:
+
+                  if client:
+
+                      try:
+                          client.close()
+                      except Exception:
+                          pass
+
+                  print_result(
+                      False,
+                      "",
+                      str(exc)
+                  )
+
+                  return 1
+
+
+          # ==================================================
+          # MAIN
+          # ==================================================
+
+          if ACTION == "protocol":
+
+              sys.exit(
+                  change_protocol()
+              )
+
+
+          elif ACTION == "priority":
+
+              sys.exit(
+                  single_config_command(
+                      "spanning-tree sstp priority "
+                      + PRIORITY
+                  )
+              )
+
+
+          elif ACTION == "hello":
+
+              sys.exit(
+                  single_config_command(
+                      "spanning-tree sstp hello-time "
+                      + HELLO_TIME
+                  )
+              )
+
+
+          elif ACTION == "max-age":
+
+              sys.exit(
+                  single_config_command(
+                      "spanning-tree sstp max-age "
+                      + MAX_AGE
+                  )
+              )
+
+
+          elif ACTION == "forward":
+
+              sys.exit(
+                  single_config_command(
+                      "spanning-tree sstp forward-time "
+                      + FORWARD_DELAY
+                  )
+              )
+
+
+          elif ACTION == "bpdu-enable":
+
+              sys.exit(
+                  single_config_command(
+                      "spanning-tree bpdu-terminal"
+                  )
+              )
+
+
+          elif ACTION == "bpdu-disable":
+
+              sys.exit(
+                  single_config_command(
+                      "no spanning-tree bpdu-terminal"
+                  )
+              )
+
+
+          # Device CLI requires "default" after loopguard.
+          elif ACTION == "loop-enable":
+
+              sys.exit(
+                  single_config_command(
+                      "spanning-tree loopguard default"
+                  )
+              )
+
+
+          elif ACTION == "loop-disable":
+
+              sys.exit(
+                  single_config_command(
+                      "no spanning-tree loopguard default"
+                  )
+              )
+
+
+          elif ACTION == "save":
+
+              sys.exit(
+                  save_configuration()
+              )
+
+
+          elif ACTION == "verify":
+
+              sys.exit(
+                  verify_stp()
+              )
+
+
+          else:
+
+              print_result(
+                  False,
+                  "",
+                  "Unknown action: " + ACTION
+              )
+
+              sys.exit(1)
+
+    # ========================================================
+    # 4. CHECK SSH BEFORE CONFIGURATION
+    # ========================================================
+
+    - name: Check SSH before configuration
+      ansible.builtin.wait_for:
+        host: "{{ device_ip }}"
+        port: "{{ ssh_port }}"
+        state: started
+        timeout: 15
+        sleep: 1
+      delegate_to: localhost
+
+    # ========================================================
+    # 5. SESSION 1 - CHANGE STP MODE
+    # ========================================================
+
+    - name: Session 1 - Change STP mode to SSTP
+      ansible.builtin.command:
+        argv:
+          - python3
+          - "{{ temp_dir }}/set_stp_paramiko.py"
+          - "{{ device_ip }}"
+          - "{{ device_user }}"
+          - "{{ device_password }}"
+          - "protocol"
+          - "{{ priority | string }}"
+          - "{{ hello_time | string }}"
+          - "{{ max_age | string }}"
+          - "{{ forward_delay | string }}"
+      register: protocol_result
+      changed_when: true
+      failed_when: "'STATUS=SUCCESS' not in protocol_result.stdout"
+      delegate_to: localhost
+
+    - name: Display SSTP mode change result
+      ansible.builtin.debug:
+        msg:
+          - "Output: {{ protocol_result.stdout | default('No output returned') }}"
+          - "Error: {{ protocol_result.stderr | default('No error returned') }}"
+
+    # ========================================================
+    # 6. WAIT FOR SSH AFTER SSTP CHANGE
+    # ========================================================
+
+    - name: Wait for device SSH to return
+      ansible.builtin.wait_for:
+        host: "{{ device_ip }}"
+        port: "{{ ssh_port }}"
+        state: started
+        timeout: 60
+        sleep: 2
+      delegate_to: localhost
+
+    - name: Wait for switch CLI to stabilize
+      ansible.builtin.pause:
+        seconds: 3
+
+    # ========================================================
+    # 7. SESSION 2 - SSTP PRIORITY
+    # ========================================================
+
+    - name: Session 2 - Set SSTP priority
+      ansible.builtin.command:
+        argv:
+          - python3
+          - "{{ temp_dir }}/set_stp_paramiko.py"
+          - "{{ device_ip }}"
+          - "{{ device_user }}"
+          - "{{ device_password }}"
+          - "priority"
+          - "{{ priority | string }}"
+          - "{{ hello_time | string }}"
+          - "{{ max_age | string }}"
+          - "{{ forward_delay | string }}"
+      register: priority_result
+      changed_when: true
+      failed_when: "'STATUS=SUCCESS' not in priority_result.stdout"
+      delegate_to: localhost
+
+    - name: Display priority result
+      ansible.builtin.debug:
+        var: priority_result.stdout
+
+    # ========================================================
+    # 8. SESSION 3 - HELLO TIME
+    # ========================================================
+
+    - name: Session 3 - Set SSTP hello time
+      ansible.builtin.command:
+        argv:
+          - python3
+          - "{{ temp_dir }}/set_stp_paramiko.py"
+          - "{{ device_ip }}"
+          - "{{ device_user }}"
+          - "{{ device_password }}"
+          - "hello"
+          - "{{ priority | string }}"
+          - "{{ hello_time | string }}"
+          - "{{ max_age | string }}"
+          - "{{ forward_delay | string }}"
+      register: hello_result
+      changed_when: true
+      failed_when: "'STATUS=SUCCESS' not in hello_result.stdout"
+      delegate_to: localhost
+
+    - name: Display hello result
+      ansible.builtin.debug:
+        var: hello_result.stdout
+
+    # ========================================================
+    # 9. SESSION 4 - MAX AGE
+    # ========================================================
+
+    - name: Session 4 - Set SSTP max age
+      ansible.builtin.command:
+        argv:
+          - python3
+          - "{{ temp_dir }}/set_stp_paramiko.py"
+          - "{{ device_ip }}"
+          - "{{ device_user }}"
+          - "{{ device_password }}"
+          - "max-age"
+          - "{{ priority | string }}"
+          - "{{ hello_time | string }}"
+          - "{{ max_age | string }}"
+          - "{{ forward_delay | string }}"
+      register: max_age_result
+      changed_when: true
+      failed_when: "'STATUS=SUCCESS' not in max_age_result.stdout"
+      delegate_to: localhost
+
+    - name: Display max age result
+      ansible.builtin.debug:
+        var: max_age_result.stdout
+
+    # ========================================================
+    # 10. SESSION 5 - FORWARD TIME
+    # ========================================================
+
+    - name: Session 5 - Set SSTP forward time
+      ansible.builtin.command:
+        argv:
+          - python3
+          - "{{ temp_dir }}/set_stp_paramiko.py"
+          - "{{ device_ip }}"
+          - "{{ device_user }}"
+          - "{{ device_password }}"
+          - "forward"
+          - "{{ priority | string }}"
+          - "{{ hello_time | string }}"
+          - "{{ max_age | string }}"
+          - "{{ forward_delay | string }}"
+      register: forward_result
+      changed_when: true
+      failed_when: "'STATUS=SUCCESS' not in forward_result.stdout"
+      delegate_to: localhost
+
+    - name: Display forward time result
+      ansible.builtin.debug:
+        var: forward_result.stdout
+
+    # ========================================================
+    # 11. SESSION 6 - BPDU TERMINAL
+    # ========================================================
+
+    - name: Session 6 - Configure BPDU terminal
+      ansible.builtin.command:
+        argv:
+          - python3
+          - "{{ temp_dir }}/set_stp_paramiko.py"
+          - "{{ device_ip }}"
+          - "{{ device_user }}"
+          - "{{ device_password }}"
+          - "{{ 'bpdu-enable' if bpdu_terminal | lower == 'enable' else 'bpdu-disable' }}"
+          - "{{ priority | string }}"
+          - "{{ hello_time | string }}"
+          - "{{ max_age | string }}"
+          - "{{ forward_delay | string }}"
+      register: bpdu_result
+      changed_when: true
+      failed_when: "'STATUS=SUCCESS' not in bpdu_result.stdout"
+      delegate_to: localhost
+
+    - name: Display BPDU terminal result
+      ansible.builtin.debug:
+        var: bpdu_result.stdout
+
+    # ========================================================
+    # 12. SESSION 7 - LOOP GUARD
+    # ========================================================
+
+    - name: Session 7 - Configure loop guard
+      ansible.builtin.command:
+        argv:
+          - python3
+          - "{{ temp_dir }}/set_stp_paramiko.py"
+          - "{{ device_ip }}"
+          - "{{ device_user }}"
+          - "{{ device_password }}"
+          - "{{ 'loop-enable' if loop_guard | lower == 'enable' else 'loop-disable' }}"
+          - "{{ priority | string }}"
+          - "{{ hello_time | string }}"
+          - "{{ max_age | string }}"
+          - "{{ forward_delay | string }}"
+      register: loop_guard_result
+      changed_when: true
+      failed_when: "'STATUS=SUCCESS' not in loop_guard_result.stdout"
+      delegate_to: localhost
+
+    - name: Display loop guard result
+      ansible.builtin.debug:
+        var: loop_guard_result.stdout
+
+    # ========================================================
+    # 13. WAIT FOR SSH AFTER LOOP GUARD
+    # ========================================================
+
+    - name: Wait for SSH after loop guard configuration
+      ansible.builtin.wait_for:
+        host: "{{ device_ip }}"
+        port: "{{ ssh_port }}"
+        state: started
+        timeout: 60
+        sleep: 2
+      delegate_to: localhost
+
+    - name: Wait for switch CLI to stabilize after loop guard
+      ansible.builtin.pause:
+        seconds: 3
+
+    # ========================================================
+    # 14. SESSION 8 - SAVE
+    # ========================================================
+
+    - name: Session 8 - Save configuration
+      ansible.builtin.command:
+        argv:
+          - python3
+          - "{{ temp_dir }}/set_stp_paramiko.py"
+          - "{{ device_ip }}"
+          - "{{ device_user }}"
+          - "{{ device_password }}"
+          - "save"
+          - "{{ priority | string }}"
+          - "{{ hello_time | string }}"
+          - "{{ max_age | string }}"
+          - "{{ forward_delay | string }}"
+      register: save_result
+      changed_when: true
+      failed_when: "'STATUS=SUCCESS' not in save_result.stdout"
+      delegate_to: localhost
+
+    - name: Display save result
+      ansible.builtin.debug:
+        var: save_result.stdout
+
+    # ========================================================
+    # 15. SESSION 9 - FINAL VERIFICATION
+    # ========================================================
+
+    - name: Session 9 - Verify STP configuration
+      ansible.builtin.command:
+        argv:
+          - python3
+          - "{{ temp_dir }}/set_stp_paramiko.py"
+          - "{{ device_ip }}"
+          - "{{ device_user }}"
+          - "{{ device_password }}"
+          - "verify"
+          - "{{ priority | string }}"
+          - "{{ hello_time | string }}"
+          - "{{ max_age | string }}"
+          - "{{ forward_delay | string }}"
+      register: verify_result
+      changed_when: false
+      failed_when: "'STATUS=SUCCESS' not in verify_result.stdout"
+      delegate_to: localhost
+
+    - name: Display final STP verification
+      ansible.builtin.debug:
+        var: verify_result.stdout
+
+    # ========================================================
+    # 16. VERIFY FINAL STP VALUES
+    # ========================================================
+
+    - name: Verify requested STP values
+      ansible.builtin.assert:
+        that:
+
+          - "'Spanning tree enabled protocol SSTP' in verify_result.stdout"
+
+          - ("Priority    " ~ priority|string) in verify_result.stdout
+
+          - ("Hello Time " ~ hello_time|string ~ " sec") in verify_result.stdout
+
+          - ("Max Age " ~ max_age|string ~ " sec") in verify_result.stdout
+
+          - ("Forward Delay " ~ forward_delay|string ~ " sec") in verify_result.stdout
+
+        fail_msg: >
+          STP configuration verification failed.
+          Requested values:
+          Priority={{ priority }},
+          Hello={{ hello_time }},
+          MaxAge={{ max_age }},
+          ForwardDelay={{ forward_delay }}.
+          Device output:
+          {{ verify_result.stdout }}
+
+        success_msg: >
+          STP configuration verified successfully.
+
+    # ========================================================
+    # 17. CREATE FINAL OUTPUT YAML
+    # ========================================================
+    #
+    # SUCCESS FILE:
+    #
+    # device_ip: 192.168.10.1
+    # message: SUCCESS
+    #
+    # ========================================================
+
+    - name: Create STP output YAML
+      ansible.builtin.copy:
+        dest: "{{ output_dir }}/{{ device_ip }}_stp.yml"
+        mode: "0644"
+        content: |
+          device_ip: {{ device_ip }}
+          message: SUCCESS
+      delegate_to: localhost
+
+    # ========================================================
+    # 18. FINAL RESULT
+    # ========================================================
+
+    - name: Display final result
+      ansible.builtin.debug:
+        msg:
+          - "=============================================="
+          - "STP CONFIGURATION SUCCESS"
+          - "=============================================="
+          - "Device IP      : {{ device_ip }}"
+          - "Protocol       : {{ protocol | upper }}"
+          - "Priority       : {{ priority }}"
+          - "Hello Time     : {{ hello_time }}"
+          - "Max Age        : {{ max_age }}"
+          - "Forward Delay  : {{ forward_delay }}"
+          - "BPDU Terminal  : {{ bpdu_terminal }}"
+          - "Loop Guard     : {{ loop_guard }}"
+          - "Saved          : SUCCESS"
+          - "Verified       : SUCCESS"
+          - "Output File    : {{ output_dir }}/{{ device_ip }}_stp.yml"
+          - "=============================================="
+

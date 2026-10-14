@@ -61,7 +61,7 @@ function loadNTP() {
     const btn = document.getElementById("refreshBtn");
     const box = document.getElementById("ntpData");
 
-    const ip = "192.168.200.245";
+    const ip = "{{ $device->hostname }}";
     const apiToken = "{{ $data['api_token'] }}";
 
     btn.disabled = true;

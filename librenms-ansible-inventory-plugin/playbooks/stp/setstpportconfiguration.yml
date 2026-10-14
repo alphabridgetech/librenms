@@ -1,0 +1,1077 @@
+# ============================================================================
+# File        : setstpportconfiguration.yml
+# Feature     : STP Port Configuration - SET
+#
+# Supported interfaces:
+#   - g0/1
+#   - GigaEthernet0/1
+#   - tg0/1
+#   - TGigaEthernet0/1
+#   - Port-aggregator1
+#
+# Operations:
+#   set
+#   delete
+#
+# STP Commands:
+#
+# Protocol Status:
+#   Enable  -> spanning-tree
+#   Disable -> no spanning-tree
+#
+# Priority:
+#   spanning-tree port-priority <0-240>
+#
+# Path Cost:
+#   spanning-tree cost <1-65535>
+#
+# Edge Port:
+#   Enable  -> spanning-tree rstp edge
+#   Disable -> no spanning-tree rstp edge
+#
+# RSTP Ring:
+#   Enable  -> spanning-tree loopfast
+#   Disable -> no spanning-tree loopfast
+#
+# BPDU Filter:
+#   Enable  -> spanning-tree bpdufilter enable
+#   Disable -> no spanning-tree bpdufilter
+#ansible-playbook -i hosts/10.10.10.1.yml playbooks/stp/setstpportconfiguration.yml -e "operation=set interface=GigaEthernet0/1 protocol_status=Enable priority=128 path_cost=100 edge_port=Enable rstp_ring=Enable bpdu_filter=Enable"
+#ansible-playbook -i inventory/192.168.200.245.yml playbooks/stp/setstpportconfiguration.yml -e "operation=set interface=GigaEthernet0/1 protocol_status=Disable"
+#ansible-playbook -i inventory/192.168.200.245.yml playbooks/stp/setstpportconfiguration.yml -e "operation=delete interface=GigaEthernet0/1"
+# ============================================================================
+
+- name: STP Port Configuration - SET
+  hosts: alphabridge_devices
+  gather_facts: false
+
+  vars:
+
+    # ------------------------------------------------------------------------
+    # Paths
+    # ------------------------------------------------------------------------
+
+    output_dir: "/opt/librenms/librenms-ansible-inventory-plugin/output"
+    temp_dir: "/opt/librenms/librenms-ansible-inventory-plugin/tmp"
+
+    python_bin: "/opt/librenms/librenms-ansible-inventory-plugin/bin/python3"
+
+    script_path: "{{ temp_dir }}/set_stp_port_configuration.py"
+
+    output_file: "{{ output_dir }}/{{ ansible_host }}_stp_port_configuration.yml"
+
+
+
+  tasks:
+
+    # ========================================================================
+    # Parameter defaults
+    #
+    # Set here rather than in play vars: a play var such as
+    #   priority: "{{ priority | default('') }}"
+    # refers to itself, so any parameter not passed with -e (e.g. priority
+    # on operation=delete) fails with "Recursive loop detected in template".
+    # set_fact is evaluated once, and -e values still take precedence.
+    # ========================================================================
+
+    - name: Apply parameter defaults
+      ansible.builtin.set_fact:
+        operation: "{{ operation | default('set') }}"
+        interface: "{{ interface | default('') }}"
+        protocol_status: "{{ protocol_status | default('') }}"
+        priority: "{{ priority | default('') }}"
+        path_cost: "{{ path_cost | default('') }}"
+        edge_port: "{{ edge_port | default('') }}"
+        rstp_ring: "{{ rstp_ring | default('') }}"
+        bpdu_filter: "{{ bpdu_filter | default('') }}"
+
+
+    # ========================================================================
+    # Validate operation
+    # ========================================================================
+
+    - name: Validate operation
+      ansible.builtin.assert:
+        that:
+          - operation | lower in ['set', 'delete']
+        fail_msg: >
+          Invalid operation. Use operation=set or operation=delete.
+
+
+    # ========================================================================
+    # Validate interface
+    # ========================================================================
+
+    - name: Validate interface
+      ansible.builtin.assert:
+        that:
+          - interface | length > 0
+          - >
+            interface is match('^(g|GigaEthernet)[0-9]+/[0-9]+$')
+            or
+            interface is match('^(tg|TGigaEthernet)[0-9]+/[0-9]+$')
+            or
+            interface is match('^Port-aggregator[0-9]+$')
+        fail_msg: >
+          Invalid interface.
+          Supported:
+          g0/1, GigaEthernet0/1, tg0/1, TGigaEthernet0/1,
+          Port-aggregator1.
+
+
+    # ========================================================================
+    # Validate protocol status
+    # ========================================================================
+
+    - name: Validate protocol status
+      ansible.builtin.assert:
+        that:
+          - protocol_status | lower in ['enable', 'disable']
+        fail_msg: >
+          protocol_status must be Enable or Disable.
+      when:
+        - operation | lower == 'set'
+        - protocol_status | length > 0
+
+
+    # ========================================================================
+    # Validate priority
+    # ========================================================================
+
+    - name: Validate priority
+      ansible.builtin.assert:
+        that:
+          - (priority | int) >= 0
+          - (priority | int) <= 240
+          - (priority | int) % 16 == 0
+        fail_msg: >
+          Priority must be one of:
+          0,16,32,48,64,80,96,112,128,144,160,176,192,208,224,240.
+      when:
+        - operation | lower == 'set'
+        - priority | length > 0
+
+
+    # ========================================================================
+    # Validate path cost
+    # ========================================================================
+
+    - name: Validate path cost
+      ansible.builtin.assert:
+        that:
+          - (path_cost | int) >= 1
+          - (path_cost | int) <= 65535
+        fail_msg: >
+          Path-Cost must be between 1 and 65535.
+      when:
+        - operation | lower == 'set'
+        - path_cost | length > 0
+
+
+    # ========================================================================
+    # Validate edge port
+    # ========================================================================
+
+    - name: Validate edge port
+      ansible.builtin.assert:
+        that:
+          - edge_port | lower in ['enable', 'disable']
+        fail_msg: >
+          edge_port must be Enable or Disable.
+      when:
+        - operation | lower == 'set'
+        - edge_port | length > 0
+
+
+    # ========================================================================
+    # Validate RSTP ring
+    # ========================================================================
+
+    - name: Validate RSTP ring
+      ansible.builtin.assert:
+        that:
+          - rstp_ring | lower in ['enable', 'disable']
+        fail_msg: >
+          rstp_ring must be Enable or Disable.
+      when:
+        - operation | lower == 'set'
+        - rstp_ring | length > 0
+
+
+    # ========================================================================
+    # Validate BPDU filter
+    # ========================================================================
+
+    - name: Validate BPDU filter
+      ansible.builtin.assert:
+        that:
+          - bpdu_filter | lower in ['enable', 'disable']
+        fail_msg: >
+          bpdu_filter must be Enable or Disable.
+      when:
+        - operation | lower == 'set'
+        - bpdu_filter | length > 0
+
+
+    # ========================================================================
+    # Create output directory
+    # ========================================================================
+
+    - name: Create output directory
+      ansible.builtin.file:
+        path: "{{ output_dir }}"
+        state: directory
+        mode: "0755"
+      delegate_to: localhost
+
+
+    # ========================================================================
+    # Create temporary directory
+    # ========================================================================
+
+    - name: Create temporary directory
+      ansible.builtin.file:
+        path: "{{ temp_dir }}"
+        state: directory
+        mode: "0755"
+      delegate_to: localhost
+
+
+    # ========================================================================
+    # Remove old output
+    # ========================================================================
+
+    - name: Remove previous output
+      ansible.builtin.file:
+        path: "{{ output_file }}"
+        state: absent
+      delegate_to: localhost
+
+
+    # ========================================================================
+    # Create Python script
+    # ========================================================================
+
+    - name: Create STP SET Python script
+      ansible.builtin.copy:
+        dest: "{{ script_path }}"
+        mode: "0755"
+        content: |
+          import paramiko
+          import time
+          import re
+          import yaml
+          import sys
+
+
+          # ==================================================================
+          # DEVICE INFORMATION
+          # ==================================================================
+
+          HOST = "{{ ansible_host }}"
+          USERNAME = "{{ ansible_user | default('') }}"
+          PASSWORD = "{{ ansible_password | default('') }}"
+
+          OUTPUT_FILE = "{{ output_file }}"
+
+
+          # ==================================================================
+          # PARAMETERS
+          # ==================================================================
+
+          OPERATION = "{{ operation | lower }}"
+
+          INTERFACE = "{{ interface }}"
+
+          PROTOCOL_STATUS = "{{ protocol_status | lower }}"
+
+          PRIORITY = "{{ priority }}"
+
+          PATH_COST = "{{ path_cost }}"
+
+          EDGE_PORT = "{{ edge_port | lower }}"
+
+          RSTP_RING = "{{ rstp_ring | lower }}"
+
+          BPDU_FILTER = "{{ bpdu_filter | lower }}"
+
+
+          # ==================================================================
+          # ERROR PATTERNS
+          # ==================================================================
+
+          ERROR_PATTERNS = [
+
+              "unknown command",
+
+              "invalid command",
+
+              "invalid input",
+
+              "invalid syntax",
+
+              "syntax error",
+
+              "command incomplete",
+
+              "too many parameters",
+
+              "ambiguous command",
+
+              "%error:",
+
+              "%error "
+
+          ]
+
+
+          # ==================================================================
+          # CHECK ERROR
+          # ==================================================================
+
+          def has_cli_error(output):
+
+              text = output.lower()
+
+              for pattern in ERROR_PATTERNS:
+
+                  if pattern in text:
+
+                      return True
+
+              return False
+
+
+          # ==================================================================
+          # READ SHELL
+          # ==================================================================
+
+          def read_shell(
+              shell,
+              quiet_time=1.0,
+              timeout=15
+          ):
+
+              buffer = ""
+
+              start_time = time.time()
+
+              last_data_time = time.time()
+
+              while time.time() - start_time < timeout:
+
+                  if shell.recv_ready():
+
+                      data = shell.recv(
+                          65535
+                      ).decode(
+                          errors="ignore"
+                      )
+
+                      buffer += data
+
+                      last_data_time = time.time()
+
+                  else:
+
+                      if (
+                          buffer
+                          and
+                          time.time() - last_data_time >= quiet_time
+                      ):
+
+                          break
+
+                      time.sleep(0.1)
+
+              return buffer
+
+
+          # ==================================================================
+          # CLEAR RECEIVE BUFFER
+          # ==================================================================
+
+          def clear_buffer(shell):
+
+              time.sleep(0.2)
+
+              while shell.recv_ready():
+
+                  shell.recv(65535)
+
+                  time.sleep(0.05)
+
+
+          # ==================================================================
+          # SEND COMMAND
+          # ==================================================================
+
+          def send_command(
+              shell,
+              command,
+              quiet_time=1.0,
+              timeout=20
+          ):
+
+              clear_buffer(shell)
+
+              shell.send(
+                  command + "\n"
+              )
+
+              output = ""
+
+              start_time = time.time()
+
+              last_data_time = time.time()
+
+              while time.time() - start_time < timeout:
+
+                  if shell.recv_ready():
+
+                      data = shell.recv(
+                          65535
+                      ).decode(
+                          errors="ignore"
+                      )
+
+                      output += data
+
+                      last_data_time = time.time()
+
+                      # ------------------------------------------------------
+                      # Pagination
+                      # ------------------------------------------------------
+
+                      if (
+                          "--More--" in output
+                          or
+                          "-- More --" in output
+                          or
+                          "More:" in output
+                      ):
+
+                          shell.send(" ")
+
+                  else:
+
+                      if (
+                          output
+                          and
+                          time.time() - last_data_time
+                          >= quiet_time
+                      ):
+
+                          break
+
+                      time.sleep(0.1)
+
+              return output
+
+
+          # ==================================================================
+          # NORMALIZE INTERFACE
+          # ==================================================================
+
+          def normalize_interface(interface):
+
+              # --------------------------------------------------------------
+              # g0/1
+              # GigaEthernet0/1
+              # --------------------------------------------------------------
+
+              match = re.match(
+                  r"^(?:g|GigaEthernet)"
+                  r"([0-9]+/[0-9]+)$",
+                  interface,
+                  re.IGNORECASE
+              )
+
+              if match:
+
+                  return (
+                      "GigaEthernet"
+                      + match.group(1)
+                  )
+
+
+              # --------------------------------------------------------------
+              # tg0/1
+              # TGigaEthernet0/1
+              # --------------------------------------------------------------
+
+              match = re.match(
+                  r"^(?:tg|TGigaEthernet)"
+                  r"([0-9]+/[0-9]+)$",
+                  interface,
+                  re.IGNORECASE
+              )
+
+              if match:
+
+                  return (
+                      "TGigaEthernet"
+                      + match.group(1)
+                  )
+
+
+              # --------------------------------------------------------------
+              # Port-aggregator
+              # --------------------------------------------------------------
+
+              match = re.match(
+                  r"^Port-aggregator([0-9]+)$",
+                  interface,
+                  re.IGNORECASE
+              )
+
+              if match:
+
+                  return (
+                      "Port-aggregator"
+                      + match.group(1)
+                  )
+
+
+              raise Exception(
+                  "Unsupported interface: "
+                  + interface
+              )
+
+
+          # ==================================================================
+          # BUILD STP COMMANDS
+          # ==================================================================
+
+          def build_commands():
+
+              commands = []
+
+
+              # --------------------------------------------------------------
+              # DELETE
+              # --------------------------------------------------------------
+
+              if OPERATION == "delete":
+
+                  commands.append(
+                      "no spanning-tree"
+                  )
+
+                  return commands
+
+
+              # --------------------------------------------------------------
+              # Protocol Status
+              # --------------------------------------------------------------
+
+              if PROTOCOL_STATUS == "enable":
+
+                  commands.append(
+                      "spanning-tree"
+                  )
+
+              elif PROTOCOL_STATUS == "disable":
+
+                  commands.append(
+                      "no spanning-tree"
+                  )
+
+
+              # --------------------------------------------------------------
+              # Priority
+              # --------------------------------------------------------------
+
+              if PRIORITY:
+
+                  commands.append(
+                      "spanning-tree port-priority "
+                      + PRIORITY
+                  )
+
+
+              # --------------------------------------------------------------
+              # Path Cost
+              # --------------------------------------------------------------
+
+              if PATH_COST:
+
+                  commands.append(
+                      "spanning-tree cost "
+                      + PATH_COST
+                  )
+
+
+              # --------------------------------------------------------------
+              # Edge Port
+              # --------------------------------------------------------------
+
+              if EDGE_PORT == "enable":
+
+                  commands.append(
+                      "spanning-tree rstp edge"
+                  )
+
+              elif EDGE_PORT == "disable":
+
+                  commands.append(
+                      "no spanning-tree rstp edge"
+                  )
+
+
+              # --------------------------------------------------------------
+              # RSTP Ring
+              # --------------------------------------------------------------
+
+              if RSTP_RING == "enable":
+
+                  commands.append(
+                      "spanning-tree loopfast"
+                  )
+
+              elif RSTP_RING == "disable":
+
+                  commands.append(
+                      "no spanning-tree loopfast"
+                  )
+
+
+              # --------------------------------------------------------------
+              # BPDU Filter
+              # --------------------------------------------------------------
+
+              if BPDU_FILTER == "enable":
+
+                  commands.append(
+                      "spanning-tree bpdufilter enable"
+                  )
+
+              elif BPDU_FILTER == "disable":
+
+                  commands.append(
+                      "no spanning-tree bpdufilter"
+                  )
+
+
+              return commands
+
+
+          # ==================================================================
+          # WRITE OUTPUT
+          # ==================================================================
+
+          def write_output(
+              message,
+              reason=None
+          ):
+
+              result = {
+
+                  "device_ip": HOST,
+
+                  "message": message
+              }
+
+
+              if reason:
+
+                  result["reason"] = reason
+
+
+              with open(
+                  OUTPUT_FILE,
+                  "w"
+              ) as file:
+
+                  yaml.safe_dump(
+                      result,
+                      file,
+                      sort_keys=False,
+                      default_flow_style=False
+                  )
+
+
+              return result
+
+
+          # ==================================================================
+          # MAIN
+          # ==================================================================
+
+          client = None
+
+
+          try:
+
+              # ==============================================================
+              # CONNECT
+              # ==============================================================
+
+              client = paramiko.SSHClient()
+
+              client.set_missing_host_key_policy(
+                  paramiko.AutoAddPolicy()
+              )
+
+              client.connect(
+
+                  hostname=HOST,
+
+                  username=USERNAME,
+
+                  password=PASSWORD,
+
+                  look_for_keys=False,
+
+                  allow_agent=False,
+
+                  timeout=20,
+
+                  banner_timeout=20,
+
+                  auth_timeout=20
+              )
+
+
+              # ==============================================================
+              # OPEN SHELL
+              # ==============================================================
+
+              shell = client.invoke_shell(
+
+                  term="vt100",
+
+                  width=200,
+
+                  height=1000
+              )
+
+              time.sleep(1)
+
+
+              # ==============================================================
+              # CLEAR LOGIN BANNER / OLD DATA
+              # ==============================================================
+
+              clear_buffer(shell)
+
+
+              # ==============================================================
+              # GET CURRENT PROMPT
+              # ==============================================================
+
+              shell.send("\n")
+
+              prompt_output = read_shell(
+                  shell,
+                  quiet_time=1,
+                  timeout=10
+              )
+
+
+              prompt_lines = [
+                  x.strip()
+                  for x in prompt_output.splitlines()
+                  if x.strip()
+              ]
+
+
+              current_prompt = ""
+
+              if prompt_lines:
+
+                  current_prompt = prompt_lines[-1]
+
+
+              # ==============================================================
+              # ENABLE MODE
+              # ==============================================================
+
+              if current_prompt.endswith(">"):
+
+                  enable_output = send_command(
+
+                      shell,
+
+                      "enable",
+
+                      quiet_time=1,
+
+                      timeout=10
+                  )
+
+                  if has_cli_error(
+                      enable_output
+                  ):
+
+                      raise Exception(
+                          "Unable to enter enable mode"
+                      )
+
+
+              # ==============================================================
+              # DETERMINE CURRENT MODE
+              # ==============================================================
+
+              shell.send("\n")
+
+              mode_output = read_shell(
+                  shell,
+                  quiet_time=1,
+                  timeout=5
+              )
+
+
+              mode_lines = [
+                  x.strip()
+                  for x in mode_output.splitlines()
+                  if x.strip()
+              ]
+
+
+              current_prompt = ""
+
+              if mode_lines:
+
+                  current_prompt = mode_lines[-1]
+
+
+              # ==============================================================
+              # ENTER CONFIG MODE ONLY WHEN NECESSARY
+              #
+              # Do NOT send config if already in *_config# mode.
+              # ==============================================================
+
+              prompt_lower = current_prompt.lower()
+
+
+              if not (
+                  prompt_lower.endswith("_config#")
+                  or
+                  prompt_lower.endswith("config#")
+              ):
+
+                  config_output = send_command(
+
+                      shell,
+
+                      "config",
+
+                      quiet_time=1,
+
+                      timeout=10
+                  )
+
+
+                  if has_cli_error(
+                      config_output
+                  ):
+
+                      raise Exception(
+                          "Unable to enter configuration mode"
+                          + "\n"
+                          + config_output
+                      )
+
+
+              # ==============================================================
+              # NORMALIZE INTERFACE
+              # ==============================================================
+
+              device_interface = normalize_interface(
+                  INTERFACE
+              )
+
+
+              # ==============================================================
+              # ENTER INTERFACE
+              #
+              # IMPORTANT:
+              # Send this command exactly once.
+              # ==============================================================
+
+              interface_command = (
+                  "interface "
+                  + device_interface
+              )
+
+
+              interface_output = send_command(
+
+                  shell,
+
+                  interface_command,
+
+                  quiet_time=1,
+
+                  timeout=15
+              )
+
+
+              # ==============================================================
+              # CHECK INTERFACE COMMAND
+              # ==============================================================
+
+              if has_cli_error(
+                  interface_output
+              ):
+
+                  raise Exception(
+
+                      "Failed to enter interface "
+                      + device_interface
+                      + "\n"
+                      + interface_output
+                  )
+
+
+              # ==============================================================
+              # BUILD COMMANDS
+              # ==============================================================
+
+              commands = build_commands()
+
+
+              if not commands:
+
+                  raise Exception(
+                      "No STP configuration parameter supplied"
+                  )
+
+
+              # ==============================================================
+              # EXECUTE STP COMMANDS
+              # ==============================================================
+
+              for command in commands:
+
+                  command_output = send_command(
+
+                      shell,
+
+                      command,
+
+                      quiet_time=1,
+
+                      timeout=20
+                  )
+
+
+                  if has_cli_error(
+                      command_output
+                  ):
+
+                      raise Exception(
+
+                          "Command failed: "
+                          + command
+                          + "\n"
+                          + command_output
+                      )
+
+
+              # ==============================================================
+              # EXIT INTERFACE
+              # ==============================================================
+
+              exit_output = send_command(
+
+                  shell,
+
+                  "exit",
+
+                  quiet_time=1,
+
+                  timeout=10
+              )
+
+
+              if has_cli_error(
+                  exit_output
+              ):
+
+                  raise Exception(
+                      "Failed to exit interface mode"
+                  )
+
+
+              # ==============================================================
+              # SUCCESS
+              # ==============================================================
+
+              result = write_output(
+                  "SUCCESS"
+              )
+
+
+              print(
+                  yaml.safe_dump(
+                      result,
+                      sort_keys=False,
+                      default_flow_style=False
+                  )
+              )
+
+
+              client.close()
+
+              sys.exit(0)
+
+
+          except Exception as exc:
+
+              try:
+
+                  if client:
+
+                      client.close()
+
+              except Exception:
+
+                  pass
+
+
+              # ==============================================================
+              # FAILED
+              # ==============================================================
+
+              result = write_output(
+
+                  "FAILED",
+
+                  str(exc)
+              )
+
+
+              print(
+                  yaml.safe_dump(
+                      result,
+                      sort_keys=False,
+                      default_flow_style=False
+                  )
+              )
+
+
+              sys.exit(1)
+
+
+    # ========================================================================
+    # Execute Python script
+    # ========================================================================
+
+    - name: Run STP Port Configuration SET
+      ansible.builtin.command: >
+        {{ python_bin }} {{ script_path }}
+      delegate_to: localhost
+      register: stp_set_result
+      changed_when: false
+      failed_when: stp_set_result.rc != 0
+
+
+    # ========================================================================
+    # Display result
+    # ========================================================================
+
+    - name: Display STP Port Configuration result
+      ansible.builtin.debug:
+        msg: "{{ stp_set_result.stdout }}"

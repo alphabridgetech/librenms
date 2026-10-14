@@ -1,55 +1,42 @@
 # ==========================================
-# multiple_ring_protection_details.yml
+# multiple_ring_protection_get.yml
+# ==========================================
 # Created on Sept 3, 2026 by Vikash Kumar (vikash.kumar@alphabrige.tech).
 #
-# Copyright (c), ALPHA BRIDGE, Inc.
-# 357D, Udyog Vihar Industrial Area Phase VI, Sector 37, Gurugram, Haryana.
+# Copyright (c), ALPHA BRIDGE, Inc.357D, Udyog Vihar Industrial Area Phase VI,
+# Sector 37, Gurugram, Haryana.
 #
 # All rights reserved.
 #
-# This software is the confidential and proprietary  information of 
-# ALPHA BRIDGE, Inc. ("Confidential Information"). You shall not disclose
-# such Confidential Information and shall use it only in accordance with the
-# terms of the license agreement you entered into with
-# ALPHA BRIDGE.
-#
-# =============================================================================
-# Playbook Name : Multiple Ring Protection Details (Show)
-# =============================================================================
+# This software is the confidential and proprietary information of ALPHA BRIDGE,
+# Inc. ("Confidential Information"). You shall not disclose such Confidential
+# Information and shall use it only in accordance with the terms of the license
+# agreement you entered into with ALPHA BRIDGE.
+# ==========================================
 #
 # Description:
-# This playbook only READS MEAPS ring protection details from
-# an AlphaBridge switch over SSH by running:
-#   show meaps-dict
+# Fetch Multiple Ring Protection details
+# using the command:
 #
-# The parser is written to also handle multiple rings
-# appearing back-to-back in one show output: a new record
-# starts every time an "Ether-Ring Domain <n>" line is seen.
-#
-# Input vars (all optional):
-#   domain_id (optional) - filter results to this domain only
-#   ring_id   (optional) - filter results to this ring only
-#
-# Example:
-# ansible-playbook -i inventory/192.168.2.245.yml \
-#   playbooks/multiple_ring_protection_details.yml
+# show meaps-dict
 #
 # Output:
-# output/<switch_ip>_multiple_ring_protection_details.yml
-# =============================================================================
+# output/<switch_ip>_multiple_ring_protection_get.yml
+#
+# ==========================================
 
-- name: Multiple ring protection details (show)
+- name: Multiple Ring Protection Get
   hosts: alphabridge_devices
-  gather_facts: no
+  gather_facts: false
 
   vars:
-    # Resolve paths from this checkout, including the Jenkins workspace.
-    project_root: "/opt/librenms/librenms-ansible-inventory-plugin/../.."
+    project_root: "/opt/librenms/librenms-ansible-inventory-plugin"
 
   pre_tasks:
-    - name: Ensure script and report directories exist
+
+    - name: Ensure script and output directories exist
       ansible.builtin.file:
-        path: "/opt/librenms/librenms-ansible-inventory-plugin/{{ item }}"
+        path: "{{ project_root }}/{{ item }}"
         state: directory
         mode: '0755'
       loop:
@@ -59,149 +46,416 @@
   tasks:
 
     # ==========================================
-    # Validate optional filters if provided
+    # VALIDATE OPTIONAL DOMAIN ID
     # ==========================================
 
-    - name: Validate domain_id is numeric (when provided)
+    - name: Validate Domain ID
       ansible.builtin.assert:
         that:
           - domain_id | string is match('^[0-9]+$')
-        fail_msg: >
-          domain_id must be a whole number
-          (got: {{ domain_id }})
-      when: domain_id is defined
-
-    - name: Validate domain_id is in range 0-3 (when provided)
-      ansible.builtin.assert:
-        that:
           - (domain_id | int) >= 0
           - (domain_id | int) <= 3
-        fail_msg: >
-          domain_id must be between 0 and 3
-          (got: {{ domain_id }})
+        fail_msg: "Domain ID must be between 0 and 3"
       when: domain_id is defined
 
-    - name: Validate ring_id is numeric (when provided)
+    # ==========================================
+    # VALIDATE OPTIONAL RING ID
+    # ==========================================
+
+    - name: Validate Ring ID
       ansible.builtin.assert:
         that:
           - ring_id | string is match('^[0-9]+$')
-        fail_msg: >
-          ring_id must be a whole number (got: {{ ring_id }})
-      when: ring_id is defined
-
-    - name: Validate ring_id is in range 0-7 (when provided)
-      ansible.builtin.assert:
-        that:
           - (ring_id | int) >= 0
           - (ring_id | int) <= 7
-        fail_msg: >
-          ring_id must be between 0 and 7 (got: {{ ring_id }})
+        fail_msg: "Ring ID must be between 0 and 7"
       when: ring_id is defined
 
     # ==========================================
-    # Create Python SSH Script
+    # CREATE PYTHON SSH SCRIPT
     # ==========================================
 
-    - name: >-
-        Create Python SSH Script for MEAPS ring details show
+    - name: Create Multiple Ring Protection SSH script
       ansible.builtin.copy:
-        dest: "/opt/librenms/librenms-ansible-inventory-plugin/tmp/meaps_dict_show_exec.py"
+        dest: "{{ project_root }}/tmp/multiple_ring_protection_get_exec.py"
         mode: '0755'
         content: |
           #!/usr/bin/env python3
 
+          import os
           import paramiko
           import time
           import re
           import json
+          import sys
 
-          HOST = "{{ ansible_host }}"
-          USER = "{{ ansible_user }}"
-          PASSWORD = "{{ ansible_password }}"
-          DOMAIN_FILTER = "{{ domain_id | default('') }}"
-          RING_FILTER = "{{ ring_id | default('') }}"
+          # ==========================================
+          # SWITCH CREDENTIALS
+          # ==========================================
 
-          PROMPT_RE = r'[>#]\s*$'
+          HOST = os.environ["SWITCH_HOST"]
+          USER = os.environ["SWITCH_USER"]
+          PASSWORD = os.environ["SWITCH_PASSWORD"]
 
-          # Maps the raw device key token to the output field
-          # name. "Ether-Ring Domain" / "Ether-Ring Node" are
-          # handled separately since they're two-word keys.
-          KEY_MAP = {
-              "NodeRingLevel": "node_ring_level",
-              "NodeType": "node_type",
-              "ControlVlan": "control_vlan",
-              "RingState": "ring_state",
-              "HelloTime": "hello_time",
-              "FailTime": "fail_time",
-              "PreforwardTime": "pre_forward_time",
-              "PrimaryPort": "primary_port",
-              "PrimaryPortState": "primary_port_state",
-              "PrimaryPortStatus": "primary_port_status",
-              "SecondaryPort": "secondary_port",
-              "SecondaryPortState": "secondary_port_state",
-              "SecondaryPortStatus": "secondary_port_status",
-          }
+          DOMAIN_FILTER = os.environ.get(
+              "DOMAIN_FILTER", ""
+          )
 
+          RING_FILTER = os.environ.get(
+              "RING_FILTER", ""
+          )
 
-          def read_until_prompt(shell, prompt_re, timeout=10):
-              buf = ""
-              end_time = time.time() + timeout
-
-              while time.time() < end_time:
-                  if shell.recv_ready():
-                      chunk = shell.recv(65535).decode(
-                          errors="ignore"
-                      )
-                      buf += chunk
-
-                      if re.search(prompt_re, buf):
-                          return buf
-                  else:
-                      time.sleep(0.1)
-
-              return buf
-
-
-          def send_cmd(
-              shell, cmd, timeout=10, check_errors=True
-          ):
-              """Send a CLI command, wait for the prompt,
-              optionally raise on switch-reported errors.
-              Returns the raw output."""
-              shell.send(
-                  cmd if cmd.endswith("\n") else cmd + "\n"
-              )
-              output = read_until_prompt(
-                  shell, PROMPT_RE, timeout=timeout
-              )
-
-              if check_errors and re.search(
-                  r'%err|invalid|error', output, re.IGNORECASE
-              ):
-                  raise Exception(
-                      f"'{cmd.strip()}' rejected by switch: "
-                      f"{output.strip()}"
-                  )
-
-              return output
-
+          # ==========================================
+          # ANSI CLEANUP
+          # ==========================================
 
           ansi_re = re.compile(
               r'\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])'
           )
 
-          shell = None
+          PROMPT_RE = r'(?m)^[^\r\n\s]+[>#]\s*\Z'
+
+          # ==========================================
+          # READ UNTIL SWITCH PROMPT
+          # ==========================================
+
+          def read_until_prompt(
+              shell,
+              timeout=10
+          ):
+
+              buf = ""
+              end_time = time.time() + timeout
+
+              while time.time() < end_time:
+
+                  if shell.recv_ready():
+
+                      chunk = shell.recv(65535).decode(
+                          errors="ignore"
+                      )
+
+                      buf += chunk
+
+                      clean_buf = ansi_re.sub(
+                          "",
+                          buf
+                      ).replace("\r", "")
+
+                      if re.search(
+                          PROMPT_RE,
+                          clean_buf
+                      ):
+                          return clean_buf
+
+                  else:
+                      time.sleep(0.1)
+
+              raise TimeoutError(
+                  "Timeout waiting for switch prompt"
+              )
+
+          # ==========================================
+          # EXECUTE CLI COMMAND
+          # ==========================================
+
+          def send_cmd(
+              shell,
+              command,
+              timeout=10
+          ):
+
+              shell.send(command + "\n")
+
+              output = read_until_prompt(
+                  shell,
+                  timeout=timeout
+              )
+
+              if re.search(
+                  r'(?im)^\s*(?:%err|%invalid|'
+                  r'invalid input|unknown command|'
+                  r'error:)',
+                  output
+              ):
+
+                  raise Exception(
+                      "Command failed: " + command
+                  )
+
+              return output
+
+          # ==========================================
+          # CLI FIELD MAPPING
+          #
+          # Only GUI fields are included.
+          # ==========================================
+
+          KEY_MAP = {
+
+              "NodeRingLevel": "ring_type",
+
+              "NodeType": "node_type",
+
+              "ControlVlan": "control_vlan",
+
+              "HelloTime": "hello_time",
+
+              "FailTime": "fail_time",
+
+              "PreforwardTime": "pre_forward_time",
+
+              "PrimaryPort": "primary_port",
+
+              "SecondaryPort": "secondary_port"
+
+          }
+
+          # ==========================================
+          # CONVERT NUMBER
+          # ==========================================
+
+          def number_or_none(value):
+
+              if value is None:
+                  return None
+
+              value = str(value).strip()
+
+              if value.isdigit():
+                  return int(value)
+
+              return None
+
+          # ==========================================
+          # CONVERT CLI LABEL TO GUI LABEL
+          #
+          # Major-Ring -> Major Ring
+          # Master-node -> Master Node
+          # ==========================================
+
+          def display_label(value):
+
+              if value is None:
+                  return None
+
+              return value.replace(
+                  "-",
+                  " "
+              ).title()
+
+          # ==========================================
+          # MAP ONE RING TO GUI FIELDS
+          # ==========================================
+
+          def format_ring(ring):
+
+              return {
+
+                  "Domain ID":
+                      number_or_none(
+                          ring.get("domain_id")
+                      ),
+
+                  "Ring ID":
+                      number_or_none(
+                          ring.get("ring_id")
+                      ),
+
+                  "Ring Type":
+                      display_label(
+                          ring.get("ring_type")
+                      ),
+
+                  "Node Type":
+                      display_label(
+                          ring.get("node_type")
+                      ),
+
+                  "Control VLAN":
+                      number_or_none(
+                          ring.get("control_vlan")
+                      ),
+
+                  "Hello Time":
+                      number_or_none(
+                          ring.get("hello_time")
+                      ),
+
+                  "Failed Time":
+                      number_or_none(
+                          ring.get("fail_time")
+                      ),
+
+                  "Pre Forward Time":
+                      number_or_none(
+                          ring.get("pre_forward_time")
+                      ),
+
+                  "Primary Port":
+                      ring.get("primary_port"),
+
+                  "Primary Port Type":
+                      "Primary-Port",
+
+                  "Secondary Port":
+                      ring.get("secondary_port"),
+
+                  "Secondary Port Type":
+                      "Secondary-Port"
+
+              }
+
+          # ==========================================
+          # PARSE SHOW MEAPS-DICT OUTPUT
+          # ==========================================
+
+          def parse_meaps_output(output):
+
+              rings = []
+
+              current = None
+
+              for raw_line in output.splitlines():
+
+                  line = raw_line.strip()
+
+                  if not line:
+                      continue
+
+                  # ==================================
+                  # DOMAIN ID
+                  #
+                  # Ether-Ring Domain 3
+                  # ==================================
+
+                  domain_match = re.match(
+                      r'^Ether-Ring\s+Domain\s+(\d+)\s*$',
+                      line,
+                      re.IGNORECASE
+                  )
+
+                  if domain_match:
+
+                      if current is not None:
+                          rings.append(current)
+
+                      current = {
+                          "domain_id":
+                              domain_match.group(1)
+                      }
+
+                      continue
+
+                  # ==================================
+                  # RING ID
+                  #
+                  # Ether-Ring Node 2
+                  # ==================================
+
+                  ring_match = re.match(
+                      r'^Ether-Ring\s+Node\s+(\d+)\s*$',
+                      line,
+                      re.IGNORECASE
+                  )
+
+                  if ring_match and current is not None:
+
+                      current["ring_id"] = (
+                          ring_match.group(1)
+                      )
+
+                      continue
+
+                  # ==================================
+                  # OTHER PARAMETERS
+                  # ==================================
+
+                  field_match = re.match(
+                      r'^(\S+)\s+(.+?)\s*$',
+                      line
+                  )
+
+                  if field_match and current is not None:
+
+                      key = field_match.group(1)
+
+                      value = field_match.group(2)
+
+                      output_key = KEY_MAP.get(key)
+
+                      if output_key:
+
+                          current[output_key] = value
+
+              # ==================================
+              # ADD LAST RECORD
+              # ==================================
+
+              if current is not None:
+                  rings.append(current)
+
+              # ==================================
+              # APPLY DOMAIN FILTER
+              # ==================================
+
+              if DOMAIN_FILTER.strip():
+
+                  rings = [
+
+                      ring for ring in rings
+
+                      if ring.get("domain_id")
+                      == DOMAIN_FILTER.strip()
+
+                  ]
+
+              # ==================================
+              # APPLY RING FILTER
+              # ==================================
+
+              if RING_FILTER.strip():
+
+                  rings = [
+
+                      ring for ring in rings
+
+                      if ring.get("ring_id")
+                      == RING_FILTER.strip()
+
+                  ]
+
+              # ==================================
+              # CONVERT TO GUI FORMAT
+              # ==================================
+
+              return [
+
+                  format_ring(ring)
+
+                  for ring in rings
+
+              ]
+
+          # ==========================================
+          # SSH INITIALIZATION
+          # ==========================================
+
           ssh = None
 
+          shell = None
+
           try:
-              # ==================================
-              # SSH CONNECTION
-              # ==================================
 
               ssh = paramiko.SSHClient()
+
               ssh.set_missing_host_key_policy(
                   paramiko.AutoAddPolicy()
               )
+
+              # ==================================
+              # CONNECT TO SWITCH
+              # ==================================
 
               ssh.connect(
                   HOST,
@@ -213,153 +467,151 @@
               )
 
               shell = ssh.invoke_shell()
+
               time.sleep(0.5)
 
               # ==================================
-              # LOGIN BANNER / INITIAL PROMPT
+              # INITIAL PROMPT
               # ==================================
 
-              read_until_prompt(shell, PROMPT_RE, timeout=5)
+              initial_output = read_until_prompt(
+                  shell,
+                  timeout=10
+              )
 
               # ==================================
-              # ENABLE, DISABLE PAGING, RUN SHOW
+              # ENABLE MODE
+              # ==================================
+
+              if initial_output.rstrip().endswith(">"):
+
+                  enable_output = send_cmd(
+                      shell,
+                      "enable",
+                      timeout=10
+                  )
+
+                  if not enable_output.rstrip().endswith("#"):
+
+                      raise Exception(
+                          "Failed to enter enable mode"
+                      )
+
+              elif not initial_output.rstrip().endswith("#"):
+
+                  raise Exception(
+                      "Unrecognized switch prompt"
+                  )
+
+              # ==================================
+              # DISABLE PAGING
               # ==================================
 
               send_cmd(
-                  shell, "enable",
-                  timeout=5, check_errors=False
+                  shell,
+                  "terminal length 0",
+                  timeout=10
               )
-              send_cmd(
-                  shell, "terminal length 0",
-                  timeout=5, check_errors=False
-              )
+
+              # ==================================
+              # SHOW MEAPS-DICT
+              # ==================================
 
               show_output = send_cmd(
-                  shell, "show meaps-dict",
-                  timeout=10, check_errors=False
+                  shell,
+                  "show meaps-dict",
+                  timeout=30
               )
 
               # ==================================
-              # CLEAN ANSI CHARACTERS
+              # PARSE OUTPUT
               # ==================================
 
-              show_output = ansi_re.sub("", show_output)
+              rings = parse_meaps_output(
+                  show_output
+              )
 
               # ==================================
-              # PARSE OUTPUT INTO RING RECORDS
-              #
-              # A new record starts every time a line
-              # "Ether-Ring Domain <n>" is seen. Every
-              # other recognized line updates a field on
-              # the record currently being built.
+              # RETURN JSON
               # ==================================
-
-              rings = []
-              current = None
-
-              for raw_line in show_output.splitlines():
-                  line = raw_line.strip()
-
-                  if not line:
-                      continue
-
-                  if line.lower().startswith(
-                      "show meaps-dict"
-                  ):
-                      continue
-
-                  domain_match = re.match(
-                      r'^Ether-Ring\s+Domain\s+(\S+)\s*$',
-                      line, re.IGNORECASE
-                  )
-                  if domain_match:
-                      if current is not None:
-                          rings.append(current)
-                      current = {"domain_id": domain_match.group(1)}
-                      continue
-
-                  node_match = re.match(
-                      r'^Ether-Ring\s+Node\s+(\S+)\s*$',
-                      line, re.IGNORECASE
-                  )
-                  if node_match and current is not None:
-                      current["ring_id"] = node_match.group(1)
-                      continue
-
-                  field_match = re.match(
-                      r'^(\S+)\s+(.+?)\s*$', line
-                  )
-                  if field_match and current is not None:
-                      key_token, value = field_match.groups()
-                      out_key = KEY_MAP.get(key_token)
-                      if out_key:
-                          current[out_key] = value
-
-              if current is not None:
-                  rings.append(current)
-
-              # ==================================
-              # APPLY OPTIONAL FILTERS
-              # ==================================
-
-              if DOMAIN_FILTER.strip():
-                  rings = [
-                      r for r in rings
-                      if r.get("domain_id") == DOMAIN_FILTER.strip()
-                  ]
-
-              if RING_FILTER.strip():
-                  rings = [
-                      r for r in rings
-                      if r.get("ring_id") == RING_FILTER.strip()
-                  ]
-
-              # ==================================
-              # CLOSE SSH / RETURN JSON
-              # ==================================
-
-              shell.close()
-              ssh.close()
 
               print(json.dumps({
+
                   "ip": HOST,
+
                   "rings": rings,
+
                   "status": "success"
+
               }))
+
+          # ==========================================
+          # EXCEPTION HANDLING
+          # ==========================================
 
           except Exception as e:
-              try:
-                  if shell:
-                      shell.close()
-                  if ssh:
-                      ssh.close()
-              except:
-                  pass
 
               print(json.dumps({
+
                   "ip": HOST,
+
                   "status": "failed",
+
                   "error": str(e)
+
               }))
+
+              sys.exit(1)
+
+          # ==========================================
+          # CLOSE SSH CONNECTION
+          # ==========================================
+
+          finally:
+
+              if shell:
+                  shell.close()
+
+              if ssh:
+                  ssh.close()
 
     # ==========================================
     # EXECUTE PYTHON SCRIPT
     # ==========================================
 
-    - name: Execute MEAPS ring details show script
+    - name: Execute Multiple Ring Protection script
       ansible.builtin.command:
         argv:
-          - /opt/librenms/librenms-ansible-inventory-plugin/bin/python3
-          - "/opt/librenms/librenms-ansible-inventory-plugin/tmp/meaps_dict_show_exec.py"
+          - "{{ project_root }}/bin/python3"
+          - "{{ project_root }}/tmp/multiple_ring_protection_get_exec.py"
+      environment:
+        SWITCH_HOST: "{{ ansible_host }}"
+        SWITCH_USER: "{{ ansible_user }}"
+        SWITCH_PASSWORD: "{{ ansible_password }}"
+        DOMAIN_FILTER: "{{ domain_id | default('') }}"
+        RING_FILTER: "{{ ring_id | default('') }}"
       register: meaps_raw
       changed_when: false
       failed_when: false
+      no_log: true
+
+    # ==========================================
+    # VALIDATE PYTHON OUTPUT
+    # ==========================================
+
+    - name: Check Python script output
+      ansible.builtin.assert:
+        that:
+          - meaps_raw.stdout | trim | length > 0
+        fail_msg: >-
+          Multiple Ring Protection script returned
+          empty output. Check Python execution.
 
     # ==========================================
     # CONVERT JSON RESULT
     # ==========================================
 
-    - name: Convert MEAPS ring details result to JSON
+    - name: Convert MEAPS result to JSON
       ansible.builtin.set_fact:
         meaps_result: "{{ meaps_raw.stdout | from_json }}"
 
@@ -367,7 +619,7 @@
     # DISPLAY RESULT
     # ==========================================
 
-    - name: Display MEAPS ring details result
+    - name: Display Multiple Ring Protection result
       ansible.builtin.debug:
         var: meaps_result
 
@@ -375,20 +627,23 @@
     # SAVE RESULT
     # ==========================================
 
-    - name: Save MEAPS ring details result
+    - name: Save Multiple Ring Protection result
       ansible.builtin.copy:
-        dest: "/opt/librenms/librenms-ansible-inventory-plugin/output/{{ ansible_host }}_multiple_ring_protection_details.yml"
+        dest: "{{ project_root }}/output/{{ ansible_host }}_multiple_ring_protection_get.yml"
+        mode: '0644'
         content: |
-          {{ meaps_result | to_nice_yaml (sort_keys=False) }}
+          {{ meaps_result | to_nice_yaml(sort_keys=False) }}
 
     # ==========================================
-    # FAIL IF SHOW COMMAND FAILED
+    # FAIL IF COMMAND FAILED
     # ==========================================
 
-    - name: Fail if MEAPS ring details show failed
+    - name: Fail if MEAPS command failed
       ansible.builtin.fail:
-        msg: "{{ meaps_result.error }}"
-      when: meaps_result.status == "failed"
+        msg: "{{ meaps_result.error | default('Script failed') }}"
+      when: >
+        meaps_result.status == "failed"
+        or meaps_raw.rc != 0
 
     # ==========================================
     # FINAL MESSAGE
@@ -396,7 +651,9 @@
 
     - name: Display result file
       ansible.builtin.debug:
-        msg: >
-          MEAPS ring details retrieved from
-          {{ ansible_host }}. Result saved to
-          output/{{ ansible_host }}_multiple_ring_protection_details.yml
+        msg: >-
+          Multiple Ring Protection details retrieved
+          from {{ ansible_host }}.
+          Result saved to
+          output/{{ ansible_host }}_multiple_ring_protection_get.yml
+      when: meaps_result.status == "success"

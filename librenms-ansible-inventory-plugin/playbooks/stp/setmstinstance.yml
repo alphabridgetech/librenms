@@ -1,0 +1,901 @@
+---
+# ============================================================
+# ABOSS - MST Region / MST Instance Configuration SET
+# ============================================================
+#
+# File:
+#   playbooks/stp/setmstinstance.yml
+#
+# Purpose:
+#   Configure:
+#
+#   - MST Region Name
+#   - MST Revision
+#   - MST Instance VLAN Mapping
+#   - MST Instance Bridge Priority
+#   - MST Port Path Cost
+#   - MST Port Priority
+#
+# ============================================================
+#
+# Example:
+#
+# ansible-playbook -i inventory/192.168.200.245.yml \
+# playbooks/stp/setmstinstance.yml \
+# -e '{"mst_name":"C86BBCA0D0F4","mst_revision":5,"mst_instance":2,"mst_vlan":"12","mst_priority":12288,"mst_ports":[{"interface_type":"GigaEthernet","interface_id":"0/1","cost":34,"port_priority":32}]}'
+#
+# ============================================================
+
+- name: MST Region / MST Instance Configuration - SET
+  hosts: alphabridge_devices
+  gather_facts: no
+
+  vars:
+
+    # ========================================================
+    # Output directory
+    # ========================================================
+
+    output_dir: "/opt/librenms/librenms-ansible-inventory-plugin/output"
+
+    # ========================================================
+    # Temporary directory
+    # ========================================================
+
+    tmp_dir: "/opt/librenms/librenms-ansible-inventory-plugin/tmp"
+
+
+  tasks:
+
+    # ========================================================
+    # 1. Validate MST Region / Instance parameters
+    # ========================================================
+
+    - name: Validate MST variables
+      ansible.builtin.assert:
+
+        that:
+
+          # --------------------------------------------------
+          # MST Region Name
+          # --------------------------------------------------
+
+          - mst_name is defined
+          - mst_name | string | length > 0
+
+          # --------------------------------------------------
+          # MST Revision
+          # --------------------------------------------------
+
+          - mst_revision is defined
+          - mst_revision | int >= 0
+          - mst_revision | int <= 65535
+
+          # --------------------------------------------------
+          # MST Instance
+          # --------------------------------------------------
+
+          - mst_instance is defined
+          - mst_instance | int >= 0
+          - mst_instance | int <= 15
+
+          # --------------------------------------------------
+          # MST VLAN
+          # --------------------------------------------------
+
+          - mst_vlan is defined
+          - mst_vlan | string | length > 0
+
+        fail_msg: |
+          Invalid MST configuration.
+
+          Required parameters:
+
+          mst_name
+          mst_revision
+          mst_instance
+          mst_vlan
+
+        success_msg: "All MST Region parameters are valid."
+
+
+    # ========================================================
+    # 2. Validate MST Instance Priority
+    # ========================================================
+
+    - name: Validate MST instance priority
+      ansible.builtin.assert:
+
+        that:
+
+          - mst_priority is defined
+          - mst_priority | int >= 0
+          - mst_priority | int <= 61440
+          - (mst_priority | int) % 4096 == 0
+
+        fail_msg: |
+          Invalid MST instance priority.
+
+          mst_priority must be between 0 and 61440
+          and must be in increments of 4096.
+
+        success_msg: "MST instance priority is valid."
+
+
+    # ========================================================
+    # 3. Validate MST Port Configuration
+    # ========================================================
+
+    - name: Validate MST interface configuration
+      ansible.builtin.assert:
+
+        that:
+
+          # --------------------------------------------------
+          # Must be a dictionary
+          # --------------------------------------------------
+
+          - item is mapping
+
+          # --------------------------------------------------
+          # Interface type
+          # --------------------------------------------------
+
+          - item.interface_type is defined
+
+          - item.interface_type in
+            ['GigaEthernet', 'TGigaEthernet', 'Port-aggregator']
+
+          # --------------------------------------------------
+          # Interface ID
+          # --------------------------------------------------
+
+          - item.interface_id is defined
+
+          - item.interface_id | string | length > 0
+
+          # --------------------------------------------------
+          # Path cost
+          # --------------------------------------------------
+
+          - item.cost is defined
+
+          - item.cost | int >= 1
+
+          - item.cost | int <= 200000000
+
+          # --------------------------------------------------
+          # Port priority
+          # --------------------------------------------------
+
+          - item.port_priority is defined
+
+          - item.port_priority | int >= 0
+
+          - item.port_priority | int <= 240
+
+          - (item.port_priority | int) % 16 == 0
+
+        fail_msg: |
+          Invalid MST interface configuration.
+
+          Supported interface types:
+
+          GigaEthernet
+          TGigaEthernet
+          Port-aggregator
+
+          Port cost:
+          1-200000000
+
+          Port priority:
+          0-240 in increments of 16.
+
+        success_msg: "All MST interface parameters are valid."
+
+      loop: "{{ mst_ports | default([]) }}"
+
+      loop_control:
+
+        label: >-
+          {{ item.interface_type }} {{ item.interface_id }}
+
+
+    # ========================================================
+    # 4. Create output directory
+    # ========================================================
+
+    - name: Create output directory
+      ansible.builtin.file:
+
+        path: "{{ output_dir }}"
+
+        state: directory
+
+        mode: "0755"
+
+      delegate_to: localhost
+
+
+    # ========================================================
+    # 5. Create temporary directory
+    # ========================================================
+
+    - name: Create temporary directory
+      ansible.builtin.file:
+
+        path: "{{ tmp_dir }}"
+
+        state: directory
+
+        mode: "0755"
+
+      delegate_to: localhost
+
+
+    # ========================================================
+    # 6. Create output file
+    # ========================================================
+
+    - name: Create MST instance output file
+      ansible.builtin.file:
+
+        path: "{{ output_dir }}/{{ ansible_host }}_mstinstance.yml"
+
+        state: touch
+
+        mode: "0644"
+
+      delegate_to: localhost
+
+
+    # ========================================================
+    # 7. Check SSH connectivity
+    # ========================================================
+
+    - name: Check SSH before MST Instance SET
+      ansible.builtin.wait_for:
+
+        host: "{{ ansible_host }}"
+
+        port: 22
+
+        timeout: 10
+
+      delegate_to: localhost
+
+
+    # ========================================================
+    # 8. Configure MST Region / Instance
+    # ========================================================
+
+    - name: Configure MST Region and Instance
+      ansible.builtin.shell: |
+        python3 - <<'PY'
+
+        import paramiko
+        import time
+        import re
+        import yaml
+
+
+        # ====================================================
+        # Device parameters
+        # ====================================================
+
+        HOST = "{{ ansible_host }}"
+
+        PORT = 22
+
+        USER = "{{ ansible_user }}"
+
+        PASSWORD = "{{ ansible_password }}"
+
+        CONNECT_TIMEOUT = 15
+
+
+        OUTPUT_FILE = (
+            "{{ output_dir }}/"
+            "{{ ansible_host }}_mstinstance.yml"
+        )
+
+
+        # ====================================================
+        # MST parameters
+        # ====================================================
+
+        MST_NAME = {{ mst_name | to_json }}
+
+        MST_REVISION = {{ mst_revision | int }}
+
+        MST_INSTANCE = {{ mst_instance | int }}
+
+        MST_VLAN = {{ mst_vlan | string | to_json }}
+
+        MST_PRIORITY = {{ mst_priority | int }}
+
+
+        # ====================================================
+        # MST port configuration
+        #
+        # mst_ports is supplied through the complete JSON
+        # object passed to a single -e argument.
+        # ====================================================
+
+        MST_PORTS = {{ mst_ports | to_json }}
+
+
+        # ====================================================
+        # SSH connection
+        # ====================================================
+
+        def connect_device():
+
+            client = paramiko.SSHClient()
+
+            client.set_missing_host_key_policy(
+                paramiko.AutoAddPolicy()
+            )
+
+            client.connect(
+
+                hostname=HOST,
+
+                port=PORT,
+
+                username=USER,
+
+                password=PASSWORD,
+
+                timeout=CONNECT_TIMEOUT,
+
+                banner_timeout=CONNECT_TIMEOUT,
+
+                auth_timeout=CONNECT_TIMEOUT,
+
+                look_for_keys=False,
+
+                allow_agent=False
+            )
+
+            return client
+
+
+        # ====================================================
+        # Clean output
+        # ====================================================
+
+        def clean_output(output):
+
+            output = output.replace(
+                "\r\n",
+                "\n"
+            )
+
+            output = output.replace(
+                "\r",
+                "\n"
+            )
+
+            output = output.replace(
+                "--More--",
+                ""
+            )
+
+            output = re.sub(
+                r'\x1b\[[0-9;?]*[A-Za-z]',
+                '',
+                output
+            )
+
+            return output
+
+
+        # ====================================================
+        # Wait for CLI prompt
+        # ====================================================
+
+        def wait_for_prompt(shell, timeout=8):
+
+            start_time = time.time()
+
+            output = ""
+
+            while time.time() - start_time < timeout:
+
+                if shell.closed:
+
+                    raise RuntimeError(
+                        "SSH channel closed while waiting for CLI prompt"
+                    )
+
+                if shell.recv_ready():
+
+                    data = shell.recv(
+                        65535
+                    ).decode(
+                        "utf-8",
+                        errors="ignore"
+                    )
+
+                    output += data
+
+                    cleaned = clean_output(output)
+
+                    lines = cleaned.splitlines()
+
+                    for line in reversed(lines):
+
+                        line = line.strip()
+
+                        if re.search(
+                            r'(Switch(?:_config(?:_[^#]+)?)?[>#])$',
+                            line
+                        ):
+
+                            return output
+
+                time.sleep(0.2)
+
+            return output
+
+
+        # ====================================================
+        # Send command
+        # ====================================================
+
+        def send_command(shell, command, timeout=8):
+
+            print("COMMAND:", command)
+
+            if shell.closed:
+
+                raise RuntimeError(
+                    "SSH socket is already closed before command: "
+                    + command
+                )
+
+            try:
+
+                shell.send(
+                    command + "\n"
+                )
+
+            except Exception as exc:
+
+                raise RuntimeError(
+                    "Socket closed while sending command: "
+                    + command
+                    + " | "
+                    + str(exc)
+                )
+
+            try:
+
+                output = wait_for_prompt(
+                    shell,
+                    timeout
+                )
+
+            except Exception as exc:
+
+                raise RuntimeError(
+                    "Socket closed while reading command: "
+                    + command
+                    + " | "
+                    + str(exc)
+                )
+
+            print(output)
+
+            return output
+
+
+        # ====================================================
+        # Result structure
+        # ====================================================
+
+        result = {
+
+            "status": "FAILED",
+
+            "device_ip": HOST
+
+        }
+
+
+        client = None
+
+
+        try:
+
+            # =================================================
+            # Connect
+            # =================================================
+
+            client = connect_device()
+
+            shell = client.invoke_shell()
+
+            time.sleep(1)
+
+
+            # =================================================
+            # Clear initial banner
+            # =================================================
+
+            while shell.recv_ready():
+
+                shell.recv(
+                    65535
+                )
+
+
+            # =================================================
+            # Enable mode
+            # =================================================
+
+            send_command(
+                shell,
+                "enable"
+            )
+
+
+            # =================================================
+            # Configuration mode
+            # =================================================
+
+            send_command(
+                shell,
+                "config"
+            )
+
+
+            # =================================================
+            # MST REGION NAME
+            # =================================================
+
+            send_command(
+
+                shell,
+
+                "spanning-tree mstp name "
+                + MST_NAME
+
+            )
+
+
+            # =================================================
+            # MST REVISION
+            # =================================================
+
+            send_command(
+
+                shell,
+
+                "spanning-tree mstp revision "
+                + str(MST_REVISION)
+
+            )
+
+
+            # =================================================
+            # Remove existing MST instance
+            # =================================================
+
+            send_command(
+
+                shell,
+
+                "no spanning-tree mstp instance "
+                + str(MST_INSTANCE)
+
+            )
+
+
+            # =================================================
+            # Configure MST instance VLAN
+            # =================================================
+
+            send_command(
+
+                shell,
+
+                "spanning-tree mstp instance "
+                + str(MST_INSTANCE)
+                + " vlan "
+                + MST_VLAN
+
+            )
+
+
+            # =================================================
+            # MST INSTANCE PRIORITY
+            # =================================================
+
+            send_command(
+
+                shell,
+
+                "spanning-tree mstp "
+                + str(MST_INSTANCE)
+                + " priority "
+                + str(MST_PRIORITY)
+
+            )
+
+
+            # =================================================
+            # MST PORT CONFIGURATION
+            # =================================================
+
+            for port in MST_PORTS:
+
+                INTERFACE_TYPE = str(
+                    port["interface_type"]
+                )
+
+                INTERFACE_ID = str(
+                    port["interface_id"]
+                )
+
+                COST = str(
+                    port["cost"]
+                )
+
+                PORT_PRIORITY = str(
+                    port["port_priority"]
+                )
+
+
+                # ==========================================
+                # Enter interface
+                # ==========================================
+
+                send_command(
+
+                    shell,
+
+                    "interface "
+                    + INTERFACE_TYPE
+                    + " "
+                    + INTERFACE_ID
+
+                )
+
+
+                # ==========================================
+                # MST path cost
+                # ==========================================
+
+                send_command(
+
+                    shell,
+
+                    "spanning-tree mstp "
+                    + str(MST_INSTANCE)
+                    + " cost "
+                    + COST
+
+                )
+
+
+                # ==========================================
+                # MST port priority
+                # ==========================================
+
+                send_command(
+
+                    shell,
+
+                    "spanning-tree mstp "
+                    + str(MST_INSTANCE)
+                    + " port-priority "
+                    + PORT_PRIORITY
+
+                )
+
+
+                # ==========================================
+                # Exit interface
+                # ==========================================
+
+                send_command(
+                    shell,
+                    "exit"
+                )
+
+
+            # =================================================
+            # Save configuration
+            # =================================================
+
+            send_command(
+                shell,
+                "write",
+                timeout=10
+            )
+
+
+            # =================================================
+            # Verify MST Region
+            # =================================================
+
+            verification = send_command(
+
+                shell,
+
+                "show spanning-tree mstp region",
+
+                timeout=10
+
+            )
+
+
+            verification = clean_output(
+                verification
+            )
+
+
+            # =================================================
+            # Verify MST Region Name
+            # =================================================
+
+            name_ok = bool(
+
+                re.search(
+
+                    r'Name:\s*\[\s*'
+                    + re.escape(MST_NAME)
+                    + r'\s*\]',
+
+                    verification,
+
+                    re.IGNORECASE
+
+                )
+
+            )
+
+
+            # =================================================
+            # Verify MST Revision
+            # =================================================
+
+            revision_ok = bool(
+
+                re.search(
+
+                    r'Revision:\s*\[\s*'
+                    + str(MST_REVISION)
+                    + r'\s*\]',
+
+                    verification,
+
+                    re.IGNORECASE
+
+                )
+
+            )
+
+
+            # =================================================
+            # Verify MST Instance / VLAN
+            #
+            # Example:
+            #
+            #       2     12
+            #
+            # =================================================
+
+            instance_ok = bool(
+
+                re.search(
+
+                    r'^\s*'
+                    + str(MST_INSTANCE)
+                    + r'\s+'
+                    + re.escape(MST_VLAN)
+                    + r'\s*$',
+
+                    verification,
+
+                    re.MULTILINE
+
+                )
+
+            )
+
+
+            # =================================================
+            # Final result
+            # =================================================
+
+            if (
+
+                name_ok
+                and revision_ok
+                and instance_ok
+
+            ):
+
+                result["status"] = "SUCCESS"
+
+            else:
+
+                result["status"] = "FAILED"
+
+
+        except Exception as exc:
+
+            result["status"] = "FAILED"
+
+            result["device_ip"] = HOST
+
+            result["error"] = str(exc)
+
+
+        finally:
+
+            # =================================================
+            # Close SSH
+            # =================================================
+
+            if client:
+
+                try:
+                    client.close()
+                except Exception:
+                    pass
+
+
+            # =================================================
+            # Write result
+            # =================================================
+
+            with open(
+                OUTPUT_FILE,
+                "w"
+            ) as output:
+
+                yaml.safe_dump(
+
+                    result,
+
+                    output,
+
+                    sort_keys=False,
+
+                    default_flow_style=False
+
+                )
+
+
+        PY
+
+      args:
+        executable: /bin/bash
+
+      register: mst_configuration
+
+      delegate_to: localhost
+
+      changed_when: true
+
+
+    # ========================================================
+    # 9. Display result
+    # ========================================================
+
+    - name: Display MST Instance configuration result
+      ansible.builtin.debug:
+
+        msg: >-
+          {{
+            lookup(
+              'file',
+              output_dir + '/' + ansible_host + '_mstinstance.yml'
+            )
+          }}
+
+      delegate_to: localhost

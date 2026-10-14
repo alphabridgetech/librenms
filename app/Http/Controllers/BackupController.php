@@ -196,6 +196,14 @@ class BackupController extends Controller
         ]);
 
         try {
+            // a new time should run today even if a backup was already made, see the interval check
+            if (\DB::table('config')->where('config_name', 'db_backup_time')->value('config_value') !== $request->db_backup_time) {
+                \DB::table('config')->updateOrInsert(
+                    ['config_name' => 'db_backup_schedule_changed_at'],
+                    ['config_value' => now()->toDateTimeString()]
+                );
+            }
+
             \DB::table('config')->updateOrInsert(
                 ['config_name' => 'db_backup_time'],
                 ['config_value' => $request->db_backup_time]
@@ -236,6 +244,14 @@ class BackupController extends Controller
         ]);
 
         try {
+            // a new time should run today even if a backup was already made, see the interval check
+            if (\DB::table('config')->where('config_name', 'rrd_backup_time')->value('config_value') !== $request->rrd_backup_time) {
+                \DB::table('config')->updateOrInsert(
+                    ['config_name' => 'rrd_backup_schedule_changed_at'],
+                    ['config_value' => now()->toDateTimeString()]
+                );
+            }
+
             \DB::table('config')->updateOrInsert(
                 ['config_name' => 'rrd_backup_time'],
                 ['config_value' => $request->rrd_backup_time]
@@ -790,6 +806,14 @@ class BackupController extends Controller
         ]);
 
         try {
+            // a new time should run today even if a backup was already made, see the interval check
+            if (\DB::table('config')->where('config_name', 'backup_time')->value('config_value') !== $request->node_backup_time) {
+                \DB::table('config')->updateOrInsert(
+                    ['config_name' => 'node_backup_schedule_changed_at'],
+                    ['config_value' => now()->toDateTimeString()]
+                );
+            }
+
             \DB::table('config')->updateOrInsert(
                 ['config_name' => 'backup_time'],
                 ['config_value' => $request->node_backup_time]
@@ -864,7 +888,7 @@ class BackupController extends Controller
                 $hostsFile = "{$pluginPath}/hosts/{$hostname}.yml";
                 
                 $dateFormatted = date('Ymd_Hi');
-                $destination_file = "{$ipOrHost}_{$dateFormatted}_man_startup-config";
+                $destination_file = "manual_{$ipOrHost}_{$dateFormatted}_startup-config";
 
                 // Diagnostic 1: ICMP Ping reachability test
                 $pingRes = -1;

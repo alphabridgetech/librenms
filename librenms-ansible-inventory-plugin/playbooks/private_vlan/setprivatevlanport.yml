@@ -3,151 +3,11 @@
 # Private VLAN Port Configuration
 # =============================================================================
 #
-# File:
-#   playbooks/private_vlan/setprivatevlanport.yml
-#
 # Purpose:
-#   Configure Private VLAN settings on a switch interface.
+#   Configure Private VLAN settings on a switch interface and save the result.
 #
-# Supported Port Modes:
-#   1. regular
-#   2. host
-#   3. promiscuous
-#
-# =============================================================================
-# CLI COMMAND SEQUENCE
-# =============================================================================
-#
-# From normal EXEC mode:
-#
-#   production> enable
-#   production# config
-#   production_config#
-#
-# Then enter the required interface:
-#
-#   production_config# interface GigaEthernet0/1
-#
-# -----------------------------------------------------------------------------
-# REGULAR MODE
-# -----------------------------------------------------------------------------
-#
-# Regular mode is configured by removing Private VLAN configuration.
-#
-# Commands:
-#
-#   no switchport private-vlan host-association
-#   no switchport private-vlan mapping
-#   no switchport private-vlan tag-pvid
-#   no switchport private-vlan tag-pri
-#   no switchport private-vlan untagged
-#   switchport pvid <VLAN_ID>
-#
-# -----------------------------------------------------------------------------
-# HOST MODE
-# -----------------------------------------------------------------------------
-#
-# Commands:
-#
-#   switchport mode private-vlan host
-#   switchport private-vlan host-association <PRIMARY_VLAN> <SECONDARY_VLAN>
-#   switchport pvid <VLAN_ID>
-#
-# Example:
-#
-#   switchport mode private-vlan host
-#   switchport private-vlan host-association 100 200
-#   switchport pvid 100
-#
-# -----------------------------------------------------------------------------
-# PROMISCUOUS MODE
-# -----------------------------------------------------------------------------
-#
-# Commands:
-#
-#   switchport mode private-vlan promiscuous
-#   switchport private-vlan mapping <PRIMARY_VLAN> <SECONDARY_VLAN>
-#   switchport pvid <VLAN_ID>
-#
-# Example:
-#
-#   switchport mode private-vlan promiscuous
-#   switchport private-vlan mapping 100 200
-#   switchport pvid 100
-#
-# -----------------------------------------------------------------------------
-# OUTGOING SEGMENT TAG
-# -----------------------------------------------------------------------------
-#
-# If outgoing_segment_tag=Yes:
-#
-#   no switchport private-vlan untagged
-#
-# If outgoing_segment_tag=No:
-#
-#   switchport private-vlan untagged
-#
-# -----------------------------------------------------------------------------
-# TAG PVID
-# -----------------------------------------------------------------------------
-#
-# If tag_pvid is provided:
-#
-#   switchport private-vlan tag-pvid <TAG_PVID>
-#
-# Example:
-#
-#   switchport private-vlan tag-pvid 100
-#
-# -----------------------------------------------------------------------------
-# TAG PRIORITY
-# -----------------------------------------------------------------------------
-#
-# If tag_priority is provided:
-#
-#   switchport private-vlan tag-pri <TAG_PRIORITY>
-#
-# Example:
-#
-#   switchport private-vlan tag-pri 5
-#
-# =============================================================================
-# ANSIBLE EXECUTION COMMANDS
-# =============================================================================
-#
-# Regular:
-#
-# ansible-playbook -i inventory/192.168.2.245.yml \
-# playbooks/private_vlan/setprivatevlanport.yml \
-# -e "port=GigaEthernet0/1 port_vlan=100 private_vlan_port_mode=regular outgoing_segment_tag=No"
-#
-# Host:
-#
-# ansible-playbook -i inventory/192.168.2.245.yml \
-# playbooks/private_vlan/setprivatevlanport.yml \
-# -e "port=GigaEthernet0/1 port_vlan=100 private_vlan_port_mode=host primary_vlan=100 secondary_vlan=200 outgoing_segment_tag=No tag_pvid=100 tag_priority=5"
-#
-# Promiscuous:
-#
-# ansible-playbook -i inventory/192.168.2.245.yml \
-# playbooks/private_vlan/setprivatevlanport.yml \
-# -e "port=GigaEthernet0/1 port_vlan=100 private_vlan_port_mode=promiscuous primary_vlan=100 secondary_vlan=200 outgoing_segment_tag=No tag_pvid=100 tag_priority=5"
-#
-# =============================================================================
-# OUTPUT
-# =============================================================================
-#
-# Result file:
-#
-#   /opt/librenms/librenms-ansible-inventory-plugin/output/<device-ip>_privatevlanport.yml
-#
-# The output contains only:
-#
-#   SUCCESS
-#
-# or
-#
-#   FAILED
+# Supported Modes:
+#   regular, host, promiscuous
 #
 # =============================================================================
 
@@ -158,6 +18,7 @@
   vars:
     output_file: "/opt/librenms/librenms-ansible-inventory-plugin/output/{{ ansible_host }}_privatevlanport.yml"
     script_file: "/opt/librenms/librenms-ansible-inventory-plugin/tmp/set_privatevlanport.py"
+    python_interpreter: "/opt/librenms/librenms-ansible-inventory-plugin/bin/python"
 
   tasks:
 
@@ -198,6 +59,29 @@
           - secondary_vlan | int <= 4094
         fail_msg: "primary_vlan and secondary_vlan are required for host/promiscuous mode"
       when: private_vlan_port_mode | lower in ['host', 'promiscuous']
+
+    # -------------------------------------------------------------------------
+    # Verify Python interpreter and Paramiko
+    # -------------------------------------------------------------------------
+
+    - name: Check Python interpreter and Paramiko
+      ansible.builtin.command:
+        argv:
+          - "{{ python_interpreter }}"
+          - -c
+          - "import paramiko; print(paramiko.__version__)"
+      register: paramiko_check
+      changed_when: false
+      failed_when: false
+
+    - name: Fail when Python or Paramiko is unavailable
+      ansible.builtin.fail:
+        msg: >-
+          Python interpreter or Paramiko is unavailable.
+          Interpreter: {{ python_interpreter }}.
+          Error: {{ paramiko_check.stderr | default('') }}.
+          Verify the virtual environment and install Paramiko in it.
+      when: paramiko_check.rc != 0
 
     # -------------------------------------------------------------------------
     # Create Paramiko configuration script
@@ -242,10 +126,16 @@
 
               return output
 
+          last_command = ""
+          last_output = ""
+
           def send_command(shell, command, timeout=5):
+              global last_command, last_output
+              last_command = command
               shell.send(command + "\n")
               time.sleep(0.5)
-              return read_output(shell, timeout)
+              last_output = read_output(shell, timeout)
+              return last_output
 
           def command_failed(output):
               text = output.lower()
@@ -261,23 +151,23 @@
 
               return any(error in text for error in error_strings)
 
+          def get_prompt(output):
+              clean = re.sub(r'\x1b\[[0-?]*[ -/]*[@-~]', '', output)
+              match = re.search(r'(?:^|[\r\n])([^\s#>]+[>#])\s*$', clean)
+              return match.group(1) if match else ""
+
           def is_config_prompt(output):
-              return bool(re.search(
-                  r'production_config(?:_[A-Za-z0-9/.-]+)?#\s*$',
-                  output.strip()
+              prompt = get_prompt(output)
+              return prompt.endswith("#") and bool(re.search(
+                  r'(?:_config(?:_[A-Za-z0-9/.-]+)?|\(config[^)]*\))#$',
+                  prompt
               ))
 
           def is_privileged_prompt(output):
-              return bool(re.search(
-                  r'production#\s*$',
-                  output.strip()
-              ))
+              return get_prompt(output).endswith("#") and not is_config_prompt(output)
 
           def is_exec_prompt(output):
-              return bool(re.search(
-                  r'production>\s*$',
-                  output.strip()
-              ))
+              return get_prompt(output).endswith(">")
 
           client = paramiko.SSHClient()
           client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
@@ -305,45 +195,37 @@
               # ENTER CORRECT CONFIGURATION MODE
               # ================================================================
 
-              current_output = initial_output.strip()
+              last_output = initial_output
+              current_output = initial_output
 
-              if is_config_prompt(current_output):
-                  pass
+              if is_exec_prompt(current_output):
+                  current_output = send_command(shell, "enable")
+                  if re.search(r'password\s*:\s*$', current_output, re.IGNORECASE):
+                      shell.send(PASSWORD + "\n")
+                      time.sleep(0.5)
+                      current_output = read_output(shell)
+                      last_output = current_output
 
-              elif is_privileged_prompt(current_output):
-                  output = send_command(shell, "config")
-
-                  if command_failed(output):
-                      success = False
-                      failure_reason = "Failed to enter configuration mode."
-
-              elif is_exec_prompt(current_output):
-                  output = send_command(shell, "enable")
-
-                  if command_failed(output):
+                  if command_failed(current_output) or not is_privileged_prompt(current_output):
                       success = False
                       failure_reason = "Failed to enter enable mode."
 
-                  if success:
-                      output = send_command(shell, "config")
+              if success and is_privileged_prompt(current_output):
+                  current_output = send_command(shell, "config")
+                  if command_failed(current_output) or not is_config_prompt(current_output):
+                      success = False
+                      failure_reason = "Failed to enter configuration mode."
 
-                      if command_failed(output):
-                          success = False
-                          failure_reason = "Failed to enter configuration mode."
-
-              else:
+              if success and not is_config_prompt(current_output):
                   success = False
-                  failure_reason = "Unable to determine switch CLI mode."
+                  failure_reason = "Unable to determine switch CLI configuration mode."
 
               # ================================================================
               # ENTER INTERFACE CONFIGURATION
               # ================================================================
 
               if success:
-                  output = send_command(
-                      shell,
-                      "interface " + PORT
-                  )
+                  output = send_command(shell, "interface " + PORT)
 
                   if command_failed(output):
                       success = False
@@ -355,45 +237,24 @@
 
               if success and MODE == "regular":
 
-                  # Remove Private VLAN host association.
-                  send_command(
-                      shell,
-                      "no switchport private-vlan host-association"
-                  )
-
-                  # Remove Private VLAN mapping.
-                  send_command(
-                      shell,
-                      "no switchport private-vlan mapping"
-                  )
-
-                  # Remove Private VLAN tag-PVID.
-                  send_command(
-                      shell,
-                      "no switchport private-vlan tag-pvid"
-                  )
-
-                  # Remove Private VLAN tag priority.
-                  send_command(
-                      shell,
-                      "no switchport private-vlan tag-pri"
-                  )
-
-                  # Remove Private VLAN untagged configuration.
-                  send_command(
-                      shell,
+                  for command in [
+                      "no switchport private-vlan host-association",
+                      "no switchport private-vlan mapping",
+                      "no switchport private-vlan tag-pvid",
+                      "no switchport private-vlan tag-pri",
                       "no switchport private-vlan untagged"
-                  )
+                  ]:
+                      output = send_command(shell, command)
+                      if command_failed(output):
+                          success = False
+                          failure_reason = "Failed command: " + command
+                          break
 
-                  # Configure normal VLAN/PVID.
-                  output = send_command(
-                      shell,
-                      "switchport pvid " + VLAN
-                  )
-
-                  if command_failed(output):
-                      success = False
-                      failure_reason = "Failed to configure regular VLAN/PVID."
+                  if success:
+                      output = send_command(shell, "switchport pvid " + VLAN)
+                      if command_failed(output):
+                          success = False
+                          failure_reason = "Failed to configure regular VLAN/PVID."
 
               # ================================================================
               # HOST MODE
@@ -401,39 +262,28 @@
 
               if success and MODE == "host":
 
-                  # Remove previous promiscuous mapping.
-                  send_command(
-                      shell,
-                      "no switchport private-vlan mapping"
-                  )
-
-                  # Configure Private VLAN host mode.
-                  output = send_command(
-                      shell,
-                      "switchport mode private-vlan host"
-                  )
-
+                  output = send_command(shell, "no switchport private-vlan mapping")
                   if command_failed(output):
                       success = False
-                      failure_reason = "Failed to configure Private VLAN host mode."
+                      failure_reason = "Failed to remove previous promiscuous mapping."
+
+                  if success:
+                      output = send_command(shell, "switchport mode private-vlan host")
+                      if command_failed(output):
+                          success = False
+                          failure_reason = "Failed to configure Private VLAN host mode."
 
                   if success:
                       output = send_command(
                           shell,
-                          "switchport private-vlan host-association "
-                          + PRIMARY + " " + SECONDARY
+                          "switchport private-vlan host-association " + PRIMARY + " " + SECONDARY
                       )
-
                       if command_failed(output):
                           success = False
                           failure_reason = "Failed to configure host association."
 
                   if success:
-                      output = send_command(
-                          shell,
-                          "switchport pvid " + VLAN
-                      )
-
+                      output = send_command(shell, "switchport pvid " + VLAN)
                       if command_failed(output):
                           success = False
                           failure_reason = "Failed to configure PVID."
@@ -444,39 +294,28 @@
 
               if success and MODE == "promiscuous":
 
-                  # Remove previous host association.
-                  send_command(
-                      shell,
-                      "no switchport private-vlan host-association"
-                  )
-
-                  # Configure Private VLAN promiscuous mode.
-                  output = send_command(
-                      shell,
-                      "switchport mode private-vlan promiscuous"
-                  )
-
+                  output = send_command(shell, "no switchport private-vlan host-association")
                   if command_failed(output):
                       success = False
-                      failure_reason = "Failed to configure Private VLAN promiscuous mode."
+                      failure_reason = "Failed to remove previous host association."
+
+                  if success:
+                      output = send_command(shell, "switchport mode private-vlan promiscuous")
+                      if command_failed(output):
+                          success = False
+                          failure_reason = "Failed to configure Private VLAN promiscuous mode."
 
                   if success:
                       output = send_command(
                           shell,
-                          "switchport private-vlan mapping "
-                          + PRIMARY + " " + SECONDARY
+                          "switchport private-vlan mapping " + PRIMARY + " " + SECONDARY
                       )
-
                       if command_failed(output):
                           success = False
                           failure_reason = "Failed to configure Private VLAN mapping."
 
                   if success:
-                      output = send_command(
-                          shell,
-                          "switchport pvid " + VLAN
-                      )
-
+                      output = send_command(shell, "switchport pvid " + VLAN)
                       if command_failed(output):
                           success = False
                           failure_reason = "Failed to configure PVID."
@@ -486,29 +325,22 @@
               # ================================================================
 
               if success:
-
                   if OUTGOING_TAG.lower() == "yes":
-                      send_command(
-                          shell,
-                          "no switchport private-vlan untagged"
-                      )
-
+                      command = "no switchport private-vlan untagged"
                   else:
-                      send_command(
-                          shell,
-                          "switchport private-vlan untagged"
-                      )
+                      command = "switchport private-vlan untagged"
+
+                  output = send_command(shell, command)
+                  if command_failed(output):
+                      success = False
+                      failure_reason = "Failed to configure outgoing segment tag."
 
               # ================================================================
               # TAG PVID
               # ================================================================
 
               if success and TAG_PVID != "":
-                  output = send_command(
-                      shell,
-                      "switchport private-vlan tag-pvid " + TAG_PVID
-                  )
-
+                  output = send_command(shell, "switchport private-vlan tag-pvid " + TAG_PVID)
                   if command_failed(output):
                       success = False
                       failure_reason = "Failed to configure tag PVID."
@@ -518,11 +350,7 @@
               # ================================================================
 
               if success and TAG_PRIORITY != "":
-                  output = send_command(
-                      shell,
-                      "switchport private-vlan tag-pri " + TAG_PRIORITY
-                  )
-
+                  output = send_command(shell, "switchport private-vlan tag-pri " + TAG_PRIORITY)
                   if command_failed(output):
                       success = False
                       failure_reason = "Failed to configure tag priority."
@@ -531,6 +359,9 @@
               # EXIT CONFIGURATION
               # ================================================================
 
+              failed_command = last_command
+              failed_output = last_output
+
               if shell:
                   send_command(shell, "exit")
                   send_command(shell, "exit")
@@ -538,15 +369,16 @@
               if success:
                   print("SUCCESS")
                   sys.exit(0)
-
               else:
                   print("FAILED")
                   print(failure_reason)
+                  print("Command: " + (failed_command or "SSH login"))
+                  print("Switch response:\n" + failed_output)
                   sys.exit(1)
 
           except Exception as exc:
               print("FAILED")
-              print(str(exc))
+              print("Error: " + str(exc))
               sys.exit(1)
 
           finally:
@@ -559,9 +391,11 @@
 
     - name: Execute Private VLAN Port configuration
       ansible.builtin.command:
-        cmd: "/usr/bin/python3 {{ script_file }}"
+        argv:
+          - "{{ python_interpreter }}"
+          - "{{ script_file }}"
       register: pvlan_result
-      changed_when: true
+      changed_when: false
       failed_when: false
 
     # -------------------------------------------------------------------------
@@ -570,7 +404,7 @@
 
     - name: Save Private VLAN Port result
       ansible.builtin.copy:
-        content: "{{ 'SUCCESS' if pvlan_result.rc == 0 else 'FAILED' }}\n"
+        content: "{{ 'SUCCESS' if pvlan_result.rc == 0 and 'SUCCESS' in (pvlan_result.stdout | default('')) else 'FAILED' }}\n"
         dest: "{{ output_file }}"
         mode: '0644'
 
@@ -584,8 +418,10 @@
           - "Private VLAN Port Mode: {{ private_vlan_port_mode }}"
           - "Port: {{ port }}"
           - "VLAN: {{ port_vlan }}"
-          - "Result: {{ 'SUCCESS' if pvlan_result.rc == 0 else 'FAILED' }}"
-          - "{{ pvlan_result.stdout | default('') }}"
+          - "Result: {{ 'SUCCESS' if pvlan_result.rc == 0 and 'SUCCESS' in (pvlan_result.stdout | default('')) else 'FAILED' }}"
+          - "Return code: {{ pvlan_result.rc }}"
+          - "STDOUT: {{ pvlan_result.stdout | default('') }}"
+          - "STDERR: {{ pvlan_result.stderr | default('') }}"
 
     # -------------------------------------------------------------------------
     # Fail the Ansible play if configuration failed
@@ -593,5 +429,8 @@
 
     - name: Mark playbook as failed when configuration fails
       ansible.builtin.fail:
-        msg: "Private VLAN Port configuration failed. Check the command output above."
-      when: pvlan_result.rc != 0
+        msg: >-
+          Private VLAN Port configuration failed (exit code {{ pvlan_result.rc }}).
+          STDOUT: {{ pvlan_result.stdout | default('', true) | trim }}
+          STDERR: {{ pvlan_result.stderr | default('', true) | trim }}
+      when: pvlan_result.rc != 0 or 'SUCCESS' not in (pvlan_result.stdout | default(''))

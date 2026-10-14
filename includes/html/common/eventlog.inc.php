@@ -45,11 +45,5 @@ var eventlog_grid = $("#eventlog").bootgrid({
     url: "' . url('/ajax/table/eventlog') . '"
 });
 
-setInterval(function () {
-    if ($("#eventlog").length && $("#eventlog").bootgrid("getCurrentPage") === 1) {
-        $("#eventlog").bootgrid("reload");
-    }
-}, 10000);
-
 </script>
 ';

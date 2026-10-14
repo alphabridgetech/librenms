@@ -213,15 +213,20 @@ Artisan::command('backup:startup-configs {--force : Skip the interval throttle a
     /** @var Illuminate\Console\Command $this */
     $intervalDays = 1;
     $lastRun = null;
+    $scheduleChangedAt = null;
     try {
         $intervalDays = (int)(\DB::table('config')->where('config_name', 'node_backup_interval_days')->value('config_value') ?: 1);
         $lastRun = \DB::table('config')->where('config_name', 'node_backup_last_run')->value('config_value');
+        $scheduleChangedAt = \DB::table('config')->where('config_name', 'node_backup_schedule_changed_at')->value('config_value');
     } catch (\Exception $e) {}
 
     if ($lastRun && !$this->option('force')) {
+        // count calendar days like the other backups, a daily run at the same time is a few seconds short of 24h
         $lastRunDate = \Carbon\Carbon::parse($lastRun);
-        $daysSinceLast = \Carbon\Carbon::now()->diffInDays($lastRunDate, true);
-        if ($daysSinceLast < $intervalDays) {
+        $daysSinceLast = (int) $lastRunDate->copy()->startOfDay()->diffInDays(now()->startOfDay());
+        // a newly saved schedule time runs at that time even if a backup was already made today
+        $rescheduled = ! empty($scheduleChangedAt) && \Carbon\Carbon::parse($scheduleChangedAt)->gt($lastRunDate);
+        if ($daysSinceLast < $intervalDays && ! $rescheduled) {
             $msg = "Skipping node startup-config backup: Interval is set to {$intervalDays} day(s), but last run was {$daysSinceLast} day(s) ago on {$lastRun}.";
             $this->info($msg);
             try {
@@ -259,9 +264,11 @@ Artisan::command('backup:startup-configs {--force : Skip the interval throttle a
         $ipOrHost = !empty($device->overwrite_ip) ? $device->overwrite_ip : $device->hostname;
         $hostsFile = "{$pluginPath}/hosts/{$hostname}.yml";
 
-        // Construct standard automated filename format: e.g. 10.133.27.164_20260819_1230_auto_startup-config
+        // file name starts with auto_ for scheduled runs, manual_ when started from the backup page (--force)
+        // e.g. auto_10.133.27.164_20260819_1230_startup-config
         $dateFormatted = date('Ymd_Hi');
-        $destination_file = "{$ipOrHost}_{$dateFormatted}_auto_startup-config";
+        $runType = $this->option('force') ? 'manual' : 'auto';
+        $destination_file = "{$runType}_{$ipOrHost}_{$dateFormatted}_startup-config";
 
         // Diagnostic 1: ICMP Ping reachability test
         $pingRes = -1;
@@ -494,12 +501,14 @@ Artisan::command('backup:database', function () {
     $retentionDays = 30;
     $intervalDays = 1;
     $lastRun = null;
+    $scheduleChangedAt = null;
 
     try {
         $destination = \DB::table('config')->where('config_name', 'db_backup_destination')->value('config_value') ?: 'local';
         $retentionDays = (int)(\DB::table('config')->where('config_name', 'db_backup_retention_days')->value('config_value') ?: 30);
         $intervalDays = max(1, (int)(\DB::table('config')->where('config_name', 'db_backup_interval_days')->value('config_value') ?: 1));
         $lastRun = \DB::table('config')->where('config_name', 'db_backup_last_run')->value('config_value');
+        $scheduleChangedAt = \DB::table('config')->where('config_name', 'db_backup_schedule_changed_at')->value('config_value');
     } catch (\Exception $e) {
         $this->error("Failed to read DB backup config: " . $e->getMessage());
     }
@@ -511,7 +520,9 @@ Artisan::command('backup:database', function () {
             $today = now()->startOfDay();
             $daysSince = (int)$lastRunDay->diffInDays($today);
 
-            if ($daysSince < $intervalDays) {
+            // a newly saved schedule time runs at that time even if a backup was already made today
+            $rescheduled = ! empty($scheduleChangedAt) && \Carbon\Carbon::parse($scheduleChangedAt)->gt(\Carbon\Carbon::parse($lastRun));
+            if ($daysSince < $intervalDays && ! $rescheduled) {
                 $daysLeft = $intervalDays - $daysSince;
                 $skipReason = "Database backup skipped: Configured interval is every {$intervalDays} day(s). Last backup ran on " . \Carbon\Carbon::parse($lastRun)->format('Y-m-d H:i:s') . " ({$daysSince} day(s) ago). Next backup due in {$daysLeft} day(s).";
                 $this->info($skipReason);
@@ -590,7 +601,8 @@ Artisan::command('backup:database', function () {
     }
 
     $exitCode = Artisan::call('db:backup-manual', [
-        '--destination' => $destination
+        '--destination' => $destination,
+        '--type' => 'auto',
     ]);
 
     $output = Artisan::output();
@@ -642,7 +654,7 @@ Artisan::command('backup:database', function () {
                 continue;
             }
             $filePath = "{$basePath}/{$file}";
-            if (is_file($filePath) && str_starts_with($file, 'backup_') && str_ends_with($file, '.sql')) {
+            if (is_file($filePath) && preg_match('/^(auto_|manual_)?backup_.*\.sql$/', $file)) {
                 if (filemtime($filePath) < $thresholdTime) {
                     unlink($filePath);
                     $this->info("Deleted old database backup file: {$file}");
@@ -663,12 +675,14 @@ Artisan::command('backup:rrd', function () {
     $retentionDays = 30;
     $intervalDays = 1;
     $lastRun = null;
+    $scheduleChangedAt = null;
 
     try {
         $destination = \DB::table('config')->where('config_name', 'rrd_backup_destination')->value('config_value') ?: 'local';
         $retentionDays = (int)(\DB::table('config')->where('config_name', 'rrd_backup_purge_days')->value('config_value') ?: 30);
         $intervalDays = max(1, (int)(\DB::table('config')->where('config_name', 'rrd_backup_interval_days')->value('config_value') ?: 1));
         $lastRun = \DB::table('config')->where('config_name', 'rrd_backup_last_run')->value('config_value');
+        $scheduleChangedAt = \DB::table('config')->where('config_name', 'rrd_backup_schedule_changed_at')->value('config_value');
     } catch (\Exception $e) {
         $this->error("Failed to read RRD backup config: " . $e->getMessage());
     }
@@ -680,7 +694,9 @@ Artisan::command('backup:rrd', function () {
             $today = now()->startOfDay();
             $daysSince = (int)$lastRunDay->diffInDays($today);
 
-            if ($daysSince < $intervalDays) {
+            // a newly saved schedule time runs at that time even if a backup was already made today
+            $rescheduled = ! empty($scheduleChangedAt) && \Carbon\Carbon::parse($scheduleChangedAt)->gt(\Carbon\Carbon::parse($lastRun));
+            if ($daysSince < $intervalDays && ! $rescheduled) {
                 $daysLeft = $intervalDays - $daysSince;
                 $skipReason = "RRD backup skipped: Configured interval is every {$intervalDays} day(s). Last backup ran on " . \Carbon\Carbon::parse($lastRun)->format('Y-m-d H:i:s') . " ({$daysSince} day(s) ago). Next backup due in {$daysLeft} day(s).";
                 $this->info($skipReason);
@@ -782,6 +798,7 @@ Artisan::command('backup:rrd', function () {
     $exitCode = Artisan::call('rrd:backup-manual', [
         '--destination' => $destination,
         '--retention' => $retentionDays,
+        '--type' => 'auto',
     ]);
 
     $output = Artisan::output();

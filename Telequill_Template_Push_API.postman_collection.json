@@ -1,0 +1,648 @@
+{
+    "info": {
+        "_postman_id": "9d029b6a-715a-403f-a0c8-04679242c354",
+        "name": "Telequill Template Push API",
+        "description": "Template Push API (/addhost/template). Set the collection variables `baseUrl`, `token` (an admin user's API token from Settings > API Access) and `device`. Always run a request with \"dry_run\": true first; the requests without dry_run push real configuration to the switch. Full reference: Telequill_Template_Push_API_Reference.md",
+        "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+    },
+    "auth": {
+        "type": "apikey",
+        "apikey": [
+            {
+                "key": "key",
+                "value": "X-Auth-Token",
+                "type": "string"
+            },
+            {
+                "key": "value",
+                "value": "{{token}}",
+                "type": "string"
+            },
+            {
+                "key": "in",
+                "value": "header",
+                "type": "string"
+            }
+        ]
+    },
+    "variable": [
+        {
+            "key": "baseUrl",
+            "value": "http://localhost:8000/api/v0"
+        },
+        {
+            "key": "token",
+            "value": ""
+        },
+        {
+            "key": "device",
+            "value": "192.168.200.240"
+        },
+        {
+            "key": "template",
+            "value": "L2TP on uplink for AS212XTS"
+        }
+    ],
+    "item": [
+        {
+            "name": "1. List",
+            "item": [
+                {
+                    "name": "List all templates",
+                    "request": {
+                        "method": "GET",
+                        "header": [],
+                        "url": {
+                            "raw": "{{baseUrl}}/templates",
+                            "host": [
+                                "{{baseUrl}}"
+                            ],
+                            "path": [
+                                "templates"
+                            ]
+                        },
+                        "description": "All templates with their type and hardware models."
+                    },
+                    "response": []
+                },
+                {
+                    "name": "List templates for a device",
+                    "request": {
+                        "method": "GET",
+                        "header": [],
+                        "url": {
+                            "raw": "{{baseUrl}}/templates?device={{device}}",
+                            "host": [
+                                "{{baseUrl}}"
+                            ],
+                            "path": [
+                                "templates"
+                            ],
+                            "query": [
+                                {
+                                    "key": "device",
+                                    "value": "{{device}}"
+                                }
+                            ]
+                        },
+                        "description": "Only templates that match the device's hardware model."
+                    },
+                    "response": []
+                }
+            ]
+        },
+        {
+            "name": "2. Show",
+            "item": [
+                {
+                    "name": "Show template",
+                    "request": {
+                        "method": "GET",
+                        "header": [],
+                        "url": {
+                            "raw": "{{baseUrl}}/templates/{{template}}",
+                            "host": [
+                                "{{baseUrl}}"
+                            ],
+                            "path": [
+                                "templates",
+                                "{{template}}"
+                            ]
+                        },
+                        "description": "Fields (with labels, types, dropdown options) to send in `values` when pushing."
+                    },
+                    "response": []
+                },
+                {
+                    "name": "Show template in folder",
+                    "request": {
+                        "method": "GET",
+                        "header": [],
+                        "url": {
+                            "raw": "{{baseUrl}}/templates/{{template}}",
+                            "host": [
+                                "{{baseUrl}}"
+                            ],
+                            "path": [
+                                "templates",
+                                "{{template}}"
+                            ],
+                            "query": [
+                                {
+                                    "key": "folder",
+                                    "value": "general",
+                                    "disabled": true
+                                }
+                            ]
+                        },
+                        "description": "Enable the folder param only when two folders have a template with the same name (all current templates are in the top folder)."
+                    },
+                    "response": []
+                }
+            ]
+        },
+        {
+            "name": "3. Push - dry run (safe)",
+            "item": [
+                {
+                    "name": "Form template - dry run",
+                    "request": {
+                        "method": "POST",
+                        "header": [
+                            {
+                                "key": "Content-Type",
+                                "value": "application/json"
+                            }
+                        ],
+                        "url": {
+                            "raw": "{{baseUrl}}/templates/push",
+                            "host": [
+                                "{{baseUrl}}"
+                            ],
+                            "path": [
+                                "templates",
+                                "push"
+                            ]
+                        },
+                        "description": "Returns the generated commands. Nothing is sent to the device.",
+                        "body": {
+                            "mode": "raw",
+                            "raw": "{\n    \"device\": \"{{device}}\",\n    \"template\": \"{{template}}\",\n    \"interfaces\": [\n        \"GigaEthernet0/3\"\n    ],\n    \"values\": {\n        \"Description\": \"to-cust\",\n        \"L2TP - LLDP\": true,\n        \"Flow Control\": \"off\",\n        \"Speed\": \"100\",\n        \"Allowed Vlans\": \"10,20\"\n    },\n    \"dry_run\": true\n}",
+                            "options": {
+                                "raw": {
+                                    "language": "json"
+                                }
+                            }
+                        }
+                    },
+                    "response": []
+                },
+                {
+                    "name": "Description on 2 interfaces - dry run",
+                    "request": {
+                        "method": "POST",
+                        "header": [
+                            {
+                                "key": "Content-Type",
+                                "value": "application/json"
+                            }
+                        ],
+                        "url": {
+                            "raw": "{{baseUrl}}/templates/push",
+                            "host": [
+                                "{{baseUrl}}"
+                            ],
+                            "path": [
+                                "templates",
+                                "push"
+                            ]
+                        },
+                        "description": "",
+                        "body": {
+                            "mode": "raw",
+                            "raw": "{\n    \"device\": \"{{device}}\",\n    \"template\": \"description\",\n    \"interfaces\": [\n        \"GigaEthernet0/1\",\n        \"GigaEthernet0/2\"\n    ],\n    \"values\": {\n        \"description\": \"uplink-to-core\"\n    },\n    \"dry_run\": true\n}",
+                            "options": {
+                                "raw": {
+                                    "language": "json"
+                                }
+                            }
+                        }
+                    },
+                    "response": []
+                },
+                {
+                    "name": "Dynamic list (QinQ) - dry run",
+                    "request": {
+                        "method": "POST",
+                        "header": [
+                            {
+                                "key": "Content-Type",
+                                "value": "application/json"
+                            }
+                        ],
+                        "url": {
+                            "raw": "{{baseUrl}}/templates/push",
+                            "host": [
+                                "{{baseUrl}}"
+                            ],
+                            "path": [
+                                "templates",
+                                "push"
+                            ]
+                        },
+                        "description": "Rows for a dynamic_list field (QinQ). The template is for AS210T, so use an AS210T device (e.g. 192.168.200.241) or a device with no hardware model.",
+                        "body": {
+                            "mode": "raw",
+                            "raw": "{\n    \"device\": \"{{device}}\",\n    \"template\": \"Tag traffic to single S-vlan in AS210T\",\n    \"interfaces\": [\n        \"GigaEthernet0/1\"\n    ],\n    \"values\": {\n        \"Description\": \"cust-a\",\n        \"Allowed Vlan\": \"100-200\",\n        \"QinQ\": [\n            {\n                \"from\": \"100\",\n                \"to\": \"200\"\n            },\n            {\n                \"from\": \"101\",\n                \"to\": \"201\"\n            }\n        ]\n    },\n    \"dry_run\": true\n}",
+                            "options": {
+                                "raw": {
+                                    "language": "json"
+                                }
+                            }
+                        }
+                    },
+                    "response": []
+                },
+                {
+                    "name": "Access port mode - dry run",
+                    "request": {
+                        "method": "POST",
+                        "header": [
+                            {
+                                "key": "Content-Type",
+                                "value": "application/json"
+                            }
+                        ],
+                        "url": {
+                            "raw": "{{baseUrl}}/templates/push",
+                            "host": [
+                                "{{baseUrl}}"
+                            ],
+                            "path": [
+                                "templates",
+                                "push"
+                            ]
+                        },
+                        "description": "For access/trunk/custom templates. None exist yet: create one in the Template Builder on /addhost/template and put its name here. interfaces are required for access and trunk.",
+                        "body": {
+                            "mode": "raw",
+                            "raw": "{\n    \"device\": \"{{device}}\",\n    \"template\": \"<your access/trunk/custom template>\",\n    \"port_mode\": \"access\",\n    \"pvid\": 100,\n    \"interfaces\": [\n        \"GigaEthernet0/1\",\n        \"GigaEthernet0/2\"\n    ],\n    \"dry_run\": true\n}",
+                            "options": {
+                                "raw": {
+                                    "language": "json"
+                                }
+                            }
+                        }
+                    },
+                    "response": []
+                },
+                {
+                    "name": "Plain commands - dry run",
+                    "request": {
+                        "method": "POST",
+                        "header": [
+                            {
+                                "key": "Content-Type",
+                                "value": "application/json"
+                            }
+                        ],
+                        "url": {
+                            "raw": "{{baseUrl}}/templates/push",
+                            "host": [
+                                "{{baseUrl}}"
+                            ],
+                            "path": [
+                                "templates",
+                                "push"
+                            ]
+                        },
+                        "description": "",
+                        "body": {
+                            "mode": "raw",
+                            "raw": "{\n    \"device\": \"{{device}}\",\n    \"commands\": [\n        \"interface GigaEthernet0/5\",\n        \"shutdown\"\n    ],\n    \"dry_run\": true\n}",
+                            "options": {
+                                "raw": {
+                                    "language": "json"
+                                }
+                            }
+                        }
+                    },
+                    "response": []
+                },
+                {
+                    "name": "Several devices - dry run",
+                    "request": {
+                        "method": "POST",
+                        "header": [
+                            {
+                                "key": "Content-Type",
+                                "value": "application/json"
+                            }
+                        ],
+                        "url": {
+                            "raw": "{{baseUrl}}/templates/push",
+                            "host": [
+                                "{{baseUrl}}"
+                            ],
+                            "path": [
+                                "templates",
+                                "push"
+                            ]
+                        },
+                        "description": "",
+                        "body": {
+                            "mode": "raw",
+                            "raw": "{\n    \"devices\": [\n        \"192.168.200.240\",\n        \"192.168.200.241\"\n    ],\n    \"template\": \"description\",\n    \"interfaces\": [\n        \"GigaEthernet0/1\"\n    ],\n    \"values\": {\n        \"description\": \"uplink\"\n    },\n    \"dry_run\": true\n}",
+                            "options": {
+                                "raw": {
+                                    "language": "json"
+                                }
+                            }
+                        }
+                    },
+                    "response": []
+                }
+            ]
+        },
+        {
+            "name": "4. Push - REAL (changes the switch)",
+            "description": "These requests push configuration to the device over SSH. Check the same request with dry_run first.",
+            "item": [
+                {
+                    "name": "Form template - PUSH",
+                    "request": {
+                        "method": "POST",
+                        "header": [
+                            {
+                                "key": "Content-Type",
+                                "value": "application/json"
+                            }
+                        ],
+                        "url": {
+                            "raw": "{{baseUrl}}/templates/push",
+                            "host": [
+                                "{{baseUrl}}"
+                            ],
+                            "path": [
+                                "templates",
+                                "push"
+                            ]
+                        },
+                        "description": "Pushes to the device. Response has per-device status and Ansible output.",
+                        "body": {
+                            "mode": "raw",
+                            "raw": "{\n    \"device\": \"{{device}}\",\n    \"template\": \"{{template}}\",\n    \"interfaces\": [\n        \"GigaEthernet0/3\"\n    ],\n    \"values\": {\n        \"Description\": \"to-cust\",\n        \"L2TP - LLDP\": true,\n        \"Flow Control\": \"off\",\n        \"Speed\": \"100\",\n        \"Allowed Vlans\": \"10,20\"\n    }\n}",
+                            "options": {
+                                "raw": {
+                                    "language": "json"
+                                }
+                            }
+                        }
+                    },
+                    "response": []
+                },
+                {
+                    "name": "Plain commands - PUSH",
+                    "request": {
+                        "method": "POST",
+                        "header": [
+                            {
+                                "key": "Content-Type",
+                                "value": "application/json"
+                            }
+                        ],
+                        "url": {
+                            "raw": "{{baseUrl}}/templates/push",
+                            "host": [
+                                "{{baseUrl}}"
+                            ],
+                            "path": [
+                                "templates",
+                                "push"
+                            ]
+                        },
+                        "description": "",
+                        "body": {
+                            "mode": "raw",
+                            "raw": "{\n    \"device\": \"{{device}}\",\n    \"commands\": [\n        \"interface GigaEthernet0/5\",\n        \"description set-by-api\"\n    ]\n}",
+                            "options": {
+                                "raw": {
+                                    "language": "json"
+                                }
+                            }
+                        }
+                    },
+                    "response": []
+                }
+            ]
+        },
+        {
+            "name": "5. Reboot switch",
+            "description": "Template \"Reboot the switch\": one dropdown \"Reboot\" (Yes / No). Yes sends the command `reboot n`. No sends nothing.",
+            "item": [
+                {
+                    "name": "Reboot - dry run",
+                    "request": {
+                        "method": "POST",
+                        "header": [
+                            {
+                                "key": "Content-Type",
+                                "value": "application/json"
+                            }
+                        ],
+                        "url": {
+                            "raw": "{{baseUrl}}/templates/push",
+                            "host": [
+                                "{{baseUrl}}"
+                            ],
+                            "path": [
+                                "templates",
+                                "push"
+                            ]
+                        },
+                        "body": {
+                            "mode": "raw",
+                            "raw": "{\n    \"device\": \"{{device}}\",\n    \"template\": \"Reboot the switch\",\n    \"values\": {\n        \"Reboot\": \"Yes\"\n    },\n    \"dry_run\": true\n}",
+                            "options": {
+                                "raw": {
+                                    "language": "json"
+                                }
+                            }
+                        },
+                        "description": "Shows the command that would be sent (`reboot n`). Nothing is sent to the device."
+                    },
+                    "response": []
+                },
+                {
+                    "name": "Reboot - REAL (reboots the switch)",
+                    "request": {
+                        "method": "POST",
+                        "header": [
+                            {
+                                "key": "Content-Type",
+                                "value": "application/json"
+                            }
+                        ],
+                        "url": {
+                            "raw": "{{baseUrl}}/templates/push",
+                            "host": [
+                                "{{baseUrl}}"
+                            ],
+                            "path": [
+                                "templates",
+                                "push"
+                            ]
+                        },
+                        "body": {
+                            "mode": "raw",
+                            "raw": "{\n    \"device\": \"{{device}}\",\n    \"template\": \"Reboot the switch\",\n    \"values\": {\n        \"Reboot\": \"Yes\"\n    }\n}",
+                            "options": {
+                                "raw": {
+                                    "language": "json"
+                                }
+                            }
+                        },
+                        "description": "REBOOTS THE SWITCH. The device goes offline until it has restarted. Check `device` before sending."
+                    },
+                    "response": []
+                },
+                {
+                    "name": "Reboot several switches - REAL",
+                    "request": {
+                        "method": "POST",
+                        "header": [
+                            {
+                                "key": "Content-Type",
+                                "value": "application/json"
+                            }
+                        ],
+                        "url": {
+                            "raw": "{{baseUrl}}/templates/push",
+                            "host": [
+                                "{{baseUrl}}"
+                            ],
+                            "path": [
+                                "templates",
+                                "push"
+                            ]
+                        },
+                        "body": {
+                            "mode": "raw",
+                            "raw": "{\n    \"devices\": [\n        \"192.168.200.240\",\n        \"192.168.200.241\"\n    ],\n    \"template\": \"Reboot the switch\",\n    \"values\": {\n        \"Reboot\": \"Yes\"\n    }\n}",
+                            "options": {
+                                "raw": {
+                                    "language": "json"
+                                }
+                            }
+                        },
+                        "description": "REBOOTS EVERY SWITCH IN THE LIST, one after the other."
+                    },
+                    "response": []
+                }
+            ]
+        },
+        {
+            "name": "6. Error examples",
+            "item": [
+                {
+                    "name": "Required field missing (422)",
+                    "request": {
+                        "method": "POST",
+                        "header": [
+                            {
+                                "key": "Content-Type",
+                                "value": "application/json"
+                            }
+                        ],
+                        "url": {
+                            "raw": "{{baseUrl}}/templates/push",
+                            "host": [
+                                "{{baseUrl}}"
+                            ],
+                            "path": [
+                                "templates",
+                                "push"
+                            ]
+                        },
+                        "description": "",
+                        "body": {
+                            "mode": "raw",
+                            "raw": "{\n    \"device\": \"{{device}}\",\n    \"template\": \"description\",\n    \"interfaces\": [\n        \"GigaEthernet0/1\"\n    ],\n    \"values\": {},\n    \"dry_run\": true\n}",
+                            "options": {
+                                "raw": {
+                                    "language": "json"
+                                }
+                            }
+                        }
+                    },
+                    "response": []
+                },
+                {
+                    "name": "Bad dropdown value (422)",
+                    "request": {
+                        "method": "POST",
+                        "header": [
+                            {
+                                "key": "Content-Type",
+                                "value": "application/json"
+                            }
+                        ],
+                        "url": {
+                            "raw": "{{baseUrl}}/templates/push",
+                            "host": [
+                                "{{baseUrl}}"
+                            ],
+                            "path": [
+                                "templates",
+                                "push"
+                            ]
+                        },
+                        "description": "",
+                        "body": {
+                            "mode": "raw",
+                            "raw": "{\n    \"device\": \"{{device}}\",\n    \"template\": \"{{template}}\",\n    \"interfaces\": [\n        \"GigaEthernet0/3\"\n    ],\n    \"values\": {\n        \"Flow Control\": \"maybe\"\n    },\n    \"dry_run\": true\n}",
+                            "options": {
+                                "raw": {
+                                    "language": "json"
+                                }
+                            }
+                        }
+                    },
+                    "response": []
+                },
+                {
+                    "name": "Unknown device (404)",
+                    "request": {
+                        "method": "POST",
+                        "header": [
+                            {
+                                "key": "Content-Type",
+                                "value": "application/json"
+                            }
+                        ],
+                        "url": {
+                            "raw": "{{baseUrl}}/templates/push",
+                            "host": [
+                                "{{baseUrl}}"
+                            ],
+                            "path": [
+                                "templates",
+                                "push"
+                            ]
+                        },
+                        "description": "",
+                        "body": {
+                            "mode": "raw",
+                            "raw": "{\n    \"device\": \"10.255.255.254\",\n    \"template\": \"description\",\n    \"values\": {\n        \"description\": \"x\"\n    },\n    \"dry_run\": true\n}",
+                            "options": {
+                                "raw": {
+                                    "language": "json"
+                                }
+                            }
+                        }
+                    },
+                    "response": []
+                },
+                {
+                    "name": "Unknown template (404)",
+                    "request": {
+                        "method": "GET",
+                        "header": [],
+                        "url": {
+                            "raw": "{{baseUrl}}/templates/no-such-template",
+                            "host": [
+                                "{{baseUrl}}"
+                            ],
+                            "path": [
+                                "templates",
+                                "no-such-template"
+                            ]
+                        },
+                        "description": ""
+                    },
+                    "response": []
+                }
+            ]
+        }
+    ]
+}

@@ -1,0 +1,601 @@
+---
+# ============================================================
+# PVST CONFIGURATION - GET
+# ============================================================
+
+- name: PVST Configuration - GET
+  hosts: alphabridge_devices
+  gather_facts: false
+
+  vars:
+    output_dir: "{{ playbook_dir }}/../../output"
+    temp_dir: "{{ playbook_dir }}/../../tmp"
+
+    python_script: "{{ temp_dir }}/getpvst.py"
+    output_file: "{{ output_dir }}/{{ ansible_host }}_pvst.yml"
+
+  tasks:
+
+    # ========================================================
+    # CREATE DIRECTORIES
+    # ========================================================
+
+    - name: Create output directory
+      ansible.builtin.file:
+        path: "{{ output_dir }}"
+        state: directory
+        mode: "0755"
+      delegate_to: localhost
+
+    - name: Create temporary directory
+      ansible.builtin.file:
+        path: "{{ temp_dir }}"
+        state: directory
+        mode: "0755"
+      delegate_to: localhost
+
+    # ========================================================
+    # CHECK SSH
+    # ========================================================
+
+    - name: Check SSH before PVST GET
+      ansible.builtin.wait_for:
+        host: "{{ ansible_host }}"
+        port: "{{ ansible_port | default(22) }}"
+        timeout: 10
+      delegate_to: localhost
+
+    # ========================================================
+    # CREATE PARAMIKO SCRIPT
+    # ========================================================
+
+    - name: Create PVST GET Python script
+      ansible.builtin.copy:
+        dest: "{{ python_script }}"
+        mode: "0755"
+        content: |
+          #!/usr/bin/env python3
+
+          import paramiko
+          import re
+          import sys
+          import time
+          import yaml
+
+          HOST = "{{ ansible_host }}"
+          PORT = {{ ansible_port | default(22) }}
+          USERNAME = "{{ ansible_user }}"
+          PASSWORD = "{{ ansible_password }}"
+
+          def execute_command(shell, command, wait=2):
+
+              shell.send(command + "\n")
+
+              time.sleep(wait)
+
+              output = ""
+
+              while shell.recv_ready():
+
+                  output += shell.recv(65535).decode(
+                      "utf-8",
+                      errors="ignore"
+                  )
+
+              return output
+
+
+          def clean_output(output):
+
+              output = output.replace("\r", "")
+
+              output = re.sub(
+                  r"^\s*show spanning-tree\s*",
+                  "",
+                  output,
+                  flags=re.IGNORECASE
+              )
+
+              output = re.sub(
+                  r"^\s*show running-config\s*",
+                  "",
+                  output,
+                  flags=re.IGNORECASE
+              )
+
+              output = re.sub(
+                  r"\n?\s*[A-Za-z0-9_.-]+[>#]\s*$",
+                  "",
+                  output
+              )
+
+              return output.strip()
+
+
+          def find_first(pattern, text, default="Unknown"):
+
+              match = re.search(
+                  pattern,
+                  text,
+                  re.MULTILINE | re.IGNORECASE
+              )
+
+              if match:
+                  return match.group(1).strip()
+
+              return default
+
+
+          client = paramiko.SSHClient()
+
+          client.set_missing_host_key_policy(
+              paramiko.AutoAddPolicy()
+          )
+
+          try:
+
+              # =================================================
+              # CONNECT
+              # =================================================
+
+              client.connect(
+                  HOST,
+                  port=PORT,
+                  username=USERNAME,
+                  password=PASSWORD,
+                  look_for_keys=False,
+                  allow_agent=False,
+                  timeout=15,
+                  banner_timeout=15,
+                  auth_timeout=15
+              )
+
+              shell = client.invoke_shell()
+
+              time.sleep(1)
+
+              while shell.recv_ready():
+                  shell.recv(65535)
+
+
+              # =================================================
+              # ENABLE
+              # =================================================
+
+              execute_command(
+                  shell,
+                  "enable",
+                  1
+              )
+
+
+              # =================================================
+              # DISABLE PAGING
+              # =================================================
+
+              execute_command(
+                  shell,
+                  "terminal length 0",
+                  1
+              )
+
+
+              # =================================================
+              # SHOW SPANNING TREE
+              # =================================================
+
+              spanning_tree = execute_command(
+                  shell,
+                  "show spanning-tree",
+                  2
+              )
+
+              spanning_tree = clean_output(
+                  spanning_tree
+              )
+
+
+              # =================================================
+              # SHOW RUNNING CONFIG
+              #
+              # Used for:
+              #   - PVST protocol
+              #   - BPDU Terminal
+              #   - Loop Guard
+              # =================================================
+
+              running_config = execute_command(
+                  shell,
+                  "show running-config",
+                  3
+              )
+
+              running_config = clean_output(
+                  running_config
+              )
+
+
+              client.close()
+
+
+              # =================================================
+              # ROOT STP CONFIGURATION
+              # =================================================
+
+              root_priority = find_first(
+                  r"Root ID\s+Priority\s+(\d+)",
+                  spanning_tree
+              )
+
+
+              root_mac = find_first(
+                  r"Root ID\s+Priority\s+\d+\s*\n"
+                  r"\s*Address\s+([0-9A-Fa-f.]+)",
+                  spanning_tree
+              )
+
+
+              hello_time = find_first(
+                  r"Hello Time\s+(\d+)\s+sec",
+                  spanning_tree
+              )
+
+
+              max_age = find_first(
+                  r"Max Age\s+(\d+)\s+sec",
+                  spanning_tree
+              )
+
+
+              forward_delay = find_first(
+                  r"Forward Delay\s+(\d+)\s+sec",
+                  spanning_tree
+              )
+
+
+              # =================================================
+              # LOCAL MAC ADDRESS
+              # =================================================
+
+              local_mac = find_first(
+                  r"Bridge ID\s+Priority\s+\d+\s*\n"
+                  r"\s*Address\s+([0-9A-Fa-f.]+)",
+                  spanning_tree
+              )
+
+
+              # =================================================
+              # PROTOCOL TYPE
+              # =================================================
+
+              protocol = find_first(
+                  r"Spanning tree enabled protocol\s+(\S+)",
+                  spanning_tree
+              )
+
+
+              protocol_upper = protocol.upper()
+
+              if "PVST" in protocol_upper:
+
+                  protocol_type = "PVST"
+
+              elif protocol_upper.startswith("RSTP"):
+
+                  protocol_type = "RSTP"
+
+              elif protocol_upper.startswith("MSTP"):
+
+                  protocol_type = "MSTP"
+
+              elif protocol_upper.startswith("STP"):
+
+                  protocol_type = "STP"
+
+              elif protocol_upper == "SSTP":
+
+                  protocol_type = "STP"
+
+              else:
+
+                  protocol_type = protocol
+
+
+              # =================================================
+              # BPDU TERMINAL
+              # =================================================
+
+              bpdu_terminal = "Disable"
+
+              if re.search(
+                  r"spanning-tree\s+bpdu-terminal",
+                  running_config,
+                  re.IGNORECASE
+              ):
+
+                  if not re.search(
+                      r"no\s+spanning-tree\s+bpdu-terminal",
+                      running_config,
+                      re.IGNORECASE
+                  ):
+
+                      bpdu_terminal = "Enable"
+
+
+              # =================================================
+              # LOOP GUARD
+              # =================================================
+
+              loop_guard = "Disable"
+
+              if re.search(
+                  r"spanning-tree\s+loopguard\s+default",
+                  running_config,
+                  re.IGNORECASE
+              ):
+
+                  if not re.search(
+                      r"no\s+spanning-tree\s+loopguard\s+default",
+                      running_config,
+                      re.IGNORECASE
+                  ):
+
+                      loop_guard = "Enable"
+
+
+              # =================================================
+              # ROOT STATUS
+              # =================================================
+
+              if re.search(
+                  r"This bridge is the root",
+                  spanning_tree,
+                  re.IGNORECASE
+              ):
+
+                  root_port = "Root"
+                  root_cost = "0"
+                  root_status = "This bridge is the root"
+
+              else:
+
+                  root_port = find_first(
+                      r"Root Port\s+(\S+)",
+                      spanning_tree
+                  )
+
+                  root_cost = find_first(
+                      r"Root Cost\s+(\d+)",
+                      spanning_tree
+                  )
+
+                  root_status = "This bridge is not the root"
+
+
+              # =================================================
+              # STP PORT STATE
+              # =================================================
+
+              stp_ports_state = []
+
+              table_started = False
+
+              for line in spanning_tree.splitlines():
+
+                  line = line.strip()
+
+                  if (
+                      line.startswith("Interface")
+                      and "Role" in line
+                      and "Sts" in line
+                  ):
+
+                      table_started = True
+                      continue
+
+
+                  if not table_started:
+                      continue
+
+
+                  if line.startswith("-"):
+                      continue
+
+
+                  if not line:
+                      continue
+
+
+                  match = re.match(
+                      r"^(\S+)\s+"
+                      r"(\S+)\s+"
+                      r"(\S+)\s+"
+                      r"(\d+)\s+"
+                      r"(\S+)\s+"
+                      r"(\S+)$",
+                      line
+                  )
+
+
+                  if not match:
+                      continue
+
+
+                  interface = match.group(1)
+
+
+                  if not re.match(
+                      r"^(g|tg|GigaEthernet|TGigaEthernet)",
+                      interface,
+                      re.IGNORECASE
+                  ):
+                      continue
+
+
+                  stp_ports_state.append(
+                      {
+                          "interface": interface,
+                          "role": match.group(2),
+                          "status": match.group(3),
+                          "cost": match.group(4),
+                          "priority_number": match.group(5),
+                          "type": match.group(6)
+                      }
+                  )
+
+
+              # =================================================
+              # FINAL RESULT
+              # =================================================
+
+              result = {
+
+                  "status": "SUCCESS",
+
+                  "device_ip": HOST,
+
+                  "root_stp_configuration": {
+
+                      "spanning_tree_priority": root_priority,
+
+                      "mac_address": root_mac,
+
+                      "hello_time": hello_time,
+
+                      "max_age": max_age,
+
+                      "forward_delay": forward_delay
+                  },
+
+                  "local_stp_configuration": {
+
+                      "protocol_type": protocol_type,
+
+                      "mac_address": local_mac,
+
+                      "bpdu_terminal": bpdu_terminal,
+
+                      "loop_guard": loop_guard
+                  },
+
+                  "stp_ports_state": stp_ports_state
+              }
+
+
+              print("RESULT_START")
+
+              print(
+                  yaml.safe_dump(
+                      result,
+                      sort_keys=False,
+                      default_flow_style=False
+                  )
+              )
+
+              print("RESULT_END")
+
+
+          except Exception as exc:
+
+              print("RESULT_START")
+
+              error_result = {
+
+                  "status": "FAILED",
+
+                  "device_ip": HOST,
+
+                  "error": str(exc)
+              }
+
+              print(
+                  yaml.safe_dump(
+                      error_result,
+                      sort_keys=False
+                  )
+              )
+
+              print("RESULT_END")
+
+              sys.exit(1)
+
+    # ========================================================
+    # EXECUTE SCRIPT
+    # ========================================================
+
+    - name: Execute PVST GET script
+      ansible.builtin.command:
+        cmd: "python3 {{ python_script }}"
+      register: pvst_result
+      changed_when: false
+      failed_when: false
+
+    # ========================================================
+    # EXTRACT RESULT
+    # ========================================================
+
+    - name: Extract PVST result
+      ansible.builtin.set_fact:
+        pvst_result_yaml: >-
+          {{
+            pvst_result.stdout
+            .split('RESULT_START', 1)[1]
+            .split('RESULT_END', 1)[0]
+            | trim
+          }}
+
+    - name: Convert PVST result to Ansible data
+      ansible.builtin.set_fact:
+        final_pvst_result: "{{ pvst_result_yaml | from_yaml }}"
+
+    # ========================================================
+    # VALIDATE
+    # ========================================================
+
+    - name: Validate PVST GET result
+      ansible.builtin.assert:
+        that:
+          - pvst_result.rc == 0
+          - final_pvst_result.status == "SUCCESS"
+        fail_msg: |
+          PVST GET failed.
+
+          Device IP: {{ ansible_host }}
+
+          Result:
+          {{ final_pvst_result | to_nice_yaml(indent=2, sort_keys=false) }}
+
+    # ========================================================
+    # DISPLAY
+    # ========================================================
+
+    - name: Display PVST configuration
+      ansible.builtin.debug:
+        msg: "{{ final_pvst_result }}"
+
+    # ========================================================
+    # WRITE YAML FILE
+    # ========================================================
+
+    - name: Write PVST GET result
+      ansible.builtin.copy:
+        content: >-
+          {{
+            final_pvst_result
+            | to_nice_yaml(
+                indent=2,
+                sort_keys=false
+              )
+          }}
+        dest: "{{ output_file }}"
+        mode: "0644"
+      delegate_to: localhost
+
+    # ========================================================
+    # CONFIRM
+    # ========================================================
+
+    - name: Confirm PVST output file
+      ansible.builtin.debug:
+        msg: "PVST GET output saved to {{ output_file }}"
+

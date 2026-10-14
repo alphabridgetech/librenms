@@ -59,6 +59,11 @@ Route::prefix('v0')->group(function () {
     // admin required
     Route::middleware(['can:admin'])->group(function () {
 
+        // Template Push (/addhost/template)
+        Route::get('templates', [App\Api\Controllers\TemplatePushApiController::class, 'index'])->name('templates.list');
+        Route::post('templates/push', [App\Api\Controllers\TemplatePushApiController::class, 'push'])->name('templates.push');
+        Route::get('templates/{name}', [App\Api\Controllers\TemplatePushApiController::class, 'show'])->name('templates.show');
+
         //kunal api add for configuration changes
         Route::post('testapi', [App\Api\Controllers\KunalApiController::class, 'testFunction'])->name('testFunction');
         Route::get('systeminfo/{hostname}', [App\Api\Controllers\KunalApiController::class, 'systeminfo'])->name('systeminfo');
@@ -101,10 +106,37 @@ Route::prefix('v0')->group(function () {
         Route::get('igmp/filter/show/{hostname}', [App\Api\Controllers\KunalApiController::class, 'getigmpvlanfilters'])->name('igmp.filter.show');
         Route::post('igmp/filter/set/{hostname}', [App\Api\Controllers\KunalApiController::class, 'setigmpvlanfilter'])->name('igmp.filter.set');
         Route::post('igmp/filter/delete/{hostname}', [App\Api\Controllers\KunalApiController::class, 'deleteigmpvlanfilter'])->name('igmp.filter.delete');
+        Route::get('privatevlan/show/{hostname}', [App\Api\Controllers\KunalApiController::class, 'getprivatevlan'])->name('privatevlan.show');
+        Route::post('privatevlan/set/{hostname}', [App\Api\Controllers\KunalApiController::class, 'setprivatevlan'])->name('privatevlan.set');
+        Route::get('privatevlan/port/show/{hostname}', [App\Api\Controllers\KunalApiController::class, 'getprivatevlanport'])->name('privatevlan.port.show');
+        Route::post('privatevlan/port/set/{hostname}', [App\Api\Controllers\KunalApiController::class, 'setprivatevlanport'])->name('privatevlan.port.set');
+        Route::get('dhcpsnooping/global/show/{hostname}', [App\Api\Controllers\KunalApiController::class, 'getdhcpglobal'])->name('dhcpsnooping.global.show');
+        Route::post('dhcpsnooping/global/set/{hostname}', [App\Api\Controllers\KunalApiController::class, 'setdhcpglobal'])->name('dhcpsnooping.global.set');
+        Route::get('dhcpsnooping/vlan/show/{hostname}', [App\Api\Controllers\KunalApiController::class, 'getdhcpvlan'])->name('dhcpsnooping.vlan.show');
+        Route::post('dhcpsnooping/vlan/set/{hostname}', [App\Api\Controllers\KunalApiController::class, 'setdhcpvlan'])->name('dhcpsnooping.vlan.set');
+        Route::get('dhcpsnooping/interface/show/{hostname}', [App\Api\Controllers\KunalApiController::class, 'getdhcpinterface'])->name('dhcpsnooping.interface.show');
+        Route::post('dhcpsnooping/interface/set/{hostname}', [App\Api\Controllers\KunalApiController::class, 'setdhcpinterface'])->name('dhcpsnooping.interface.set');
+        Route::get('dhcpsnooping/option82/show/{hostname}', [App\Api\Controllers\KunalApiController::class, 'getdhcpoption82'])->name('dhcpsnooping.option82.show');
+        Route::post('dhcpsnooping/option82/set/{hostname}', [App\Api\Controllers\KunalApiController::class, 'setdhcpoption82'])->name('dhcpsnooping.option82.set');
+        Route::get('dhcpsnooping/binding/show/{hostname}', [App\Api\Controllers\KunalApiController::class, 'getdhcpbinding'])->name('dhcpsnooping.binding.show');
+        Route::get('dhcpsnooping/binding/applied/show/{hostname}', [App\Api\Controllers\KunalApiController::class, 'getdhcpbindingapplied'])->name('dhcpsnooping.binding.applied.show');
+        Route::post('dhcpsnooping/binding/set/{hostname}', [App\Api\Controllers\KunalApiController::class, 'setdhcpbinding'])->name('dhcpsnooping.binding.set');
+        Route::get('stp/global/show/{hostname}', [App\Api\Controllers\KunalApiController::class, 'getstpglobal'])->name('stp.global.show');
+        Route::post('stp/global/set/{hostname}', [App\Api\Controllers\KunalApiController::class, 'setstpglobal'])->name('stp.global.set');
+        Route::get('stp/mst/show/{hostname}', [App\Api\Controllers\KunalApiController::class, 'getstpmst'])->name('stp.mst.show');
+        Route::post('stp/mst/set/{hostname}', [App\Api\Controllers\KunalApiController::class, 'setstpmst'])->name('stp.mst.set');
+        Route::get('stp/port/show/{hostname}', [App\Api\Controllers\KunalApiController::class, 'getstpport'])->name('stp.port.show');
+        Route::post('stp/port/set/{hostname}', [App\Api\Controllers\KunalApiController::class, 'setstpport'])->name('stp.port.set');
+        Route::get('stp/portguard/show/{hostname}', [App\Api\Controllers\KunalApiController::class, 'getstpportguard'])->name('stp.portguard.show');
+        Route::post('stp/portguard/set/{hostname}', [App\Api\Controllers\KunalApiController::class, 'setstpportguard'])->name('stp.portguard.set');
+        Route::get('mld/show/{hostname}', [App\Api\Controllers\KunalApiController::class, 'getmldsnooping'])->name('mld.show');
+        Route::post('mld/set/{hostname}', [App\Api\Controllers\KunalApiController::class, 'setmldsnooping'])->name('mld.set');
         Route::get('erps/show/{hostname}', [App\Api\Controllers\KunalApiController::class, 'geterps'])->name('erps.show');
         Route::post('erps/set/{hostname}', [App\Api\Controllers\KunalApiController::class, 'seterps'])->name('erps.set');
         Route::get('etherring/show/{hostname}', [App\Api\Controllers\KunalApiController::class, 'getethernetring'])->name('etherring.show');
         Route::post('etherring/set/{hostname}', [App\Api\Controllers\KunalApiController::class, 'setethernetring'])->name('etherring.set');
+        Route::get('multiplering/show/{hostname}', [App\Api\Controllers\KunalApiController::class, 'getmultiplering'])->name('multiplering.show');
+        Route::post('multiplering/set/{hostname}', [App\Api\Controllers\KunalApiController::class, 'setmultiplering'])->name('multiplering.set');
         Route::get('vlan/interface/attribute/show/{hostname}', [App\Api\Controllers\KunalApiController::class, 'getinterfacevlanattribute'])->name('vlan.interface.attribute.show');
         Route::post('vlan/interface/attribute/set/{hostname}', [App\Api\Controllers\KunalApiController::class, 'setinterfacevlanattribute'])->name('vlan.interface.attribute.set');
         Route::post('vlan/edit/{hostname}', [App\Api\Controllers\KunalApiController::class, 'editvlanconfiguration'])->name('vlan.edit');

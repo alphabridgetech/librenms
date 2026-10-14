@@ -1,41 +1,61 @@
 # ==========================================
-# dhcp_port_list_delete.yml
+# dhcp_binding_port_list_set.yml
 # Created on Sept 4, 2026 by Vikash Kumar (vikash.kumar@alphabrige.tech).
 #
 # Copyright (c), ALPHA BRIDGE, Inc.
 # 357D, Udyog Vihar Industrial Area Phase VI, Sector 37, Gurugram, Haryana.
-# 
+#
 # All rights reserved.
 #
-# This software is the confidential and proprietary information of
-# ALPHA BRIDGE, Inc. ("Confidential Information").  You shall not
-# disclose such Confidential Information and shall use it only in
-# accordance with the terms of the license agreement you entered into
-# with ALPHA BRIDGE.
+# This software is the confidential and proprietary information of ALPHA BRIDGE,
+# Inc. ("Confidential Information"). You shall not disclose such Confidential
+# Information and shall use it only in accordance with the terms of the
+# license agreement you entered into with ALPHA BRIDGE.
 #
 # =============================================================================
-# Playbook Name : Delete Port List Entry
+# Playbook Name : DHCP Manual Binding Port Configuration
 # =============================================================================
-# Description:
-# This playbook removes a port list entry from the AlphaBridge switch.
-# The playbook first verifies that the ARP entry exists before deleting it.
 #
-# CLI Command:
-#   no ip source binding mac address ip address vlan <id>
+#Description:
+# Configures DHCP Snooping global settings on AlphaBridge
+# switches over SSH.
 #
-# Example:
-# ansible-playbook \
-# -i inventory/192.168.2.245.yml \
-# playbooks/dhcp_port_list_delete.yml \
-# -e "ip_address=192.168.2.100 mac_address=f4:ee:08:ea:ea:1c vlan_id=200"
+# Input vars:
+#  mac_address	- enter the mac address (eg.f4:ee:08:ea:ea:1d)
+#  ip_address   - enter the ip address  (eg. 192.168.2.10)
+#  port         - enter the port        (eg. g0/1)
+#  vlan_id      - enter vlan id         (eg. 10)
+#
+#Example:
+# ansible-playbook -i inventory/192.168.2.245.yml \
+#   playbooks/dhcp_port_list_config.yml \
+#   -e mac_address="f4:ee:08:ea:ea:1d" -e ip_address=192.168.2.10 \
+#   -e port=g0/2 \
+#   -e vlan_id=100
 #
 # Output:
-# output/<switch_ip>_dhcp_port_list_delete.yml
-# =============================================================================
+# output/<switch_ip>_dhcp_port_list_config.yml
 
-- name: Delete Port List Entry on network device
+
+- name: Add DHCP port list Entry on network device
   hosts: alphabridge_devices
-  gather_facts: false
+  gather_facts: no
+
+  vars:
+    # Resolve paths from this checkout, including the Jenkins workspace.
+    project_root: "{{ playbook_dir }}/../.."
+    output_dir: "{{ project_root }}/output"
+    tmp_dir: "{{ project_root }}/tmp"
+
+  pre_tasks:
+    - name: Ensure script and report directories exist
+      ansible.builtin.file:
+        path: "{{ item }}"
+        state: directory
+        mode: '0755'
+      loop:
+        - "{{ tmp_dir }}"
+        - "{{ output_dir }}"
 
   tasks:
 
@@ -51,23 +71,35 @@
         fail_msg: "Invalid IPv4 address: {{ ip_address }}"
 
     # ==========================================
-    # Validate VLAN ID
+    # Validate MAC Address
     # ==========================================
-    - name: Validate VLAN ID
+
+    - name: Validate MAC Address
+      ansible.builtin.assert:
+        that:
+          - mac_address is defined
+          - "mac_address is match('^([0-9A-Fa-f]{2}:){5}[0-9A-Fa-f]{2}$')"
+        fail_msg: "mac_address must be in the format XX:XX:XX:XX:XX:XX"
+
+    # ==========================================
+    # Validate VLAN INTERFACE
+    # ==========================================
+
+    - name: Validate VLAN_ID
       ansible.builtin.assert:
         that:
           - vlan_id is defined
           - vlan_id | int >= 1
           - vlan_id | int <= 4094
-        fail_msg: "vlan_id must be between 1 and 4094"
+        fail_msg: "interface_vlan must be between 1 and 4094"
 
     # ==========================================
     # Create Python SSH Script
     # ==========================================
 
-    - name: Create Python SSH Script for PORT List deletion
+    - name: Create Python SSH Script for ARP creation
       ansible.builtin.copy:
-        dest: "/opt/librenms/librenms-ansible-inventory-plugin/tmp/dhcp_port_list_delete_exec.py"
+        dest: "{{ tmp_dir }}/dhcp_port_list_config_exec.py"
         mode: '0755'
         content: |
           #!/usr/bin/env python3
@@ -82,27 +114,21 @@
           PASSWORD = "{{ ansible_password }}"
 
           IP_ADDRESS = "{{ ip_address }}"
-          VLAN_ID = "{{ vlan_id }}"
           MAC_ADDRESS = "{{ mac_address }}"
+          VLAN_ID = "{{ vlan_id }}"
+          PORT_ID = "{{port}}"
 
           def read_until_prompt(shell, prompt_regex, timeout=10):
-
               buf = ""
               end_time = time.time() + timeout
 
               while time.time() < end_time:
-
                   if shell.recv_ready():
-
-                      chunk = shell.recv(65535).decode(
-                          errors="ignore"
-                      )
-
+                      chunk = shell.recv(65535).decode(errors="ignore")
                       buf += chunk
 
                       if re.search(prompt_regex, buf):
                           return buf
-
                   else:
                       time.sleep(0.1)
 
@@ -117,16 +143,12 @@
           ssh = None
 
           try:
-
               # ==========================================
               # SSH CONNECTION
               # ==========================================
 
               ssh = paramiko.SSHClient()
-
-              ssh.set_missing_host_key_policy(
-                  paramiko.AutoAddPolicy()
-              )
+              ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
 
               ssh.connect(
                   HOST,
@@ -138,12 +160,10 @@
               )
 
               shell = ssh.invoke_shell()
-
               time.sleep(0.5)
 
               # ==========================================
               # INITIAL PROMPT
-              #
               # Example:
               # AS212XTS>
               # ==========================================
@@ -156,7 +176,6 @@
 
               # ==========================================
               # ENABLE
-              #
               # Example:
               # AS212XTS#
               # ==========================================
@@ -171,7 +190,6 @@
 
               # ==========================================
               # CONFIG
-              #
               # Example:
               # AS212XTS_config#
               # ==========================================
@@ -183,15 +201,19 @@
                   r'_config#\s*$',
                   timeout=5
               )
-
               # ==========================================
-              # DELETE BINDING PORT LIST
+              # ADD ARP ENTRY
               #
+              # Command:
+              # arp <IP> <MAC> vlan <VLAN>
+              #
+              # Example:
+              # arp 192.168.2.100 78:18:ec:d9:6c:77 vlan 20
               # ==========================================
 
               port_command = (
-                  f"no ip source binding {MAC_ADDRESS} {IP_ADDRESS} "
-                  f"vlan {VLAN_ID}"
+                  f"ip source binding {MAC_ADDRESS} "
+                  f"{IP_ADDRESS} interface {PORT_ID} vlan {VLAN_ID}"
               )
 
               shell.send(port_command + "\n")
@@ -201,16 +223,6 @@
                   r'_config#\s*$',
                   timeout=5
               )
-              # ==========================================
-              # CHECK COMMAND RESULT
-              # ==========================================
-
-              if re.search(r'%err|parameter invalid|error', port_output, re.IGNORECASE):
-                  raise Exception(
-                      f"PORT List deletion command rejected by switch: "
-                      f"{port_output.strip()}"
-                  )
-
               # ==========================================
               # WRITE CONFIGURATION
               # ==========================================
@@ -222,7 +234,6 @@
                   r'[>#]\s*$',
                   timeout=10
               )
-
               # ==========================================
               # EXIT
               # ==========================================
@@ -234,35 +245,16 @@
                   r'[>#]\s*$',
                   timeout=5
               )
-
               # ==========================================
               # CLEAN ANSI CHARACTERS
               # ==========================================
 
-              enable_output = ansi_re.sub(
-                  "",
-                  enable_output
-              )
+              enable_output = ansi_re.sub("", enable_output)
+              config_output = ansi_re.sub("", config_output)
+              port_output = ansi_re.sub("", port_output)
+              write_output = ansi_re.sub("", write_output)
+              exit_output = ansi_re.sub("", exit_output)
 
-              config_output = ansi_re.sub(
-                  "",
-                  config_output
-              )
-
-              port_output = ansi_re.sub(
-                  "",
-                  port_output
-              )
-
-              write_output = ansi_re.sub(
-                  "",
-                  write_output
-              )
-
-              exit_output = ansi_re.sub(
-                  "",
-                  exit_output
-              )
               # ==========================================
               # CLOSE SSH
               # ==========================================
@@ -275,42 +267,34 @@
               # ==========================================
 
               print(json.dumps({
-
                   "ip": HOST,
                   "status": "success"
-
               }))
 
           except Exception as e:
-
               try:
-
                   if shell:
                       shell.close()
 
                   if ssh:
                       ssh.close()
-
               except:
                   pass
 
               print(json.dumps({
-
                   "ip": HOST,
                   "status": "failed",
                   "error": str(e)
-
               }))
-
     # ==========================================
     # EXECUTE PYTHON SCRIPT
     # ==========================================
 
-    - name: Execute BIND PORT List deletion script
+    - name: Execute PORT List creation script
       ansible.builtin.command:
-        cmd: >
-          /opt/librenms/librenms-ansible-inventory-plugin/bin/python3
-          /opt/librenms/librenms-ansible-inventory-plugin/tmp/dhcp_port_list_delete_exec.py
+        argv:
+          - "{{ playbook_dir }}/../../bin/python3"
+          - "{{ tmp_dir }}/dhcp_port_list_config_exec.py"
       register: port_raw
       changed_when: false
       failed_when: false
@@ -319,7 +303,7 @@
     # CONVERT JSON RESULT
     # ==========================================
 
-    - name: Convert BIND PORT result to JSON
+    - name: Convert PORT List result to JSON
       ansible.builtin.set_fact:
         port_result: "{{ port_raw.stdout | from_json }}"
 
@@ -327,7 +311,7 @@
     # DISPLAY RESULT
     # ==========================================
 
-    - name: Display BIND Port deletion result
+    - name: Display PORT List creation result
       ansible.builtin.debug:
         var: port_result
 
@@ -335,19 +319,17 @@
     # SAVE RESULT
     # ==========================================
 
-    - name: Save BIND PORT deletion result
+    - name: Save PORT List creation result
       ansible.builtin.copy:
-        dest: "/opt/librenms/librenms-ansible-inventory-plugin/output/\
-               {{ ansible_host }}_delete_port_list_delete.yml"
+        dest: "{{ output_dir }}/{{ ansible_host }}_dhcp_port_list_config.yml"
         content: |
           {{ port_result | to_nice_yaml }}
 
-
     # ==========================================
-    # FAIL IF BIND PORT DELETION FAILED
+    # FAIL IF ARP CREATION FAILED
     # ==========================================
 
-    - name: Fail if BIND PORT deletion failed
+    - name: Fail if PORT List creation failed
       ansible.builtin.fail:
         msg: "{{ port_result.error }}"
       when: port_result.status == "failed"
@@ -358,6 +340,6 @@
 
     - name: Display result file
       ansible.builtin.debug:
-        msg: "BIND PORT entry {{ ip_address }} VLAN_ID {{ vlan_id }}
-             MAC_ADDRESS {{mac_address}} deleted.
-             Result saved to output/{{ ansible_host }}_delete_port_list_delete.yml"
+        msg: "PORT List entry {{ ip_address }} -> {{ mac_address }} VLAN_ID
+             {{ vlan_id }} created.
+             Result saved to output/{{ ansible_host }}_dhcp_port_list_config.yml"

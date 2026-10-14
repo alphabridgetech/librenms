@@ -1,0 +1,451 @@
+---
+# ============================================================
+# GET RSTP CONFIGURATION
+# ============================================================
+
+- name: RSTP Configuration - GET
+  hosts: alphabridge_devices
+  gather_facts: false
+
+  vars:
+
+    # ========================================================
+    # PROJECT PATHS
+    # ========================================================
+
+    project_root: "{{ playbook_dir }}/../.."
+
+    output_dir: "{{ project_root }}/output"
+    temp_dir: "{{ project_root }}/tmp"
+
+    python_script: "{{ temp_dir }}/getrstp.py"
+    output_file: "{{ output_dir }}/{{ ansible_host }}_rstp.yml"
+
+  tasks:
+
+    # ========================================================
+    # CREATE DIRECTORIES
+    # ========================================================
+
+    - name: Create output directory
+      ansible.builtin.file:
+        path: "{{ output_dir }}"
+        state: directory
+        mode: "0755"
+      delegate_to: localhost
+
+    - name: Create temporary directory
+      ansible.builtin.file:
+        path: "{{ temp_dir }}"
+        state: directory
+        mode: "0755"
+      delegate_to: localhost
+
+    # ========================================================
+    # CHECK SSH
+    # ========================================================
+
+    - name: Check SSH before RSTP GET
+      ansible.builtin.wait_for:
+        host: "{{ ansible_host }}"
+        port: "{{ ansible_port | default(22) }}"
+        timeout: 10
+      delegate_to: localhost
+
+    # ========================================================
+    # CREATE PYTHON SCRIPT
+    # ========================================================
+
+    - name: Create RSTP GET Python script
+      ansible.builtin.copy:
+        dest: "{{ python_script }}"
+        mode: "0755"
+        content: |
+          #!/usr/bin/env python3
+
+          import paramiko
+          import re
+          import sys
+          import time
+          import yaml
+
+          HOST = "{{ ansible_host }}"
+          PORT = {{ ansible_port | default(22) }}
+          USERNAME = "{{ ansible_user }}"
+          PASSWORD = "{{ ansible_password }}"
+
+          def execute_command(shell, command, wait=2):
+              shell.send(command + "\n")
+              time.sleep(wait)
+
+              output = ""
+
+              while shell.recv_ready():
+                  output += shell.recv(65535).decode(
+                      "utf-8",
+                      errors="ignore"
+                  )
+
+              return output
+
+
+          def first_match(pattern, text, default="Unknown"):
+              match = re.search(
+                  pattern,
+                  text,
+                  re.MULTILINE | re.IGNORECASE
+              )
+
+              if match:
+                  return match.group(1).strip()
+
+              return default
+
+
+          client = paramiko.SSHClient()
+
+          client.set_missing_host_key_policy(
+              paramiko.AutoAddPolicy()
+          )
+
+          try:
+
+              # ------------------------------------------------
+              # CONNECT
+              # ------------------------------------------------
+
+              client.connect(
+                  HOST,
+                  port=PORT,
+                  username=USERNAME,
+                  password=PASSWORD,
+                  look_for_keys=False,
+                  allow_agent=False,
+                  timeout=15,
+                  banner_timeout=15,
+                  auth_timeout=15
+              )
+
+              shell = client.invoke_shell()
+
+              time.sleep(1)
+
+              # Clear banner
+              while shell.recv_ready():
+                  shell.recv(65535)
+
+              # ------------------------------------------------
+              # ENABLE
+              # ------------------------------------------------
+
+              execute_command(
+                  shell,
+                  "enable",
+                  1
+              )
+
+              # ------------------------------------------------
+              # DISABLE PAGING
+              # ------------------------------------------------
+
+              execute_command(
+                  shell,
+                  "terminal length 0",
+                  1
+              )
+
+              # ------------------------------------------------
+              # SHOW SPANNING TREE
+              # ------------------------------------------------
+
+              raw_output = execute_command(
+                  shell,
+                  "show spanning-tree",
+                  2
+              )
+
+              client.close()
+
+              # =================================================
+              # CLEAN OUTPUT
+              # =================================================
+
+              output = raw_output.replace("\r", "")
+
+              output = re.sub(
+                  r"^\s*show spanning-tree\s*\n?",
+                  "",
+                  output,
+                  flags=re.IGNORECASE
+              )
+
+              output = re.sub(
+                  r"\n?\s*(?:Switch#|[A-Za-z0-9_.-]+[>#])\s*$",
+                  "",
+                  output
+              )
+
+              output = output.strip()
+
+              # =================================================
+              # ROOT STP CONFIGURATION
+              # =================================================
+
+              root_priority = first_match(
+                  r"Root ID\s+Priority\s+(\d+)",
+                  output
+              )
+
+              root_mac = first_match(
+                  r"Root ID\s+Priority\s+\d+\s*\n"
+                  r"\s*Address\s+([0-9A-Fa-f.]+)",
+                  output
+              )
+
+              root_hello = first_match(
+                  r"Hello Time\s+(\d+)\s+sec",
+                  output
+              )
+
+              root_max_age = first_match(
+                  r"Max Age\s+(\d+)\s+sec",
+                  output
+              )
+
+              root_forward_delay = first_match(
+                  r"Forward Delay\s+(\d+)\s+sec",
+                  output
+              )
+
+              # =================================================
+              # ROOT STATUS
+              # =================================================
+
+              if re.search(
+                  r"This bridge is the root",
+                  output,
+                  re.IGNORECASE
+              ):
+                  root_status = "This bridge is the root"
+                  root_port = "Root"
+                  root_cost = "0"
+
+              else:
+
+                  root_status = "This bridge is not the root"
+
+                  root_port = first_match(
+                      r"Root Port\s+(\S+)",
+                      output
+                  )
+
+                  root_cost = first_match(
+                      r"Root Cost\s+(\d+)",
+                      output
+                  )
+
+              # =================================================
+              # RSTP PORT TABLE
+              # =================================================
+
+              stp_ports_state = []
+
+              table_started = False
+
+              for line in output.splitlines():
+
+                  line = line.strip()
+
+                  if line.startswith("Interface") and "Role" in line:
+                      table_started = True
+                      continue
+
+                  if not table_started:
+                      continue
+
+                  if line.startswith("-"):
+                      continue
+
+                  if not line:
+                      continue
+
+                  match = re.match(
+                      r"^(\S+)\s+"
+                      r"(\S+)\s+"
+                      r"(\S+)\s+"
+                      r"(\d+)\s+"
+                      r"(\S+)\s+"
+                      r"(\S+)$",
+                      line
+                  )
+
+                  if not match:
+                      continue
+
+                  interface = match.group(1)
+                  role = match.group(2)
+                  status = match.group(3)
+                  cost = match.group(4)
+                  priority_number = match.group(5)
+                  port_type = match.group(6)
+
+                  if not re.match(
+                      r"^(g|tg|GigaEthernet|TGigaEthernet)",
+                      interface,
+                      re.IGNORECASE
+                  ):
+                      continue
+
+                  stp_ports_state.append(
+                      {
+                          "interface": interface,
+                          "role": role,
+                          "status": status,
+                          "cost": cost,
+                          "priority_number": priority_number,
+                          "type": port_type
+                      }
+                  )
+
+              # =================================================
+              # FINAL RESULT
+              # =================================================
+
+              result = {
+                  "status": "SUCCESS",
+                  "device_ip": HOST,
+
+                  "root_stp_configuration": {
+                      "spanning_tree_priority": root_priority,
+                      "mac_address": root_mac,
+                      "root_port": root_port,
+                      "root_cost": root_cost,
+                      "hello_time": root_hello,
+                      "max_age": root_max_age,
+                      "forward_delay": root_forward_delay,
+                      "root_status": root_status
+                  },
+
+                  "stp_ports_state": stp_ports_state
+              }
+
+              # =================================================
+              # SEND YAML TO ANSIBLE
+              # =================================================
+
+              print("RESULT_START")
+
+              print(
+                  yaml.safe_dump(
+                      result,
+                      sort_keys=False,
+                      default_flow_style=False
+                  )
+              )
+
+              print("RESULT_END")
+
+          except Exception as exc:
+
+              print("RESULT_START")
+
+              error_result = {
+                  "status": "FAILED",
+                  "device_ip": HOST,
+                  "error": str(exc)
+              }
+
+              print(
+                  yaml.safe_dump(
+                      error_result,
+                      sort_keys=False
+                  )
+              )
+
+              print("RESULT_END")
+
+              sys.exit(1)
+
+    # ========================================================
+    # EXECUTE PYTHON
+    # ========================================================
+
+    - name: Execute RSTP GET script
+      ansible.builtin.command:
+        cmd: "python3 {{ python_script }}"
+      register: rstp_result
+      changed_when: false
+      failed_when: false
+
+    # ========================================================
+    # EXTRACT PYTHON RESULT
+    # ========================================================
+
+    - name: Extract RSTP result
+      ansible.builtin.set_fact:
+        rstp_result_yaml: >-
+          {{
+            rstp_result.stdout
+            .split('RESULT_START', 1)[1]
+            .split('RESULT_END', 1)[0]
+            | trim
+          }}
+
+    # ========================================================
+    # CONVERT YAML RESULT
+    # ========================================================
+
+    - name: Convert RSTP result to Ansible data
+      ansible.builtin.set_fact:
+        final_rstp_result: "{{ rstp_result_yaml | from_yaml }}"
+
+    # ========================================================
+    # CHECK RESULT
+    # ========================================================
+
+    - name: Validate RSTP GET result
+      ansible.builtin.assert:
+        that:
+          - rstp_result.rc == 0
+          - final_rstp_result.status == "SUCCESS"
+        fail_msg: |
+          RSTP GET failed.
+
+          Device IP: {{ ansible_host }}
+
+          Result:
+          {{ final_rstp_result | to_nice_yaml(indent=2, sort_keys=false) }}
+
+    # ========================================================
+    # DISPLAY RESULT
+    # ========================================================
+
+    - name: Display RSTP configuration
+      ansible.builtin.debug:
+        msg: "{{ final_rstp_result }}"
+
+    # ========================================================
+    # WRITE OUTPUT FILE
+    # ========================================================
+
+    - name: Write RSTP GET result
+      ansible.builtin.copy:
+        content: >-
+          {{
+            final_rstp_result
+            | to_nice_yaml(
+                indent=2,
+                sort_keys=false
+              )
+          }}
+        dest: "{{ output_file }}"
+        mode: "0644"
+      delegate_to: localhost
+
+    # ========================================================
+    # CONFIRM OUTPUT
+    # ========================================================
+
+    - name: Confirm RSTP output file
+      ansible.builtin.debug:
+        msg: "RSTP GET output saved to {{ output_file }}"

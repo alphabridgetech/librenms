@@ -24,32 +24,10 @@ if (Debug::set(isset($options['d']))) {
 
 $text = stream_get_contents(STDIN);
 
+$trap = new \LibreNMS\Snmptrap\Trap($text);
+
 // Real-time SNMP Trap Forwarding
-try {
-    if (\App\Facades\LibrenmsConfig::has('snmptrap_forward_host')) {
-        $rawHosts = \App\Facades\LibrenmsConfig::get('snmptrap_forward_host');
-        $port = (int) \App\Facades\LibrenmsConfig::get('snmptrap_forward_port', 162);
-        if (! empty($rawHosts)) {
-            $targetHosts = array_filter(array_map('trim', preg_split('/[\s,]+/', $rawHosts)));
-            foreach ($targetHosts as $ip) {
-                $targetIp = $ip;
-                if (! filter_var($targetIp, FILTER_VALIDATE_IP)) {
-                    $resolved_ip = gethostbyname($targetIp);
-                    if ($resolved_ip !== $targetIp) {
-                        $targetIp = $resolved_ip;
-                    }
-                }
-                if (($socket = socket_create(AF_INET, SOCK_DGRAM, SOL_UDP)) !== false) {
-                    socket_sendto($socket, $text, strlen($text), 0, $targetIp, $port);
-                    socket_close($socket);
-                }
-            }
-        }
-    }
-} catch (\Throwable $t) {
-    // Silently ignore or log trap forwarding errors so we don't break main trap processing
-    \Illuminate\Support\Facades\Log::error("SNMP Trap Forwarding failed: " . $t->getMessage());
-}
+\LibreNMS\Snmptrap\Forwarder::forward($trap);
 
 // create handle and send it this trap
-\LibreNMS\Snmptrap\Dispatcher::handle(new \LibreNMS\Snmptrap\Trap($text));
+\LibreNMS\Snmptrap\Dispatcher::handle($trap);

@@ -14,7 +14,14 @@
 */
 
 function show_device_group($device_group_id) {
-    $device_group_name = DB::table('device_groups')->where('id', $device_group_id)->value('name') ?? 'Group not found';
+    // No group selected (e.g. /devices/format=graph_bits/): show no group heading at all.
+    if (empty($device_group_id)) {
+        return;
+    }
+
+    $device_group_name = $device_group_id == 'none'
+        ? ''
+        : (DB::table('device_groups')->where('id', $device_group_id)->value('name') ?? 'Group not found');
     ?>
     <div class="panel-heading">
         <span class="devices-font-bold">
@@ -220,7 +227,7 @@ if ($format == 'graph') {
         $where = substr($where, 0, strlen($where) - 3);
         $where .= ' )';
     }
-    show_device_group($vars['group']);
+    show_device_group($vars['group'] ?? 0);
 
     $query = 'SELECT * FROM `devices` LEFT JOIN `locations` ON `devices`.`location_id` = `locations`.`id` WHERE 1';
 

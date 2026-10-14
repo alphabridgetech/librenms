@@ -15,7 +15,8 @@ class RrdBackupManual extends Command
      */
     protected $signature = 'rrd:backup-manual 
         {--destination=local : The destination for the backup (local, external, network)} 
-        {--retention= : Days of backups to retain}';
+        {--retention= : Days of backups to retain}
+        {--type=manual : auto or manual, used as the file name prefix}';
 
     /**
      * The console command description.
@@ -63,7 +64,8 @@ class RrdBackupManual extends Command
         $this->flushRrdCached();
 
         // 4. Resolve Base Target Path
-        $filename = "rrd_backup_" . now()->format('Y-m-d_H-i-s') . ".tar.gz";
+        $type = $this->option('type') === 'auto' ? 'auto' : 'manual';
+        $filename = "{$type}_rrd_backup_" . now()->format('Y-m-d_H-i-s') . ".tar.gz";
         $basePath = '';
 
         switch ($destination) {
@@ -154,7 +156,7 @@ class RrdBackupManual extends Command
         if (File::exists($basePath) && File::isDirectory($basePath)) {
             $files = File::files($basePath);
             foreach ($files as $file) {
-                if (str_starts_with($file->getFilename(), 'rrd_backup_') && str_ends_with($file->getFilename(), '.tar.gz')) {
+                if (preg_match('/^(auto_|manual_)?rrd_backup_.*\.tar\.gz$/', $file->getFilename())) {
                     if ($file->getMTime() < $thresholdTime) {
                         try {
                             File::delete($file->getPathname());

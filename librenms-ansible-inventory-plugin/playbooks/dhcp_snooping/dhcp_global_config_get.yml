@@ -1,0 +1,533 @@
+## ==========================================
+# dhcp_global_config_get.yml
+# Created on Sept 19, 2026 by Vikash Kumar (vikash.kumar@alphabrige.tech).
+#
+# Copyright (c), ALPHA BRIDGE, Inc.
+# 357D, Udyog Vihar Industrial Area Phase VI, Sector 37, Gurugram, Haryana.
+#
+# All rights reserved.
+#
+# This software is the confidential and proprietary information of ALPHA BRIDGE,
+# Inc. ("Confidential Information"). You shall not disclose such Confidential
+# Information and shall use it only in accordance with the terms of the
+# license agreement you entered into with ALPHA BRIDGE.
+#
+# ==========================================
+# DHCP Snooping Global Configuration - Get
+# ==========================================
+#
+# Command:
+# show running-config non-interface
+#
+# Output:
+# output/<switch_ip>_dhcp_global_config_get.yml
+#
+# ==========================================
+
+- name: Get DHCP snooping global configuration
+  hosts: alphabridge_devices
+  gather_facts: false
+
+  vars:
+    project_root: "{{ playbook_dir }}/../.."
+    output_dir: "{{ project_root }}/output"
+    tmp_dir: "{{ project_root }}/tmp"
+
+  pre_tasks:
+
+    - name: Ensure helper and output directories exist
+      ansible.builtin.file:
+        path: "{{ item }}"
+        state: directory
+        mode: '0755'
+      loop:
+        - "{{ tmp_dir }}"
+        - "{{ output_dir }}"
+
+  tasks:
+
+    # ==========================================
+    # CREATE PYTHON SSH SCRIPT
+    # ==========================================
+
+    - name: Create DHCP global configuration SSH helper
+      ansible.builtin.copy:
+        dest: "{{ tmp_dir }}/dhcp_global_config_get_exec.py"
+        mode: '0700'
+        content: |
+          #!/usr/bin/env python3
+
+          import json
+          import os
+          import re
+          import sys
+          import time
+          import paramiko
+
+          # ==========================================
+          # SWITCH CREDENTIALS
+          # ==========================================
+
+          HOST = os.environ["SWITCH_HOST"]
+          USER = os.environ["SWITCH_USER"]
+          PASSWORD = os.environ["SWITCH_PASSWORD"]
+
+          # ==========================================
+          # REGULAR EXPRESSIONS
+          # ==========================================
+
+          ANSI_RE = re.compile(
+              r"\x1b(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])"
+          )
+
+          PROMPT_RE = re.compile(
+              r"(?m)^[^\r\n\s]+[>#]\s*\Z"
+          )
+
+          ERROR_RE = re.compile(
+              r"(?im)^\s*(?:"
+              r"%\s*(?:err(?:or)?|invalid|unknown|"
+              r"unrecognized|incomplete)\b"
+              r"|error:"
+              r"|invalid (?:input|command)"
+              r"|unknown command)"
+          )
+
+          # ==========================================
+          # READ OUTPUT UNTIL SWITCH PROMPT
+          # ==========================================
+
+          def read_until_prompt(shell, timeout=30):
+
+              output = ""
+
+              deadline = time.monotonic() + timeout
+
+              while time.monotonic() < deadline:
+
+                  if shell.recv_ready():
+
+                      output += shell.recv(65535).decode(
+                          "utf-8",
+                          errors="replace"
+                      )
+
+                      cleaned = ANSI_RE.sub(
+                          "",
+                          output
+                      ).replace("\r", "")
+
+                      if PROMPT_RE.search(cleaned):
+                          return cleaned
+
+                  else:
+                      time.sleep(0.1)
+
+              raise TimeoutError(
+                  "Switch prompt not received; "
+                  "CLI output may be incomplete"
+              )
+
+          # ==========================================
+          # EXECUTE SWITCH CLI COMMAND
+          # ==========================================
+
+          def run_command(shell, command, timeout=30):
+
+              shell.send(command + "\n")
+
+              output = read_until_prompt(
+                  shell,
+                  timeout
+              )
+
+              if ERROR_RE.search(output):
+
+                  raise RuntimeError(
+                      f"Switch rejected '{command}': "
+                      f"{output.strip()}"
+                  )
+
+              return output
+
+          # ==========================================
+          # PARSE DHCP GLOBAL CONFIGURATION
+          # ==========================================
+
+          def parse_global_config(output):
+
+              lines = [
+                  line.strip()
+                  for line in output.splitlines()
+              ]
+
+              # ==========================================
+              # DHCP SNOOPING GLOBAL CONFIGURATION
+              #
+              # ip dhcp-relay snooping
+              #
+              # Present = Enable
+              # Absent  = Disable
+              # ==========================================
+
+              enabled = (
+                  "ip dhcp-relay snooping" in lines
+              )
+
+              # ==========================================
+              # FILTER PACKET PORT FROM UPPER INTERFACE
+              #
+              # ip dhcp-relay snooping upper_filter
+              #
+              # Present = Enable
+              # Absent  = Disable
+              # ==========================================
+
+              upper_filter = (
+                  "ip dhcp-relay snooping upper_filter"
+                  in lines
+              )
+
+              # ==========================================
+              # UPDATE INTERVAL
+              #
+              # Example:
+              # ip dhcp-relay snooping write-time 50
+              #
+              # Result: 50
+              # ==========================================
+
+              interval_re = re.compile(
+                  r"^ip dhcp-relay snooping "
+                  r"write-time\s+(\d+)$"
+              )
+
+              # ==========================================
+              # OPTION82 INFORMATION FORMAT
+              #
+              # Example:
+              # ip dhcp-relay snooping information
+              # option format hw-type
+              #
+              # Result: hw-type
+              # ==========================================
+
+              format_re = re.compile(
+                  r"^ip dhcp-relay snooping "
+                  r"information option format\s+(\S+)$"
+              )
+
+              # ==========================================
+              # EXTRACT UPDATE INTERVAL
+              # ==========================================
+
+              intervals = {
+                  int(m.group(1))
+                  for line in lines
+                  if (m := interval_re.fullmatch(line))
+              }
+
+              # ==========================================
+              # EXTRACT OPTION82 FORMAT
+              # ==========================================
+
+              formats = {
+                  m.group(1)
+                  for line in lines
+                  if (m := format_re.fullmatch(line))
+              }
+
+              # ==========================================
+              # VALIDATE CONFLICTING VALUES
+              # ==========================================
+
+              if len(intervals) > 1 or len(formats) > 1:
+
+                  raise ValueError(
+                      "Conflicting DHCP snooping "
+                      "global configuration values"
+                  )
+
+              # ==========================================
+              # VALIDATE WRITE-TIME FORMAT
+              # ==========================================
+
+              if any(
+                  line.startswith(
+                      "ip dhcp-relay snooping write-time"
+                  )
+                  and not interval_re.fullmatch(line)
+                  for line in lines
+              ):
+
+                  raise ValueError(
+                      "Malformed DHCP snooping "
+                      "write-time configuration"
+                  )
+
+              # ==========================================
+              # VALIDATE OPTION82 FORMAT
+              # ==========================================
+
+              if any(
+                  line.startswith(
+                      "ip dhcp-relay snooping "
+                      "information option format"
+                  )
+                  and not format_re.fullmatch(line)
+                  for line in lines
+              ):
+
+                  raise ValueError(
+                      "Malformed DHCP snooping "
+                      "information format configuration"
+                  )
+
+              # ==========================================
+              # RETURN REQUIRED OUTPUT FIELDS
+              # ==========================================
+
+              return {
+
+                  "DHCP Snooping Global configuration":
+                      "Enable" if enabled else "Disable",
+
+                  "Update Interval To Save the Port Binding Relationship":
+                      next(iter(intervals))
+                      if intervals else None,
+
+                  "Filter Packet Port From Upper Interface":
+                      "Enable" if upper_filter
+                      else "Disable",
+
+                  "Option82 Information Format":
+                      next(iter(formats))
+                      if formats else None
+
+              }
+
+          # ==========================================
+          # SSH INITIALIZATION
+          # ==========================================
+
+          ssh = None
+          shell = None
+
+          try:
+
+              ssh = paramiko.SSHClient()
+
+              ssh.set_missing_host_key_policy(
+                  paramiko.AutoAddPolicy()
+              )
+
+              # ==========================================
+              # SSH CONNECTION
+              # ==========================================
+
+              ssh.connect(
+                  HOST,
+                  username=USER,
+                  password=PASSWORD,
+                  look_for_keys=False,
+                  allow_agent=False,
+                  timeout=10,
+                  auth_timeout=10,
+                  banner_timeout=10
+              )
+
+              shell = ssh.invoke_shell()
+
+              # ==========================================
+              # INITIAL PROMPT
+              # ==========================================
+
+              initial = read_until_prompt(
+                  shell,
+                  timeout=10
+              )
+
+              # ==========================================
+              # ENABLE MODE
+              # ==========================================
+
+              if initial.rstrip().endswith(">"):
+
+                  enabled_output = run_command(
+                      shell,
+                      "enable",
+                      timeout=10
+                  )
+
+                  if not enabled_output.rstrip().endswith("#"):
+
+                      raise RuntimeError(
+                          "Could not enter privileged EXEC mode"
+                      )
+
+              elif not initial.rstrip().endswith("#"):
+
+                  raise RuntimeError(
+                      "Unrecognized switch prompt"
+                  )
+
+              # ==========================================
+              # DISABLE PAGING
+              # ==========================================
+
+              run_command(
+                  shell,
+                  "terminal length 0",
+                  timeout=10
+              )
+
+              # ==========================================
+              # SHOW RUNNING-CONFIG NON-INTERFACE
+              # ==========================================
+
+              output = run_command(
+                  shell,
+                  "show running-config non-interface",
+                  timeout=60
+              )
+
+              # ==========================================
+              # VALIDATE RUNNING CONFIG OUTPUT
+              # ==========================================
+
+              if not re.search(
+                  r"(?im)^\s*(?:"
+                  r"Current configuration\s*:"
+                  r"|Building configuration"
+                  r"|!version\b)",
+                  output
+              ):
+
+                  raise RuntimeError(
+                      "Unrecognized running-config output; "
+                      "cannot determine status"
+                  )
+
+              # ==========================================
+              # PARSE RESULT
+              # ==========================================
+
+              result = {
+
+                  "ip": HOST,
+
+                  **parse_global_config(output),
+
+                  "status": "success"
+
+              }
+
+              # ==========================================
+              # RETURN JSON
+              # ==========================================
+
+              print(json.dumps(result))
+
+          # ==========================================
+          # EXCEPTION HANDLING
+          # ==========================================
+
+          except Exception as exc:
+
+              print(json.dumps({
+
+                  "ip": HOST,
+
+                  "status": "failed",
+
+                  "error": str(exc)
+
+              }))
+
+              sys.exit(1)
+
+          # ==========================================
+          # CLOSE SSH CONNECTION
+          # ==========================================
+
+          finally:
+
+              if shell is not None:
+                  shell.close()
+
+              if ssh is not None:
+                  ssh.close()
+
+    # ==========================================
+    # EXECUTE PYTHON SCRIPT
+    # ==========================================
+
+    - name: Execute DHCP global configuration helper
+      ansible.builtin.command:
+        argv:
+          - "{{ project_root }}/bin/python3"
+          - "{{ tmp_dir }}/dhcp_global_config_get_exec.py"
+      environment:
+        SWITCH_HOST: "{{ ansible_host }}"
+        SWITCH_USER: "{{ ansible_user }}"
+        SWITCH_PASSWORD: "{{ ansible_password }}"
+      register: dhcp_raw
+      changed_when: false
+      failed_when: false
+      no_log: true
+
+    # ==========================================
+    # CHECK PYTHON SCRIPT OUTPUT
+    # ==========================================
+
+    - name: Check that the helper returned JSON
+      ansible.builtin.assert:
+        that:
+          - dhcp_raw.stdout | trim | length > 0
+          - dhcp_raw.stdout | trim is regex('^\\{')
+        fail_msg: >-
+          DHCP global configuration helper returned
+          no usable JSON. Check SSH and helper logs securely.
+
+    # ==========================================
+    # CONVERT JSON RESULT
+    # ==========================================
+
+    - name: Parse DHCP global configuration result
+      ansible.builtin.set_fact:
+        dhcp_result: "{{ dhcp_raw.stdout | from_json }}"
+
+    # ==========================================
+    # DISPLAY RESULT
+    # ==========================================
+
+    - name: Display DHCP global configuration result
+      ansible.builtin.debug:
+        var: dhcp_result
+
+    # ==========================================
+    # SAVE RESULT
+    # ==========================================
+
+    - name: Save DHCP global configuration report
+      ansible.builtin.copy:
+        dest: "{{ output_dir }}/{{ ansible_host }}_dhcp_global_config_get.yml"
+        mode: '0644'
+        content: "{{ dhcp_result | to_nice_yaml(sort_keys=False) }}\n"
+
+    # ==========================================
+    # FAIL IF COMMAND FAILED
+    # ==========================================
+
+    - name: Fail when DHCP global configuration retrieval failed
+      ansible.builtin.fail:
+        msg: "{{ dhcp_result.error | default('SSH helper failed (exit code ' ~ dhcp_raw.rc ~ ')') }}"
+      when: dhcp_result.status != 'success' or dhcp_raw.rc != 0
+
+    # ==========================================
+    # FINAL MESSAGE
+    # ==========================================
+
+    - name: Display saved report path
+      ansible.builtin.debug:
+        msg: "Saved output/{{ ansible_host }}_dhcp_global_config_get.yml"
