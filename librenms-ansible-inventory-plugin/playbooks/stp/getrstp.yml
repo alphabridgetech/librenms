@@ -15,7 +15,7 @@
 
     project_root: "{{ playbook_dir }}/../.."
 
-    output_dir: "{{ project_root }}/playbooks/stp/output"
+    output_dir: "{{ project_root }}/output"
     temp_dir: "{{ project_root }}/tmp"
 
     python_script: "{{ temp_dir }}/getrstp.py"

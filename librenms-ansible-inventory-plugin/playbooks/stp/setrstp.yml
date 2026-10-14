@@ -19,9 +19,9 @@
 
     project_root: "{{ playbook_dir }}/../.."
 
-    output_dir: "{{ project_root }}/../../output"
+    output_dir: "{{ project_root }}/output"
 
-    tmp_dir: "{{ project_root }}/../../tmp"
+    tmp_dir: "{{ project_root }}/tmp"
 
   tasks:
 

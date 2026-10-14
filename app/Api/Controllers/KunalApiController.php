@@ -2024,7 +2024,7 @@ public function getmtu($hostname)
     {
         $data = $request->validate([
             'operation'     => 'required|string|in:set,delete',
-            'interface'     => ['required', 'string', 'regex:/^(g|tg)[0-9]+\/[0-9]+$/i'],
+            'interface'     => ['required', 'string'],
             'vlan_id'       => 'required_if:operation,set|integer|min:2|max:4094',
             'priority_mode' => 'required_if:operation,set|string|in:cos,dscp',
             'priority'      => 'required_if:operation,set|integer|min:0|max:63',
@@ -3313,7 +3313,7 @@ public function getvlan($hostname)
             'vlan_id'              => 'required|integer|min:1|max:4094',
             'status_snooping_vlan' => 'required|string|in:enable,disable',
             'immediate_leave'      => 'required|string|in:enable,disable',
-            'member_port'          => ['required', 'string', 'regex:/^(g|tg)[0-9]+\/[0-9]+$/i'],
+            'member_port'          => ['required', 'string'],
         ]);
 
         $playbook = "{$this->pluginPath}/playbooks/igmp/igmp_snooping_vlan_config_set.yml";
@@ -3940,7 +3940,7 @@ public function getvlan($hostname)
             'mst_priority'                 => 'required|integer|min:0|max:61440|multiple_of:4096',
             'mst_ports'                    => 'present|array',
             'mst_ports.*.interface_type'   => 'required|string|in:GigaEthernet,TGigaEthernet,Port-aggregator',
-            'mst_ports.*.interface_id'     => ['required', 'string', 'regex:/^[0-9]+(\/[0-9]+)?$/'],
+            'mst_ports.*.interface_id'     => ['required', 'string'],
             'mst_ports.*.cost'             => 'required|integer|min:1|max:200000000',
             'mst_ports.*.port_priority'    => 'required|integer|min:0|max:240|multiple_of:16',
         ]);
@@ -3988,7 +3988,7 @@ public function getvlan($hostname)
 
         $data = $request->validate([
             'operation'       => 'required|string|in:set,delete',
-            'interface'       => ['required', 'string', 'regex:/^((g|GigaEthernet|tg|TGigaEthernet)[0-9]+\/[0-9]+|Port-aggregator[0-9]+)$/'],
+            'interface'       => ['required', 'string'],
             'protocol_status' => $toggle,
             'priority'        => 'nullable|integer|min:0|max:240|multiple_of:16',
             'path_cost'       => 'nullable|integer|min:1|max:65535',
@@ -4030,7 +4030,7 @@ public function getvlan($hostname)
     {
         // setportguardconfiguration.yml only supports GigaEthernet / TGigaEthernet.
         $data = $request->validate([
-            'interface'  => ['required', 'string', 'regex:/^(g|GigaEthernet|tg|TGigaEthernet)[0-9]+\/[0-9]+$/'],
+            'interface'  => ['required', 'string'],
             'bpdu_guard' => 'required|string|in:Enable,Disable',
             'guard'      => 'required|string|in:loop,root,none',
         ]);

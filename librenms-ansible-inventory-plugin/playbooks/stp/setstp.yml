@@ -59,8 +59,8 @@
     # DIRECTORIES
     # --------------------------------------------------------
 
-    output_dir: "{{ playbook_dir }}/output"
-    temp_dir: "{{ playbook_dir }}/tmp"
+    output_dir: "{{ playbook_dir }}/../../output"
+    temp_dir: "{{ playbook_dir }}/../../tmp"
 
     # --------------------------------------------------------
     # DEVICE
