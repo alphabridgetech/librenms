@@ -1,10 +1,20 @@
 <?php
 
+use App\Console\Commands\MaintenanceCachePeeringdb;
 use App\Console\Commands\MaintenanceCleanupNetworks;
+use App\Console\Commands\MaintenanceCleanupSyslog;
+use App\Console\Commands\MaintenanceDiscoverSslCertificates;
 use App\Console\Commands\MaintenanceFetchOuis;
-use App\Jobs\PingCheck;
+use App\Console\Commands\MaintenanceFetchRSS;
+use App\Console\Commands\MaintenanceRefreshSslCertificates;
+use App\Facades\LibrenmsConfig;
+use App\Jobs\DispatchPollingWork;
+use App\Models\Eventlog;
 use Illuminate\Support\Facades\Artisan;
+use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Schedule;
+use LibreNMS\Enum\Severity;
+use LibreNMS\Util\Time;
 use Symfony\Component\Process\Process;
 
 /*
@@ -18,121 +28,9 @@ use Symfony\Component\Process\Process;
 |
 */
 
-Artisan::command('device:rename
-    {old hostname : ' . __('The existing hostname, IP, or device id') . '}
-    {new hostname : ' . __('The new hostname or IP') . '}
-', function () {
-    /** @var Illuminate\Console\Command $this */
-    (new Process([
-        base_path('renamehost.php'),
-        $this->argument('old hostname'),
-        $this->argument('new hostname'),
-    ]))->setTimeout(null)->setIdleTimeout(null)->setTty(true)->run();
-})->purpose(__('Rename a device, this can be used to change the hostname or IP of a device'));
-
-Artisan::command('update', function () {
+Artisan::command('update', function (): void {
     (new Process([base_path('daily.sh')]))->setTimeout(null)->setIdleTimeout(null)->setTty(true)->run();
 })->purpose(__('Update LibreNMS and run maintenance routines'));
-
-Artisan::command('poller:ping
-    {groups?* : ' . __('Optional List of distributed poller groups to poll') . '}
-', function () {
-    PingCheck::dispatch($this->argument('groups'));
-})->purpose(__('Check if devices are up or down via icmp'));
-
-Artisan::command('poller:discovery
-    {device spec : ' . __('Device spec to discover: device_id, hostname, wildcard, odd, even, all, new') . '}
-    {--o|os= : ' . __('Only devices with the specified operating system') . '}
-    {--t|type= : ' . __('Only devices with the specified type') . '}
-    {--m|modules= : ' . __('Specify single module to be run. Comma separate modules, submodules may be added with /') . '}
-', function () {
-    $command = [base_path('discovery.php'), '-h', $this->argument('device spec')];
-    if ($this->option('os')) {
-        $command[] = '-o';
-        $command[] = $this->option('os');
-    }
-    if ($this->option('type')) {
-        $command[] = '-t';
-        $command[] = $this->option('type');
-    }
-    if ($this->option('modules')) {
-        $command[] = '-m';
-        $command[] = $this->option('modules');
-    }
-    if (($verbosity = $this->getOutput()->getVerbosity()) >= 128) {
-        $command[] = '-d';
-        if ($verbosity >= 256) {
-            $command[] = '-v';
-        }
-    }
-    (new Process($command))->setTimeout(null)->setIdleTimeout(null)->setTty(true)->run();
-})->purpose(__('Discover information about existing devices, defines what will be polled'));
-
-Artisan::command('poller:alerts', function () {
-    $command = [base_path('alerts.php')];
-    if (($verbosity = $this->getOutput()->getVerbosity()) >= 128) {
-        $command[] = '-d';
-        if ($verbosity >= 256) {
-            $command[] = '-v';
-        }
-    }
-
-    (new Process($command))->setTimeout(null)->setIdleTimeout(null)->setTty(true)->run();
-})->purpose(__('Check for any pending alerts and deliver them via defined transports'));
-
-Artisan::command('poller:billing
-    {bill id? : ' . __('The bill id to poll') . '}
-', function () {
-    /** @var Illuminate\Console\Command $this */
-    $command = [base_path('poll-billing.php')];
-    if ($this->argument('bill id')) {
-        $command[] = '-b';
-        $command[] = $this->argument('bill id');
-    }
-
-    if (($verbosity = $this->getOutput()->getVerbosity()) >= 128) {
-        $command[] = '-d';
-        if ($verbosity >= 256) {
-            $command[] = '-v';
-        }
-    }
-    (new Process($command))->setTimeout(null)->setIdleTimeout(null)->setTty(true)->run();
-})->purpose(__('Collect billing data'));
-
-Artisan::command('poller:services
-    {device spec : ' . __('Device spec to poll: device_id, hostname, wildcard, all') . '}
-    {--x|no-data : ' . __('Do not update datastores (RRD, InfluxDB, etc)') . '}
-', function () {
-    /** @var Illuminate\Console\Command $this */
-    $command = [base_path('check-services.php')];
-    if ($this->option('no-data')) {
-        array_push($command, '-r', '-f', '-p');
-    }
-    if ($this->argument('device spec') !== 'all') {
-        $command[] = '-h';
-        $command[] = $this->argument('device spec');
-    }
-
-    if (($verbosity = $this->getOutput()->getVerbosity()) >= 128) {
-        $command[] = '-d';
-        if ($verbosity >= 256) {
-            $command[] = '-v';
-        }
-    }
-    (new Process($command))->setTimeout(null)->setIdleTimeout(null)->setTty(true)->run();
-})->purpose(__('Update LibreNMS and run maintenance routines'));
-
-Artisan::command('poller:billing-calculate
-    {--c|clear-history : ' . __('Delete all billing history') . '}
-', function () {
-    /** @var Illuminate\Console\Command $this */
-    $command = [base_path('billing-calculate.php')];
-    if ($this->option('clear-history')) {
-        $command[] = '-r';
-    }
-
-    (new Process($command))->setTimeout(null)->setIdleTimeout(null)->setTty(true)->run();
-})->purpose(__('Run billing calculations'));
 
 Artisan::command('scan
     {network?* : ' . __('CIDR notation network(s) to scan, can be ommited if \'nets\' config is set') . '}
@@ -144,7 +42,7 @@ Artisan::command('scan
     /** @var Illuminate\Console\Command $this */
     $command = [base_path('snmp-scan.py')];
 
-    if (empty($this->argument('network')) && ! \App\Facades\LibrenmsConfig::has('nets')) {
+    if (empty($this->argument('network')) && ! LibrenmsConfig::has('nets')) {
         $this->error(__('Network is required if \'nets\' is not set in the config'));
 
         return 1;
@@ -193,19 +91,66 @@ Artisan::command('scan
 })->purpose(__('Scan the network for hosts and try to add them to LibreNMS'));
 
 // mark schedule working
-Schedule::call(function () {
-    Cache::put('scheduler_working', now(), now()->addMinutes(6));
-})->everyMinute();
+Schedule::call(function (): void {
+    Cache::put('scheduler_working', now()->timestamp, now()->addMinutes(6));
+})->name('schedule operational check')->everyFiveMinutes();
+
+Schedule::when(fn (): bool => LibrenmsConfig::get('schedule_type.poller') == 'scheduler' || LibrenmsConfig::get('schedule_type.discovery') == 'scheduler')
+    ->everyTenSeconds() // DispatchPollingWork::INTERVAL
+    ->onOneServer()
+    ->job(new DispatchPollingWork);
 
 // schedule maintenance, should be after all others
-$maintenance_log_file = Config::get('log_dir') . '/maintenance.log';
-Schedule::command(MaintenanceFetchOuis::class, ['--wait'])
-    ->weeklyOn(0, '1:00')
-    ->onOneServer()
-    ->appendOutputTo($maintenance_log_file);
+$maintenance_log_file = LibrenmsConfig::get('log_dir') . '/maintenance.log';
 
-Schedule::command(MaintenanceCleanupNetworks::class, [])
-    ->weeklyOn(0, '2:00')
+Schedule::command(MaintenanceFetchOuis::class)
+    ->weeklyOn(0, Time::pseudoRandomBetween('01:00', '01:59'))
+    ->onOneServer()
+    ->appendOutputTo($maintenance_log_file)
+    ->onFailure(fn () => Eventlog::log('The scheduled command maintenance:fetch-ouis failed to run. Check the maintenance.log for details.', null, 'maintenance', Severity::Error));
+
+Schedule::command(MaintenanceCleanupNetworks::class)
+    ->weeklyOn(0, Time::pseudoRandomBetween('02:00', '02:59'))
+    ->onOneServer()
+    ->appendOutputTo($maintenance_log_file)
+    ->onFailure(fn () => Eventlog::log('The scheduled command maintenance:cleanup-networks failed to run. Check the maintenance.log for details.', null, 'maintenance', Severity::Error));
+
+Schedule::command(MaintenanceFetchRSS::class)
+    ->dailyAt(Time::pseudoRandomBetween('03:00', '03:59'))
+    ->onOneServer()
+    ->appendOutputTo($maintenance_log_file)
+    ->onFailure(fn () => Eventlog::log('The scheduled command maintenance:fetch-rss failed to run. Check the maintenance.log for details.', null, 'maintenance', Severity::Error));
+
+Schedule::command(MaintenanceCleanupSyslog::class)
+    ->hourlyAt(17)
+    ->onOneServer()
+    ->withoutOverlapping()
+    ->appendOutputTo($maintenance_log_file)
+    ->onFailure(fn () => Eventlog::log('The scheduled command maintenance:cleanup-syslog failed to run. Check the maintenance.log for details.', null, 'maintenance', Severity::Error));
+
+Schedule::command(MaintenanceDiscoverSslCertificates::class)
+    ->dailyAt(Time::pseudoRandomBetween('04:00', '04:59'))
+    ->onOneServer()
+    ->appendOutputTo($maintenance_log_file)
+    ->when(fn () => LibrenmsConfig::get('ssl_certificates.auto_discover', false))
+    ->onFailure(fn () => Eventlog::log('The scheduled command maintenance:discover-ssl-certificates failed to run. Check the maintenance.log for details.', null, 'maintenance', Severity::Error));
+
+Schedule::command(MaintenanceRefreshSslCertificates::class)
+    ->dailyAt(Time::pseudoRandomBetween('05:00', '05:59'))
+    ->onOneServer()
+    ->appendOutputTo($maintenance_log_file)
+    ->onFailure(fn () => Eventlog::log('The scheduled command maintenance:refresh-ssl-certificates failed to run. Check the maintenance.log for details.', null, 'maintenance', Severity::Error));
+
+Schedule::command(MaintenanceCachePeeringdb::class)
+    ->dailyAt(Time::pseudoRandomBetween('06:00', '06:59'))
+    ->onOneServer()
+    ->withoutOverlapping()
+    ->appendOutputTo($maintenance_log_file)
+    ->when(fn () => LibrenmsConfig::get('peeringdb.enabled'))
+    ->onFailure(fn () => Eventlog::log('The scheduled command maintenance:cache-peeringdb failed to run. Check the maintenance.log for details.', null, 'maintenance', Severity::Error));
+
+Schedule::command('queue:prune-failed', ['--hours' => 168])
+    ->dailyAt(Time::pseudoRandomBetween('07:00', '07:59'))
     ->onOneServer()
     ->appendOutputTo($maintenance_log_file);
 

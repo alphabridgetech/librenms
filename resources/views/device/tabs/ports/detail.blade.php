@@ -1,23 +1,13 @@
-<x-panel body-class="tw:p-0!">
-    <div class="tw:flex tw:items-center tw:gap-2 tw:m-3">
-        <input type="text"
-               class="form-control input-sm tw:max-w-xs"
-               placeholder="{{ __('Find interface...') }}"
-               value="{{ $request->get('search') }}"
-               x-data="{}"
-               x-on:keydown.enter="
-                 const params = new URLSearchParams(window.location.search);
-                 if ($event.target.value) { params.set('search', $event.target.value); } else { params.delete('search'); }
-                 params.delete('page');
-                 window.location.search = params.toString();
-               ">
-        @if($request->filled('search'))
-            <a href="{{ $request->fullUrlWithQuery(['search' => null, 'page' => null]) }}" class="btn btn-default btn-sm" title="{{ __('Clear filter') }}"><i class="fa fa-times"></i> {{ __('Clear') }}</a>
-        @endif
-    </div>
+<div class="tw:pb-4 tw:-mt-4">
+    <x-filter name="device.ports" :fields="$data['filterFields']"  :initial="$data['filter']" :reload="true"/>
+</div>
+
+<x-panel>
+    <x-slot:slot class="tw:p-0!">
     <table id="ports-fdb" class="table table-condensed table-hover table-striped tw:mt-1 tw:mb-0!">
         <thead>
         <tr>
+            <th width="50"><a href="{{ $request->fullUrlWithQuery(['sort' => 'index', 'order' => $data['sort'] !== 'index' ? 'asc' : $data['next_order']]) }}">{{ __('Index') }}</a></th>
             <th width="350"><a href="{{ $request->fullUrlWithQuery(['sort' => 'port', 'order' => $data['sort'] == 'port' ? $data['next_order'] : 'asc']) }} ">{{ __('Port') }}</a></th>
             <th width="100" class="tw:hidden tw:md:table-cell">{{ __('Port Groups') }}</th>
             <th width="100">{{ __('Graphs') }}</th>
@@ -49,4 +39,5 @@
                       class="tw:mx-4"></x-select>
         @endisset
     </div>
+    </x-slot:slot>
 </x-panel>

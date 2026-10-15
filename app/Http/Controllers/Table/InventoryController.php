@@ -27,14 +27,19 @@
 namespace App\Http\Controllers\Table;
 
 use App\Models\EntPhysical;
+use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Eloquent\Model;
-use Illuminate\Support\Collection;
+use Illuminate\Http\Request;
+use LibreNMS\Util\Url;
 
+/**
+ * @extends TableController<EntPhysical>
+ */
 class InventoryController extends TableController
 {
-    protected $model = EntPhysical::class;
+    protected ?string $model = EntPhysical::class;
 
-    public function rules()
+    public function rules(): array
     {
         return [
             'device' => 'nullable|int',
@@ -44,14 +49,14 @@ class InventoryController extends TableController
         ];
     }
 
-    protected function filterFields($request)
+    protected function filterFields(Request $request): array
     {
         return [
             'device_id' => 'device',
         ];
     }
 
-    protected function searchFields($request)
+    protected function searchFields(Request $request): array
     {
         return [
             'entPhysicalDescr',
@@ -63,7 +68,7 @@ class InventoryController extends TableController
         ];
     }
 
-    protected function sortFields($request)
+    protected function sortFields(Request $request): array
     {
         return [
             'device_ip' => 'device_id',
@@ -77,8 +82,10 @@ class InventoryController extends TableController
         ];
     }
 
-    protected function baseQuery($request)
+    protected function baseQuery($request): Builder|\Illuminate\Database\Query\Builder
     {
+        $this->authorize('viewAny', EntPhysical::class);
+
         $query = EntPhysical::hasAccess($request->user())
             ->with('device')
             ->select([
@@ -94,20 +101,20 @@ class InventoryController extends TableController
             ]);
 
         // apply specific field filters
-        $this->search($request->get('descr'), $query, ['entPhysicalDescr']);
-        $this->search($request->get('model'), $query, ['entPhysicalModelName']);
-        $this->search($request->get('serial'), $query, ['entPhysicalSerialNum']);
+        $this->search($request->input('descr'), $query, ['entPhysicalDescr']);
+        $this->search($request->input('model'), $query, ['entPhysicalModelName']);
+        $this->search($request->input('serial'), $query, ['entPhysicalSerialNum']);
 
         return $query;
     }
 
     /**
-     * @param  EntPhysical  $entPhysical
-     * @return array|Model|Collection
+     * @param  EntPhysical  $model
+     * @return array<string, scalar>
      */
-    public function formatItem($entPhysical)
+    public function formatItem(Model $model): array
     {
-        $device = $entPhysical->device;
+        $device = $model->device;
         $deviceIp = $device
             ? htmlspecialchars((string) ($device->overwrite_ip ?: (\LibreNMS\Util\IP::isValid($device->hostname) ? $device->hostname : $device->ip)))
             : '';
@@ -118,21 +125,20 @@ class InventoryController extends TableController
         return [
             'device_ip' => $deviceIp,
             'hostname' => $hostnameLink,
-            'mfg' => htmlspecialchars((string) ($entPhysical->entPhysicalMfgName ?: '')),
-            'descr' => htmlspecialchars((string) ($entPhysical->entPhysicalDescr ?? '')),
-            'name' => htmlspecialchars((string) ($entPhysical->entPhysicalName ?? '')),
-            'serial' => htmlspecialchars((string) ($entPhysical->entPhysicalSerialNum ?: '')),
-            'fw_rev' => htmlspecialchars((string) ($entPhysical->entPhysicalFirmwareRev ?: '')),
-            'sw_rev' => htmlspecialchars((string) ($entPhysical->entPhysicalSoftwareRev ?: '')),
+            'mfg' => htmlspecialchars((string) ($model->entPhysicalMfgName ?: '')),
+            'descr' => htmlspecialchars((string) ($model->entPhysicalDescr ?? '')),
+            'name' => htmlspecialchars((string) ($model->entPhysicalName ?? '')),
+            'model' => htmlspecialchars((string) ($model->entPhysicalModelName ?? '')),
+            'serial' => htmlspecialchars((string) ($model->entPhysicalSerialNum ?: '')),
+            'fw_rev' => htmlspecialchars((string) ($model->entPhysicalFirmwareRev ?: '')),
+            'sw_rev' => htmlspecialchars((string) ($model->entPhysicalSoftwareRev ?: '')),
         ];
     }
 
     /**
      * Get headers for CSV export
-     *
-     * @return array
      */
-    protected function getExportHeaders()
+    protected function getExportHeaders(): array
     {
         return [
             'Device IP',
@@ -150,9 +156,8 @@ class InventoryController extends TableController
      * Format a row for CSV export
      *
      * @param  EntPhysical  $entPhysical
-     * @return array
      */
-    protected function formatExportRow($entPhysical)
+    protected function formatExportRow(Model $entPhysical): array
     {
         $device = $entPhysical->device;
 

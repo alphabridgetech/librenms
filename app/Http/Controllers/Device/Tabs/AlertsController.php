@@ -26,15 +26,17 @@
 
 namespace App\Http\Controllers\Device\Tabs;
 
+use App\Models\Alert;
 use App\Models\Device;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\Gate;
 use LibreNMS\Interfaces\UI\DeviceTab;
 
 class AlertsController implements DeviceTab
 {
     public function visible(Device $device): bool
     {
-        return true;
+        return Gate::allows('viewAny', Alert::class);
     }
 
     public function slug(): string
@@ -49,7 +51,7 @@ class AlertsController implements DeviceTab
 
     public function name(): string
     {
-        return __('Alerts');
+        return __('Faults');
     }
 
     public function data(Device $device, Request $request): array

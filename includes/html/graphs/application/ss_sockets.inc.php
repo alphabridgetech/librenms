@@ -1,6 +1,6 @@
 <?php
 
-require_once 'includes/ss-shared.inc.php';
+require 'includes/ss-shared.inc.php';
 
 $allowed_sockets = $app->data['allowed_sockets'] ?? [];
 $allowed_afs = $app->data['allowed_afs'] ?? [];
@@ -29,7 +29,7 @@ foreach ($ss_section_list as $gen_type) {
                 $local_ss_socket_states_mapper = $ss_socket_states_mapper['default'];
             }
 
-            foreach ($local_ss_socket_states_mapper as $socket_state => $socket_state_clean_name) {
+            foreach ($local_ss_socket_states_mapper as $socket_state_clean_name) {
                 $rrdArray[$socket_type][$socket_state_clean_name] = [
                     'descr' => $socket_type . '_' . $socket_state_clean_name,
                 ];
@@ -43,7 +43,7 @@ foreach ($ss_section_list as $gen_type) {
             $local_ss_socket_states_mapper = $ss_socket_states_mapper['default'];
         }
 
-        foreach ($local_ss_socket_states_mapper as $socket_state => $socket_state_clean_name) {
+        foreach ($local_ss_socket_states_mapper as $socket_state_clean_name) {
             $rrdArray[$gen_type][$socket_state_clean_name] = ['descr' => $gen_type . '_' . $socket_state_clean_name];
         }
     }

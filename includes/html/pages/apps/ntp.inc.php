@@ -20,15 +20,15 @@ $components = $component->getComponents(null, $options);
 print_optionbar_start();
 
 $view_options = [
-    'all'       => 'All',
-    'error'     => 'Error',
+    'all' => 'All',
+    'error' => 'Error',
 ];
 $graph_options = [
-    'none'          => 'No Graphs',
-    'stratum'       => 'Stratum',
-    'offset'        => 'Offset',
-    'delay'         => 'Delay',
-    'dispersion'    => 'Dispersion',
+    'none' => 'No Graphs',
+    'stratum' => 'Stratum',
+    'offset' => 'Offset',
+    'delay' => 'Delay',
+    'dispersion' => 'Dispersion',
 ];
 
 $vars['view'] ??= 'all';
@@ -93,8 +93,8 @@ print_optionbar_end();
         {
             return {
                 id: "app_ntp",
-                view: '<?php echo htmlspecialchars($vars['view']); ?>',
-                graph: '<?php echo htmlspecialchars($vars['graph']); ?>',
+                view: '<?php echo htmlspecialchars((string) $vars['view']); ?>',
+                graph: '<?php echo htmlspecialchars((string) $vars['graph']); ?>',
             };
         },
         url: "ajax_table.php",

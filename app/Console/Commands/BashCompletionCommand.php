@@ -2,7 +2,6 @@
 
 namespace App\Console\Commands;
 
-use App\Models\Device;
 use Illuminate\Console\Command;
 use Illuminate\Support\Collection;
 use Illuminate\Support\Str;
@@ -39,7 +38,7 @@ class BashCompletionCommand extends Command
         $previous = getenv('COMP_PREVIOUS');
         $words = explode(' ', $line);
 
-        $command_name = isset($words[1]) ? $words[1] : $current; // handle : silliness
+        $command_name = $words[1] ?? $current; // handle : silliness
 
         if (count($words) < 3) {
             $completions = $this->completeCommand($command_name);
@@ -51,12 +50,15 @@ class BashCompletionCommand extends Command
                 $input = new StringInput(implode(' ', array_slice($words, 2)));
                 try {
                     $input->bind($command_def);
-                } catch (\RuntimeException $e) {
+                } catch (\RuntimeException) {
                     // ignore?
                 }
 
-                // check if the command can complete arguments
-                if (method_exists($command, 'completeArgument')) {
+                $optionPrevious = $this->optionPreviousFromLine($current, $previous, end($words));
+                $option = $this->optionExpectsValue($current, $optionPrevious, $command_def);
+
+                // check if the command can complete arguments (not when completing an option value)
+                if (! $option && method_exists($command, 'completeArgument')) {
                     foreach ($input->getArguments() as $name => $value) {
                         if ($current == $value) {
                             $values = $command->completeArgument($name, $value, $previous);
@@ -70,15 +72,17 @@ class BashCompletionCommand extends Command
                     }
                 }
 
-                if ($option = $this->optionExpectsValue($current, $previous, $command_def)) {
+                if ($option) {
                     $command_completions = null;
+                    [$optionPrefix, $optionCurrent] = $this->splitOptionValue($current);
                     if (method_exists($command, 'completeOptionValue')) {
-                        $command_completions = $command->completeOptionValue($option, $current);
+                        $command_completions = $command->completeOptionValue($option, $optionCurrent, $input);
                     }
 
-                    $completions = $command_completions !== null
-                        ? $command_completions
-                        : $this->completeOptionValue($option, $current);
+                    $completions = $command_completions ?? $this->completeOptionValue($option, $optionCurrent);
+                    if ($optionPrefix !== '') {
+                        $completions = $completions->map(fn ($completion) => $optionPrefix . $completion);
+                    }
                 } else {
                     $completions = new Collection();
                     if (! Str::startsWith($previous, '-')) {
@@ -142,23 +146,17 @@ class BashCompletionCommand extends Command
      * Complete a command
      *
      * @param  string  $partial
-     * @return Collection
+     * @return Collection<int, string>
      */
     private function completeCommand($partial)
     {
-        $all_commands = collect(\Artisan::all())->keys()->filter(function ($cmd) {
-            return $cmd != 'list:bash-completion';
-        });
+        $all_commands = collect(\Artisan::all())->keys()->filter(fn ($cmd) => $cmd != 'list:bash-completion');
 
-        $completions = $all_commands->filter(function ($cmd) use ($partial) {
-            return empty($partial) || Str::startsWith($cmd, $partial);
-        });
+        $completions = $all_commands->filter(fn ($cmd) => empty($partial) || Str::startsWith($cmd, $partial));
 
         // handle : silliness
         if (Str::contains($partial, ':')) {
-            $completions = $completions->map(function ($cmd) {
-                return substr($cmd, strpos($cmd, ':') + 1);
-            });
+            $completions = $completions->map(fn ($cmd) => substr((string) $cmd, strpos((string) $cmd, ':') + 1));
         }
 
         return $completions;
@@ -170,7 +168,7 @@ class BashCompletionCommand extends Command
      * @param  InputDefinition  $command
      * @param  string  $partial
      * @param  array  $prev_options  Previous words in the command
-     * @return Collection
+     * @return Collection<int, string>
      */
     private function completeOption($command, $partial, $prev_options)
     {
@@ -203,9 +201,7 @@ class BashCompletionCommand extends Command
                 })->merge($options);
         }
 
-        return $options->filter(function ($option) use ($partial) {
-            return empty($partial) || Str::startsWith($option, $partial);
-        });
+        return $options->filter(fn ($option) => empty($partial) || Str::startsWith($option, $partial));
     }
 
     private function getPreviousOptions($words)
@@ -225,18 +221,14 @@ class BashCompletionCommand extends Command
      *
      * @param  InputOption  $option
      * @param  string  $partial
-     * @return Collection
+     * @return Collection<int, string>
      */
     private function completeOptionValue($option, $partial)
     {
         if ($option && preg_match('/\[(.+)\]/', $option->getDescription(), $values)) {
             return collect(explode(',', $values[1]))
-                ->map(function ($value) {
-                    return trim($value);
-                })
-                ->filter(function ($value) use ($partial) {
-                    return empty($partial) || Str::startsWith($value, $partial);
-                });
+                ->map(fn ($value) => trim($value))
+                ->filter(fn ($value) => empty($partial) || Str::startsWith($value, $partial));
         }
 
         return new Collection();
@@ -248,24 +240,39 @@ class BashCompletionCommand extends Command
      * @param  string  $command  Name of the current command
      * @param  string  $partial
      * @param  string  $current_word
-     * @return Collection
+     * @return Collection<int, string>
      */
     private function completeArguments($command, $partial, $current_word)
     {
-        switch ($command) {
-            case 'device:remove':
-                // fall through
-            case 'device:rename':
-                $device_query = Device::select('hostname')->limit(5)->orderBy('hostname');
-                if ($partial) {
-                    $device_query->where('hostname', 'like', $partial . '%');
-                }
+        return match ($command) {
+            'help' => $this->completeCommand($current_word),
+            default => new Collection(),
+        };
+    }
 
-                return $device_query->pluck('hostname');
-            case 'help':
-                return $this->completeCommand($current_word);
-            default:
-                return new Collection();
+    /**
+     * @return array{string, string}
+     */
+    private function splitOptionValue(string $current): array
+    {
+        if (str_starts_with($current, '--') && str_contains($current, '=')) {
+            [$name, $value] = explode('=', $current, 2);
+
+            return ["$name=", $value];
         }
+
+        return ['', $current];
+    }
+
+    private function optionPreviousFromLine(string $current, string $previous, string|false $lineToken): string
+    {
+        if (is_string($lineToken) && str_starts_with($lineToken, '--') && str_contains($lineToken, '=')) {
+            [$option, $value] = explode('=', $lineToken, 2);
+            if (! str_contains($current, '=') && $current === $value) {
+                return $option;
+            }
+        }
+
+        return $previous;
     }
 }

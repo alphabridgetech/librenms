@@ -27,22 +27,25 @@
 namespace App\Http\Controllers\Device;
 
 use App\Facades\LibrenmsConfig;
-use App\Facades\Rrd;
 use App\Http\Requests\UpdateDeviceRequest;
 use App\Models\Device;
+use App\Models\DeviceGroup;
 use App\Models\PollerGroup;
 use Illuminate\Contracts\View\View;
+use Illuminate\Foundation\Auth\Access\AuthorizesRequests;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Support\Facades\DB;
 use LibreNMS\Enum\MaintenanceBehavior;
 use LibreNMS\Exceptions\HostRenameException;
-use LibreNMS\Util\File;
-use LibreNMS\Util\Number;
 
 class EditDeviceController
 {
+    use AuthorizesRequests;
+
     public function index(Device $device): View
     {
+        $this->authorize('update', $device);
+
         $types = collect(LibrenmsConfig::get('device_types'))->keyBy('type');
         if (! $types->has($device->type)) {
             $types->put($device->type, [
@@ -51,8 +54,6 @@ class EditDeviceController
                 'type' => $device->type,
             ]);
         }
-
-        [$rrd_size, $rrd_num] = File::getFolderSize(Rrd::dirFromHost($device->hostname));
 
         $alertSchedules = $device->alertSchedules()->isActive()->get();
         $isUnderMaintenance = $alertSchedules->isNotEmpty();
@@ -65,21 +66,24 @@ class EditDeviceController
         });
         $exclusive_schedule_id = $exclusiveSchedules->count() === 1 ? $exclusiveSchedules->first()->schedule_id : 0;
 
+        [$static_show, $static_groups] = DeviceGroup::where('type', 'static')->exists()
+            ? [true, $device->groups()->where('type', 'static')->pluck('name', 'id')]
+            : [false, []];
+
         return view('device.edit.device', [
             'device' => $device,
+            'show_static_groups' => $static_show,
+            'static_groups' => $static_groups,
             'types' => $types,
             'default_type' => LibrenmsConfig::getOsSetting($device->os, 'type'),
-            'parents' => $device->parents()->pluck('device_id'),
-            'devices' => Device::orderBy('hostname')->whereNot('device_id', $device->device_id)->select(['device_id', 'hostname', 'sysName'])->get(),
+            'parents' => $device->parents()->select(['devices.device_id', 'hostname', 'sysName', 'ip', 'overwrite_ip', 'display'])->get()->mapWithKeys(fn ($parent) => [$parent->device_id => $parent->displayName()]),
             'poller_groups' => PollerGroup::orderBy('group_name')->pluck('group_name', 'id'),
             'default_poller_group' => LibrenmsConfig::get('distributed_poller_group'),
             'override_sysContact_bool' => $device->getAttrib('override_sysContact_bool'),
             'override_sysContact_string' => $device->getAttrib('override_sysContact_string'),
             'maintenance' => $isUnderMaintenance,
-            'default_maintenance_behavior' => MaintenanceBehavior::from((int) LibrenmsConfig::get('alert.scheduled_maintenance_default_behavior'))->value,
+            'default_maintenance_behavior' => MaintenanceBehavior::fromConfig()->value,
             'exclusive_maintenance_id' => $exclusive_schedule_id,
-            'rrd_size' => Number::formatBi($rrd_size),
-            'rrd_num' => $rrd_num,
         ]);
     }
 
@@ -87,7 +91,11 @@ class EditDeviceController
     {
         $device->fill($request->validated());
 
-        $device->parents()->sync($request->get('parent_id', [])); // TODO avoid loops!
+        $device->parents()->sync($request->input('parent_id', [])); // TODO avoid loops!
+
+        // sync groups without removing dynamic groups
+        $dynamic_groups = $device->groups()->where('type', 'dynamic')->pluck('id')->toArray();
+        $device->groups()->sync(array_merge($dynamic_groups, $request->input('static_groups', [])));
 
 
         
@@ -109,7 +117,7 @@ class EditDeviceController
         }
         // handle sysLocation update
         if ($device->override_sysLocation) {
-            $device->setLocation($request->get('sysLocation'), true, true);
+            $device->setLocation($request->input('sysLocation'), true, true);
             $device->location?->save();
         } elseif ($device->isDirty('override_sysLocation')) {
             // no longer overridden, clear location
@@ -117,9 +125,9 @@ class EditDeviceController
         }
 
         // check if sysContact is overridden
-        if ($request->get('override_sysContact')) {
+        if ($request->input('override_sysContact')) {
             $device->setAttrib('override_sysContact_bool', true);
-            $device->setAttrib('override_sysContact_string', (string) $request->get('override_sysContact_string'));
+            $device->setAttrib('override_sysContact_string', (string) $request->input('override_sysContact_string'));
         } else {
             $device->forgetAttrib('override_sysContact_bool');
         }
@@ -143,7 +151,7 @@ class EditDeviceController
             toast()->error($e->getMessage());
         }
 
-        return response()->redirectToRoute('device', ['device' => $device->device_id, 'edit']);
+        return response()->redirectToRoute('device.edit', $device->device_id);
     }
 
     private function generateInventoryYaml($hostname, $ip, $username, $password, $community)

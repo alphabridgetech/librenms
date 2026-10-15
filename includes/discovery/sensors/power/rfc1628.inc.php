@@ -1,5 +1,8 @@
 <?php
 
+use Illuminate\Support\Facades\Log;
+use LibreNMS\Enum\SensorType;
+
 echo 'RFC1628 ';
 
 $output_power = snmpwalk_group($device, 'upsOutputPower', 'UPS-MIB');
@@ -9,14 +12,21 @@ foreach ($output_power as $index => $data) {
     if (count($output_power) > 1) {
         $descr .= " Phase $index";
     }
-    if (is_array($data['upsOutputPower'])) {
-        $data['upsOutputPower'] = $data['upsOutputPower'][0];
+    $outputPowerValue = $data['upsOutputPower'] ?? null;
+    if (is_array($outputPowerValue)) {
+        $outputPowerValue = $outputPowerValue[0];
         $pwr_oid .= '.0';
+    }
+
+    if (! is_numeric($outputPowerValue)) {
+        Log::debug("skipped $descr: $outputPowerValue is not numeric");
+
+        continue;
     }
 
     discover_sensor(
         null,
-        'power',
+        SensorType::Power,
         $device,
         $pwr_oid,
         300 + $index,
@@ -28,7 +38,7 @@ foreach ($output_power as $index => $data) {
         null,
         null,
         null,
-        $data['upsOutputPower']
+        $outputPowerValue
     );
 }
 
@@ -39,14 +49,21 @@ foreach ($input_power as $index => $data) {
     if (count($input_power) > 1) {
         $descr .= " Phase $index";
     }
-    if (is_array($data['upsInputTruePower'])) {
-        $data['upsInputTruePower'] = $data['upsInputTruePower'][0];
+    $trupInputPowerValue = $data['upsInputTruePower'] ?? null;
+    if (is_array($trupInputPowerValue)) {
+        $trupInputPowerValue = $trupInputPowerValue[0];
         $pwr_oid .= '.0';
+    }
+
+    if (! is_numeric($trupInputPowerValue)) {
+        Log::debug("skipped $descr: $trupInputPowerValue is not numeric");
+
+        continue;
     }
 
     discover_sensor(
         null,
-        'power',
+        SensorType::Power,
         $device,
         $pwr_oid,
         100 + $index,
@@ -58,7 +75,7 @@ foreach ($input_power as $index => $data) {
         null,
         null,
         null,
-        $data['upsInputTruePower']
+        $trupInputPowerValue
     );
 }
 
@@ -69,14 +86,21 @@ foreach ($bypass_power as $index => $data) {
     if (count($bypass_power) > 1) {
         $descr .= " Phase $index";
     }
-    if (is_array($data['upsBypassPower'])) {
-        $data['upsBypassPower'] = $data['upsBypassPower'][0];
+    $bypassPowerValue = $data['upsBypassPower'] ?? null;
+    if (is_array($bypassPowerValue)) {
+        $bypassPowerValue = $bypassPowerValue[0];
         $pwr_oid .= '.0';
+    }
+
+    if (! is_numeric($bypassPowerValue)) {
+        Log::debug("skipped $descr: $bypassPowerValue is not numeric");
+
+        continue;
     }
 
     discover_sensor(
         null,
-        'power',
+        SensorType::Power,
         $device,
         $pwr_oid,
         200 + $index,
@@ -88,7 +112,7 @@ foreach ($bypass_power as $index => $data) {
         null,
         null,
         null,
-        $data['upsBypassPower']
+        $bypassPowerValue
     );
 }
 

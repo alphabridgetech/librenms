@@ -16,11 +16,12 @@
 
         <div class="row">
             <div class="col-sm-6 col-sm-offset-2 tw:justify-between tw:flex tw:flex-wrap">
-                <form id="delete_host" name="delete_host" method="post" action="delhost/" role="form" class="tw:inline-block">
-                    @csrf
-                    <input type="hidden" name="id" value="{{ $device->device_id }}">
-                    <button type="submit" class="btn btn-danger" name="Submit"><i class="fa fa-trash"></i> {{ __('device.edit.delete_device') }}</button>
-                </form>
+                @can('delete', $device)
+                    <a href="{{ route('device.delete.confirm', ['device' => $device->device_id]) }}"
+                       class="btn btn-danger tw:inline-block">
+                        <i class="fa fa-trash"></i> {{ __('device.edit.delete_device') }}
+                    </a>
+                @endcan
 
                 @if(LibrenmsConfig::get('enable_clear_discovery') && ! $device->snmp_disable)
                     <button type="submit" id="rediscover" data-device_id="{{ $device->device_id }}"
@@ -48,7 +49,7 @@
             <div class="form-group" data-toggle="tooltip" data-container="body" data-placement="bottom" title="{{ __('device.edit.display_title', ['sysName' => $device->sysName]) }}" >
                 <label for="edit-display-input" class="col-sm-2 control-label" >{{ __('device.edit.display_name') }}</label>
                 <div class="col-sm-6">
-                    <input type="text" id="edit-display-input" name="display" class="form-control" placeholder="{{ __('device.edit.system_default') }}" value="{{ old('display', $device->display) }}">
+                    <input type="text" id="edit-display-input" name="display_template" class="form-control" placeholder="{{ __('device.edit.system_default') }}" value="{{ old('display_template', $device->display_template) }}">
                 </div>
             </div>
 
@@ -93,12 +94,25 @@
                 </div>
             </div>
 
+            @if($show_static_groups)
+                <div class="form-group">
+                    <label for="static_groups" class="col-sm-2 control-label">{{ __('device.edit.static_groups') }}</label>
+                    <div class="col-sm-6">
+                        <select id="static_groups" name="static_groups[]" class="form-control" multiple style="width: 100%">
+                            @foreach($static_groups as $group_id => $group_name)
+                                <option value="{{ $group_id }}" selected>{{ $group_name }}</option>
+                            @endforeach
+                        </select>
+                    </div>
+                </div>
+            @endif
+
             <div class="form-group">
                 <label for="sysLocation" class="col-sm-2 control-label">{{ __('device.edit.override_sysLocation') }}</label>
                 <div class="col-sm-6">
                     <input onChange="edit.sysLocation.disabled=!edit.override_sysLocation.checked; edit.sysLocation.select()"
                            type="checkbox" name="override_sysLocation" data-size="small"
-                            {{ old('override_sysLocation', $device->override_sysLocation) ? 'checked' : '' }}
+                        {{ old('override_sysLocation', $device->override_sysLocation) ? 'checked' : '' }}
                     />
                 </div>
             </div>
@@ -107,7 +121,7 @@
                 <div class="col-sm-6">
                     <input id="sysLocation" name="sysLocation" class="form-control"
                            {{ old('override_sysLocation', $device->override_sysLocation) ? '' : 'disabled' }}
-                             value="{{ old('sysLocation', $device->location?->location) }}" />
+                           value="{{ old('sysLocation', $device->location?->location) }}" />
                 </div>
             </div>
 
@@ -116,7 +130,7 @@
                 <div class="col-sm-6">
                     <input onChange="edit.override_sysContact_string.disabled=!edit.override_sysContact.checked"
                            type="checkbox" id="override_sysContact" name="override_sysContact" data-size="small"
-                            {{ old('override_sysContact', $override_sysContact_bool) ? 'checked' : '' }}
+                        {{ old('override_sysContact', $override_sysContact_bool) ? 'checked' : '' }}
                     />
                 </div>
             </div>
@@ -137,11 +151,8 @@
                 <label for="parent_id" class="col-sm-2 control-label">{{ __('device.edit.depends_on') }}</label>
                 <div class="col-sm-6">
                     <select multiple name="parent_id[]" id="parent_id" class="form-control" style="width: 100%">
-                        <option value="0" {{ empty($parents) ? 'selected' : '' }}>{{ __('device.edit.none') }}</option>
-                        @foreach ($devices as $dev)
-                            <option value="{{ $dev->device_id }}" {{ $parents->contains($dev->device_id) ? 'selected' : '' }}>
-                                {{ $dev->hostname }} ({{ $dev->sysName }})
-                            </option>
+                        @foreach ($parents as $parent_id => $parent_display)
+                            <option value="{{ $parent_id }}" selected>{{ $parent_display }}</option>
                         @endforeach
                     </select>
                 </div>
@@ -167,7 +178,7 @@
                 <label for="disabled" class="col-sm-2 control-label">{{ __('device.edit.disable_polling_alerting') }}</label>
                 <div class="col-sm-6">
                     <input name="disabled" type="checkbox" id="disabled" value="1" data-size="small"
-                       {{ old('disabled', $device->disabled) ? 'checked' : '' }}
+                        {{ old('disabled', $device->disabled) ? 'checked' : '' }}
                     />
                 </div>
             </div>
@@ -175,15 +186,12 @@
             <div class="form-group">
                 <label for="maintenance" class="col-sm-2 control-label"></label>
                 <div class="col-sm-6">
-                    <div id="app">
-                        <maintenance-mode
-                            :device-id="{{ $device->device_id }}"
-                            device-name="{{ $device->displayName() }}"
-                            :maintenance-id="{{ $exclusive_maintenance_id }}"
-                            :default-maintenance-behavior="{{ $default_maintenance_behavior }}"
-                            :maintenance="{{ $maintenance ? 'true' : 'false' }}"
-                        ></maintenance-mode>
-                    </div>
+                    <x-device.maintenance-mode
+                        :device="$device"
+                        :maintenance="$maintenance"
+                        :maintenance-id="$exclusive_maintenance_id"
+                        :default-behavior="$default_maintenance_behavior"
+                    />
                 </div>
             </div>
 
@@ -191,7 +199,7 @@
                 <label for="disable_notify" class="col-sm-2 control-label">{{ __('device.edit.disable_alerting') }}</label>
                 <div class="col-sm-6">
                     <input id="disable_notify" type="checkbox" name="disable_notify" data-size="small"
-                       {{ old('disable_notify', $device->disable_notify) ? 'checked' : '' }}
+                        {{ old('disable_notify', $device->disable_notify) ? 'checked' : '' }}
                     />
                 </div>
             </div>
@@ -199,7 +207,7 @@
                 <label for="ignore" class="col-sm-2 control-label" title="{{ __('device.edit.ignore_alert_tag_title') }}">{{ __('device.edit.ignore_alert_tag') }}</label>
                 <div class="col-sm-6">
                     <input name="ignore" type="checkbox" id="ignore" value="1" data-size="small"
-                       {{ old('ignore', $device->ignore) ? 'checked' : '' }}
+                        {{ old('ignore', $device->ignore) ? 'checked' : '' }}
                     />
                 </div>
             </div>
@@ -207,7 +215,7 @@
                 <label for="ignore_status" class="col-sm-2 control-label" title="{{ __('device.edit.ignore_device_status_title') }}">{{ __('device.edit.ignore_device_status') }}</label>
                 <div class="col-sm-6">
                     <input name="ignore_status" type="checkbox" id="ignore_status" value="1" data-size="small"
-                       {{ old('ignore_status', $device->ignore_status) ? 'checked' : '' }}
+                        {{ old('ignore_status', $device->ignore_status) ? 'checked' : '' }}
                     />
                 </div>
             </div>
@@ -221,12 +229,9 @@
         <br />
         <div class="panel panel-default">
             <div class="panel-heading">
-                @if($rrd_num)
-                {{ __('device.edit.size_on_disk') }}: <b>{{ $rrd_size }}</b> in <b>{{ $rrd_num }}</b> {{ __('device.edit.rrd_files') }} |
-                @endif
-                {{ __('device.edit.last_polled') }}: <b>{{ $device->last_polled }}</b>
+                {{ __('device.edit.last_polled') }}: <b>{{ $device->last_polled ? \LibreNMS\Util\Time::format($device->last_polled, 'byminute') : $device->last_polled }}</b>
                 @if($device->last_discovered)
-                    | {{ __('device.edit.last_discovered') }}: <b>{{ $device->last_discovered }}</b>
+                    | {{ __('device.edit.last_discovered') }}: <b>{{ $device->last_discovered ? \LibreNMS\Util\Time::format($device->last_discovered, 'byminute') : $device->last_discovered }}</b>
                 @endif
             </div>
         </div>
@@ -235,6 +240,8 @@
 
 @push('scripts')
     <script>
+        init_select2('#parent_id', 'device', {exclude: {{ $device->device_id }}}, null, '{{ __('device.edit.none') }}');
+        init_select2('#static_groups', 'device-group', {type: 'static'}, null, '{{ __('device.edit.none') }}');
         const defaultType = '{{ $default_type }}';
         function templateTypeSelection(option) {
             if (!option.id) { // placeholder
@@ -282,23 +289,25 @@
             }
         });
         $("#rediscover").on("click", function() {
-                fetch('{{ route('device.rediscover', [$device->device_id]) }}', {
-                    method: 'POST',
-                    headers: {
-                        'X-CSRF-TOKEN': document.querySelector('meta[name=\'csrf-token\']').content
+            fetch('{{ route('device.rediscover', [$device->device_id]) }}', {
+                method: 'POST',
+                headers: {
+                    'X-CSRF-TOKEN': document.querySelector('meta[name=\'csrf-token\']').content
+                }
+            })
+                .then(r => r.json())
+                .then(d => {
+                    if (d.discovery_pending) {
+                        window.dispatchEvent(new CustomEvent('device-discovery-pending'));
+                    } else {
+                        toastr[d.status === 'ok' ? 'success' : 'error'](d.message);
                     }
                 })
-                    .then(r => r.json())
-                    .then(d => toastr[d.status === 'ok' ? 'success' : 'error'](d.message))
-                    .catch(() => toastr.error('An error occurred setting this device to be rediscovered'));
+                .catch(() => toastr.error('An error occurred setting this device to be rediscovered'));
         });
 
         function toggleHostnameEdit() {
             document.getElementById('edit-hostname-input').disabled = ! document.getElementById('edit-hostname-input').disabled;
         }
-        $('#parent_id').select2({
-            width: 'resolve'
-        });
     </script>
-    @vuei18n
 @endpush

@@ -26,6 +26,7 @@
 
 namespace App;
 
+use App\Events\SettingChanged;
 use App\Models\Callback;
 use App\Models\GraphType;
 use Exception;
@@ -41,6 +42,7 @@ use Symfony\Component\Yaml\Yaml;
 
 class ConfigRepository
 {
+    /** @var array<string, mixed> */
     private array $config;
 
     /**
@@ -48,8 +50,19 @@ class ConfigRepository
      *
      * return &array
      */
-    public function __construct()
+    public function __construct(private readonly bool $loadUserConfiguration = true)
     {
+        if (! $this->loadUserConfiguration) {
+            $this->config = [];
+            $this->loadPreUserConfigDefaults();
+            $this->loadAllOsDefinitions();
+            $this->loadPostUserConfigDefaults();
+
+            $this->loadRuntimeSettings();
+
+            return;
+        }
+
         // load config settings that can be cached
         $cache_ttl = config('librenms.config_cache_ttl');
         $this->config = Cache::driver($cache_ttl == 0 ? 'null' : 'file')->remember('librenms-config', $cache_ttl, function () {
@@ -71,7 +84,7 @@ class ConfigRepository
     /**
      * Get the config setting definitions
      *
-     * @return array
+     * @return array<string, array<string, mixed>>
      */
     public function getDefinitions(): array
     {
@@ -81,7 +94,7 @@ class ConfigRepository
     /**
      * Load the user config from config.php
      *
-     * @param  array  $config  (this should be $this->config)
+     * @param  array<string, mixed>  $config  (this should be $this->config)
      */
     private function loadUserConfigFile(&$config): void
     {
@@ -116,7 +129,7 @@ class ConfigRepository
      * Unset a config setting
      * or multiple
      *
-     * @param  string|array  $key
+     * @param  string|array<string>  $key
      */
     public function forget($key): void
     {
@@ -128,7 +141,7 @@ class ConfigRepository
      * fall back to the global config setting prefixed by $global_prefix
      * The key must be the same for the global setting and the device setting.
      *
-     * @param  array  $device  Device array
+     * @param  array<string, mixed>  $device  Device array
      * @param  string  $key  Name of setting to fetch
      * @param  string  $global_prefix  specify where the global setting lives in the global config
      * @param  mixed  $default  will be returned if the setting is not set on the device or globally
@@ -172,8 +185,8 @@ class ConfigRepository
      * @param  string|null  $os  The os name
      * @param  string  $key  period separated config variable name
      * @param  string  $global_prefix  prefix for global setting
-     * @param  array  $default  optional array to return if the setting is not set
-     * @return array
+     * @param  array<array-key, mixed>  $default  optional array to return if the setting is not set
+     * @return array<array-key, mixed>
      */
     public function getCombined(?string $os, string $key, string $global_prefix = '', array $default = []): array
     {
@@ -240,7 +253,7 @@ class ConfigRepository
                 echo $e;
             }
 
-            if ($e instanceof QueryException && $e->getCode() !== '42S02') {
+            if ($e instanceof QueryException && $e->getCode() !== '42S02' && ! str_contains($e->getMessage(), 'no such table')) {
                 // re-throw, else Config service provider get stuck in a loop
                 // if there is an error (database not connected)
                 // unless it is table not found (migrations have not been run yet)
@@ -255,16 +268,21 @@ class ConfigRepository
     /**
      * Forget a key and all it's descendants from persistent storage.
      * This will effectively set it back to default.
-     *
-     * @param  string  $key
-     * @return int|false
      */
-    public function erase($key): bool|int
+    public function erase(string $key): bool
     {
         $this->forget($key);
         try {
-            return Models\Config::withChildren($key)->delete();
-        } catch (Exception $e) {
+            $deleted = Models\Config::withChildren($key)->delete();
+
+            if ($deleted > 0) {
+                // delete statement above doens't trigger Eloquent events
+                $this->invalidateCache();
+                event("setting.changed.$key", new SettingChanged($key, $this->get($key)));
+            }
+
+            return true;
+        } catch (Exception) {
             return false;
         }
     }
@@ -301,7 +319,7 @@ class ConfigRepository
     /**
      * Get the full configuration array
      *
-     * @return array
+     * @return array<string, mixed>
      */
     public function getAll(): array
     {
@@ -330,10 +348,10 @@ class ConfigRepository
 
         try {
             Models\Config::get(['config_name', 'config_value'])
-                ->each(function ($item) {
+                ->each(function ($item): void {
                     Arr::set($this->config, $item->config_name, $item->config_value);
                 });
-        } catch (QueryException $e) {
+        } catch (QueryException) {
             // possibly table config doesn't exist yet
         }
 
@@ -341,11 +359,14 @@ class ConfigRepository
         $this->loadGraphsFromDb($this->config);
     }
 
-    private function loadGraphsFromDb(&$config): void
+    /**
+     * @param  array<string, mixed>  $config
+     */
+    private function loadGraphsFromDb(array &$config): void
     {
         try {
             $graph_types = GraphType::all()->toArray();
-        } catch (QueryException $e) {
+        } catch (QueryException) {
             // possibly table config doesn't exist yet
             $graph_types = [];
         }
@@ -354,7 +375,7 @@ class ConfigRepository
         foreach ($graph_types as $graph) {
             $g = [];
             foreach ($graph as $k => $v) {
-                if (strpos($k, 'graph_') == 0) {
+                if (str_starts_with((string) $k, 'graph_')) {
                     // remove leading 'graph_' from column name
                     $key = str_replace('graph_', '', $k);
                 } else {
@@ -380,10 +401,6 @@ class ConfigRepository
                 Arr::set($this->config, $path, $def['default']);
             }
         }
-
-        // load macros from json
-        $macros = json_decode(file_get_contents($this->get('install_dir') . '/resources/definitions/macros.json'), true);
-        Arr::set($this->config, 'alert.macros.rule', $macros);
 
         Arr::set($this->config, 'log_dir', $this->get('install_dir') . '/logs');
         Arr::set($this->config, 'distributed_poller_name', php_uname('n'));
@@ -431,6 +448,9 @@ class ConfigRepository
         $this->deprecatedVariable('poller_modules.toner', 'poller_modules.printer-supplies');
         $this->deprecatedVariable('discovery_modules.cisco-sla', 'discovery_modules.slas');
         $this->deprecatedVariable('poller_modules.cisco-sla', 'poller_modules.slas');
+        $this->deprecatedVariable('discovery_modules.cisco-mac-accounting', 'discovery_modules.mac-accounting');
+        $this->deprecatedVariable('poller_modules.cisco-mac-accounting', 'poller_modules.mac-accounting');
+        $this->deprecatedVariable('poller_modules.ipSystemStats', 'poller_modules.ip-system-stats');
         $this->deprecatedVariable('oxidized.group', 'oxidized.maps.group');
 
         // migrate device display
@@ -442,24 +462,24 @@ class ConfigRepository
                 $display_value = '{{ $sysName_fallback }}';
             }
 
-            $this->persist('device_display_default', $display_value);
+            $this->persistDefault('device_display_default', $display_value);
         }
 
         // make sure we have full path to binaries in case PATH isn't set
         foreach (['fping', 'fping6', 'snmpgetnext', 'rrdtool', 'traceroute'] as $bin) {
             if (! is_executable($this->get($bin))) {
-                $this->persist($bin, $this->locateBinary($bin));
+                $this->persistDefault($bin, $this->locateBinary($bin));
             }
         }
 
         if (! $this->has('rrdtool_version')) {
-            $this->persist('rrdtool_version', (new Version($this))->rrdtool());
+            $this->persistDefault('rrdtool_version', (new Version($this))->rrdtool());
         }
         if (! $this->has('snmp.unescape')) {
-            $this->persist('snmp.unescape', version_compare((new Version($this))->netSnmp(), '5.8.0', '<'));
+            $this->persistDefault('snmp.unescape', version_compare((new Version($this))->netSnmp(), '5.8.0', '<'));
         }
         if (! $this->has('reporting.usage')) {
-            $this->persist('reporting.usage', (bool) Callback::get('enabled'));
+            $this->persistDefault('reporting.usage', (bool) Callback::get('enabled'));
         }
 
         // populate legacy DB credentials, just in case something external uses them.  Maybe remove this later
@@ -473,7 +493,7 @@ class ConfigRepository
             isset($_SERVER['HTTPS']) ||
             (isset($_SERVER['HTTP_X_FORWARDED_PROTO']) && $_SERVER['HTTP_X_FORWARDED_PROTO'] == 'https')
         ) {
-            $this->set('base_url', preg_replace('/^http:/', 'https:', $this->get('base_url', '')));
+            $this->set('base_url', preg_replace('/^http:/', 'https:', (string) $this->get('base_url', '')));
         }
         $this->set('base_url', Str::finish($this->get('base_url', ''), '/'));
 
@@ -487,18 +507,29 @@ class ConfigRepository
      *
      * @param  string  $key
      * @param  string  $value  value to set to key or vsprintf() format string for values below
-     * @param  array  $format_values  array of keys to send to vsprintf()
+     * @param  array<string>  $format_values  array of keys to send to vsprintf()
      */
     private function setDefault($key, $value, $format_values = []): void
     {
         if (! $this->has($key)) {
             if (is_string($value)) {
-                $format_values = array_map([$this, 'get'], $format_values);
+                $format_values = array_map($this->get(...), $format_values);
                 $this->set($key, vsprintf($value, $format_values));
             } else {
                 $this->set($key, $value);
             }
         }
+    }
+
+    private function persistDefault(string $key, mixed $value): void
+    {
+        if ($this->loadUserConfiguration) {
+            $this->persist($key, $value);
+
+            return;
+        }
+
+        $this->set($key, $value);
     }
 
     /**
@@ -526,11 +557,11 @@ class ConfigRepository
     public function locateBinary($binary): mixed
     {
         if (! Str::contains($binary, '/')) {
-            $output = `whereis -b $binary`;
-            $list = trim(substr($output, strpos($output, ':') + 1));
+            $output = shell_exec("whereis -b $binary");
+            $list = trim(substr((string) $output, strpos((string) $output, ':') + 1));
             $targets = explode(' ', $list);
             foreach ($targets as $target) {
-                if (is_executable($target)) {
+                if (is_executable($target) && ! is_dir($target)) {
                     return $target;
                 }
             }

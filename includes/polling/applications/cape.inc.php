@@ -1,6 +1,7 @@
 <?php
 
 use App\Models\Eventlog;
+use Illuminate\Support\Facades\Log;
 use LibreNMS\Enum\Severity;
 use LibreNMS\Exceptions\JsonAppException;
 use LibreNMS\RRD\RrdDefinition;
@@ -9,7 +10,7 @@ $name = 'cape';
 try {
     $returned = json_app_get($device, $name, 1)['data'];
 } catch (JsonAppException $e) {
-    echo PHP_EOL . $name . ':' . $e->getCode() . ':' . $e->getMessage() . PHP_EOL;
+    Log::info($name . ':' . $e->getCode() . ':' . $e->getMessage());
     update_application($app, $e->getCode() . ':' . $e->getMessage(), []); // Set empty metrics and error message
 
     return;
@@ -755,7 +756,7 @@ foreach ($returned['pkg_stats'] as $pkg => $stats) {
 }
 
 // zero any rrds for existing packages
-foreach ($current_packages as $index => $current_package) {
+foreach ($current_packages as $current_package) {
     $pkg = str_replace('pkg-dropped_files___-___-', '', $current_package);
 
     if (! isset($found_packages[$current_package])) {

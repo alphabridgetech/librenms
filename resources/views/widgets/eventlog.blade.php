@@ -14,34 +14,37 @@
     </div>
 </div>
 <script>
-$(function () {
-    var grid = $("#eventlog-{{ $id }}").bootgrid({
-        ajax: true,
-        rowCount: [50, 100, 250, -1],
-        navigation: ! {{ $hidenavigation }},
-        post: function ()
-        {
-            return {
-                device: "{{ $device }}",
-                device_group: "{{ $device_group }}",
-                eventtype: "{{ $eventtype }}"
-            };
-        },
-        url: "{{ url('/ajax/table/eventlog') }}"
+    $(function () {
+        var grid = $("#eventlog-{{ $id }}").bootgrid({
+            ajax: true,
+            rowCount: [50, 100, 250, -1],
+            navigation: ! {{ $hidenavigation }},
+            post: function ()
+            {
+                return {
+                    @if($message_filter) message: "{{ $message_filter }}", @endif
+                    @if($age) age: "{{ LibreNMS\Util\Time::durationToSeconds($age) }}", @endif
+                    device: "{{ $device }}",
+                    device_group: "{{ $device_group }}",
+                    eventtype: "{{ $eventtype }}"
+                };
+            },
+            url: "{{ url('/ajax/table/eventlog') }}"
+        });
+
+        // Telequill: auto refresh every 5 seconds
+        var refreshTimer = setInterval(function () {
+            grid.bootgrid('reload');
+        }, 5000);
+
+        $('#eventlog_container-{{ $id }}').on('refresh', function (event) {
+            grid.bootgrid('reload');
+        });
+        $('#eventlog_container-{{ $id }}').on('destroy', function (event) {
+            clearInterval(refreshTimer);
+            grid.bootgrid('destroy');
+            delete grid;
+        });
     });
 
-    // 🔥 AUTO REFRESH EVERY 5 SECONDS
-    setInterval(function () {
-        grid.bootgrid('reload');
-    }, 5000);
-
-    $('#eventlog_container-{{ $id }}').on('refresh', function () {
-        grid.bootgrid('reload');
-    });
-
-    $('#eventlog_container-{{ $id }}').on('destroy', function () {
-        grid.bootgrid('destroy');
-        delete grid;
-    });
-});
 </script>

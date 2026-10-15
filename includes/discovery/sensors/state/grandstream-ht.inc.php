@@ -23,12 +23,16 @@
  * @copyright  2025 LibreNMS
  * @author     LibreNMS Contributors
  */
-echo 'Grandstream HT: ';
+
+use Illuminate\Support\Facades\Log;
+use LibreNMS\Enum\SensorType;
+
+Log::info('Grandstream HT: ', ['nlb' => true]);
 
 $state_name = 'hookStatus';
 $states = [
-    ['value' => 0, 'generic' => 0, 'graph' => 1, 'descr' => 'On Hook'],
-    ['value' => 1, 'generic' => 0, 'graph' => 1, 'descr' => 'Off Hook'],
+    ['value' => 0, 'generic' => 0, 'descr' => 'On Hook'],
+    ['value' => 1, 'generic' => 0, 'descr' => 'Off Hook'],
 ];
 
 create_state_index($state_name, $states);
@@ -39,22 +43,23 @@ $state_lookup = array_column($states, 'value', 'descr');
 $status_oid = '.1.3.6.1.4.1.42397.1.2.2.1'; // GS-HT8XX-MIB::hookStatus
 $statuses = SnmpQuery::hideMib()->walk([
     'GS-HT8XX-MIB::hookStatus',
-])->table(2)[0][0]; // Results from a walk are hookStatus.1.0.0!
+])->values(); // Results from a walk are hookStatus.1.0.0 or hookStatus1.0!
 
 if (is_array($statuses)) {
     foreach ($statuses as $index => $entry) {
         $status = $entry;
-        $numeric_value = isset($state_lookup[$status]) ? $state_lookup[$status] : $status;
-        preg_match('/(\d+)/', $index, $matches);
-        $oid = "$status_oid.{$matches[1]}.0.0";
+        $numeric_value = $state_lookup[$status] ?? $status;
+        preg_match('/(\d+).([0\.]+)/', (string) $index, $matches);
+        $oid = "$status_oid.{$matches[1]}.{$matches[2]}";
         $descr = "Port {$matches[1]} Hook Status";
+        $state_index = "hookStatus{$matches[1]}";
 
         discover_sensor(
             null,
-            'state',
+            SensorType::State,
             $device,
             $oid,
-            $index,
+            $state_index,
             $state_name,
             $descr,
             1,
@@ -75,8 +80,8 @@ if (is_array($statuses)) {
 
 $state_name = 'regStatus';
 $states = [
-    ['value' => 0, 'generic' => 0, 'graph' => 1, 'descr' => 'Registered'],
-    ['value' => 1, 'generic' => 2, 'graph' => 1, 'descr' => 'Not Registered'],
+    ['value' => 0, 'generic' => 0, 'descr' => 'Registered'],
+    ['value' => 1, 'generic' => 2, 'descr' => 'Not Registered'],
 ];
 
 create_state_index($state_name, $states);
@@ -87,22 +92,23 @@ $state_lookup = array_column($states, 'value', 'descr');
 $status_oid = '.1.3.6.1.4.1.42397.1.2.2.2'; // GS-HT8XX-MIB::regStatus
 $statuses = SnmpQuery::hideMib()->walk([
     'GS-HT8XX-MIB::regStatus',
-])->table(2)[0][0]; // Results from a walk are regStatus.1.0.0!
+])->values(); // Results from a walk are regStatus.1.0.0 or regStatus1.0!
 
 if (is_array($statuses)) {
     foreach ($statuses as $index => $entry) {
         $status = $entry;
-        $numeric_value = isset($state_lookup[$status]) ? $state_lookup[$status] : $status;
-        preg_match('/(\d+)/', $index, $matches);
-        $oid = "$status_oid.{$matches[1]}.0.0";
+        $numeric_value = $state_lookup[$status] ?? $status;
+        preg_match('/(\d+).([0\.]+)/', (string) $index, $matches);
+        $oid = "$status_oid.{$matches[1]}.{$matches[2]}";
         $descr = "Port {$matches[1]} Reg Status";
+        $state_index = "regStatus{$matches[1]}";
 
         discover_sensor(
             null,
-            'state',
+            SensorType::State,
             $device,
             $oid,
-            $index,
+            $state_index,
             $state_name,
             $descr,
             1,

@@ -1,8 +1,9 @@
 <?php
 
 use App\Models\Eventlog;
+use LibreNMS\Util\ProgressList;
 
-echo 'MEF Links: ';
+$progress = ProgressList::start('MEF Links');
 
 /*
  * Get a list of all the known MEF Links for this host.
@@ -41,7 +42,7 @@ if (! empty($db_info_list)) {
                 // FIXME - this should loop building a query and then run the query after the loop (bad geert!)
                 dbUpdate([$property => $mef_info[$property]], 'mefinfo', '`id` = ?', [$db_info['id']]);
                 if ($db_info['mefIdent'] != null) {
-                    Eventlog::log('MEF Link : ' . $db_info['mefIdent'] . ' (' . preg_replace('/^mef/', '', $db_info[$property]) . ') -> ' . $mef_info[$property], $device['device_id']);
+                    Eventlog::log('MEF Link : ' . $db_info['mefIdent'] . ' (' . preg_replace('/^mef/', '', (string) $db_info[$property]) . ') -> ' . $mef_info[$property], $device['device_id']);
                 }
             }
         }
@@ -52,4 +53,4 @@ if (! empty($db_info_list)) {
  */
 
 unset($db_info_list, $current_mefinfo);
-echo PHP_EOL;
+$progress->end();

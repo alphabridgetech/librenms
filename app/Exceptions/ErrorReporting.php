@@ -29,6 +29,7 @@ namespace App\Exceptions;
 use App\Facades\LibrenmsConfig;
 use Illuminate\Cache\RateLimiting\Limit;
 use Illuminate\Foundation\Configuration\Exceptions;
+use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Http\Response;
 use Illuminate\Support\Str;
@@ -56,18 +57,16 @@ class ErrorReporting
 
         $exceptions->dontReportDuplicates();
         $exceptions->throttle(fn (Throwable $e) => Limit::perMinute(LibrenmsConfig::get('reporting.throttle', 30)));
-        $exceptions->reportable([$this, 'reportable']);
-        $exceptions->report([$this, 'report']);
-        $exceptions->render([$this, 'render']);
+        $exceptions->reportable($this->reportable(...));
+        $exceptions->report($this->report(...));
+        $exceptions->render($this->render(...));
 
-        Flare::determineVersionUsing(function () {
-            return \LibreNMS\Util\Version::VERSION;
-        });
+        Flare::determineVersionUsing(fn () => \LibreNMS\Util\Version::VERSION);
     }
 
     public function reportable(Throwable $e): bool
     {
-        \Log::critical('%RException: ' . get_class($e) . ' ' . $e->getMessage() . '%n @ %G' . $e->getFile() . ':' . $e->getLine() . '%n' . PHP_EOL . $e->getTraceAsString(), ['color' => true]);
+        \Log::critical('%RException: ' . $e::class . ' ' . $e->getMessage() . '%n @ %G' . $e->getFile() . ':' . $e->getLine() . '%n' . PHP_EOL . $e->getTraceAsString(), ['color' => true]);
 
         return false; // false = block default log message
     }
@@ -81,7 +80,7 @@ class ErrorReporting
         return true;
     }
 
-    public function render(Throwable $exception, Request $request): ?Response
+    public function render(Throwable $exception, Request $request): Response|JsonResponse|null
     {
         // try to upgrade generic exceptions to more specific ones
         if (! config('app.debug')) {
@@ -161,7 +160,7 @@ class ErrorReporting
     {
         // throw exceptions and deprecations in testing and non-prod when APP_DEBUG is set.
         if ($environment == 'testing' || ($environment !== 'production' && config('app.debug'))) {
-            app()->booted(function () {
+            app()->booted(function (): void {
                 config([
                     'logging.deprecations.channel' => 'deprecations_channel',
                     'logging.deprecations.trace' => true,

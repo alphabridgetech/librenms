@@ -15,6 +15,7 @@
 
 use Illuminate\Support\Arr;
 use Illuminate\Support\Str;
+use LibreNMS\Enum\SensorType;
 
 $teracom_devices = [
     // Only supported by certain models
@@ -41,14 +42,14 @@ $teracom_devices = [
 ];
 
 if (Arr::exists($teracom_devices, $device['hardware'])) {
-    $teracom_mib = 'TERACOM-' . strtoupper($device['hardware']) . '-MIB';
+    $teracom_mib = 'TERACOM-' . strtoupper((string) $device['hardware']) . '-MIB';
     $teracom_temp_value = SnmpQuery::cache()->hideMib()->get("$teracom_mib::temperatureUnit.0")->value();
     $teracom_sensorsSetup = SnmpQuery::cache()->hideMib()->walk("$teracom_mib::sensorsSetup")->table(1);
     $teracom_sensors = SnmpQuery::cache()->hideMib()->walk("$teracom_mib::sensors")->table(1);
     $teracom_temps = array_merge($teracom_sensors[0], $teracom_sensorsSetup[0]);
     foreach ($teracom_temps as $t_k => $t_v) {
         // Reformat the array to make it easier to use.
-        preg_match("/(s[\d])([\d]*)(.*)/", $t_k, $t_d);
+        preg_match("/(s[\d])([\d]*)(.*)/", (string) $t_k, $t_d);
         if ($t_d[2] == '') {
             $teracom_data[$t_d[1]][$t_d[3]] = $t_v;
         } else {
@@ -67,7 +68,7 @@ if (Arr::exists($teracom_devices, $device['hardware'])) {
             $current = $t_data[1]['Int'];
             $temp_func = ($teracom_temp_value == 1) ? 'fahrenheit_to_celsius' : null;
 
-            discover_sensor(null, 'temperature', $device, $oid, $index, 'teracom', $t_data['description'], $divisor, '1', $low_limit, null, null, $high_limit, $current, 'snmp', null, null, $temp_func);
+            discover_sensor(null, SensorType::Temperature, $device, $oid, $index, 'teracom', $t_data['description'], $divisor, '1', $low_limit, null, null, $high_limit, $current, 'snmp', null, null, $temp_func);
         }
     }
 }

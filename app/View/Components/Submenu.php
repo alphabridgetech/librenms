@@ -3,65 +3,23 @@
 namespace App\View\Components;
 
 use Illuminate\View\Component;
+use Illuminate\View\View;
 
 class Submenu extends Component
 {
-    /**
-     * The submenu title.
-     *
-     * @var string
-     */
-    public $title;
-
-    /**
-     * The submenu menu.
-     *
-     * @var string
-     */
-    public $menu;
-
-    /**
-     * The submenu device_id.
-     *
-     * @var string
-     */
-    public $device_id;
-
-    /**
-     * The submenu current_tab.
-     *
-     * @var string
-     */
-    public $current_tab;
-
-    /**
-     * The submenu selected.
-     *
-     * @var string
-     */
-    public $selected;
-
-    /**
-     * Create a new component instance.
-     *
-     * @return void
-     */
-    public function __construct($title, $menu, $deviceId, $currentTab, $selected)
-    {
-        $this->title = $title;
-        $this->menu = $menu;
-        $this->device_id = $deviceId;
-        $this->current_tab = $currentTab;
-        $this->selected = $selected;
+    public function __construct(
+        public string $title,
+        public array $menu,
+        public int $deviceId = 0,
+        public string $currentTab = '',
+        public string $selected = ''
+    ) {
     }
 
     /**
      * Determine if the given option is the current selected option.
-     *
-     * @param  string  $url
-     * @return bool
      */
-    public function isSelected($url)
+    public function isSelected(string $url): bool
     {
         // check for get parameters
         $parsed_url = parse_url($url);
@@ -81,11 +39,25 @@ class Submenu extends Component
     }
 
     /**
-     * Get the view / contents that represent the component.
-     *
-     * @return \Illuminate\View\View|string
+     * Build a device tab url, moving any query string out of the vars route parameter
      */
-    public function render()
+    public function link(string $url): string
+    {
+        $parsed_url = parse_url($url);
+        parse_str($parsed_url['query'] ?? '', $query);
+
+        return route('device', [
+            'device' => $this->deviceId,
+            'tab' => $this->currentTab,
+            'vars' => $parsed_url['path'] ?? '',
+            ...$query,
+        ]);
+    }
+
+    /**
+     * Get the view / contents that represent the component.
+     */
+    public function render(): View
     {
         return view('components.submenu');
     }

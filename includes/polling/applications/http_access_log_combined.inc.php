@@ -1,6 +1,7 @@
 <?php
 
 use App\Models\Eventlog;
+use Illuminate\Support\Facades\Log;
 use LibreNMS\Exceptions\JsonAppException;
 use LibreNMS\RRD\RrdDefinition;
 
@@ -9,7 +10,7 @@ $name = 'http_access_log_combined';
 try {
     $returned = json_app_get($device, $name, 1);
 } catch (JsonAppException $e) {
-    echo PHP_EOL . $name . ':' . $e->getCode() . ':' . $e->getMessage() . PHP_EOL;
+    Log::info($name . ':' . $e->getCode() . ':' . $e->getMessage());
     update_application($app, $e->getCode() . ':' . $e->getMessage(), []); // Set empty metrics and error message
 
     return;
@@ -130,7 +131,7 @@ $gauge_rrd_def = RrdDefinition::make()
     ->addDataset('data', 'GAUGE', 0);
 
 // process total stats, .data.totals
-foreach ($stat_vars as $key => $stat) {
+foreach ($stat_vars as $stat) {
     $var_name = 'totals_' . $stat;
     $value = $data['totals'][$stat];
     $rrd_name = ['app', $name, $app->app_id, $var_name];
@@ -144,7 +145,7 @@ foreach ($stat_vars as $key => $stat) {
 $logs = [];
 foreach ($data['logs'] as $logs_key => $log_stats) {
     $logs[] = $logs_key;
-    foreach ($stat_vars as $key => $stat) {
+    foreach ($stat_vars as $stat) {
         $var_name = 'logs___' . $logs_key . '___' . $stat;
         $value = $log_stats[$stat];
         $rrd_name = ['app', $name, $app->app_id, $var_name];

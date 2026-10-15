@@ -2,7 +2,7 @@
 // html/pages/mibsupload.inc.php
 use LibreNMS\Config;
 
-if ($_SERVER['REQUEST_METHOD'] === 'POST' && Auth::user()->hasGlobalAdmin()) {
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && \Illuminate\Support\Facades\Gate::allows('admin')) {
     $errors = [];
     $success = null;
 

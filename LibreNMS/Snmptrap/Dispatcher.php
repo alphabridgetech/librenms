@@ -78,19 +78,18 @@ class Dispatcher
         if ($logging == 'all' || ($fallback && $logging == 'unhandled')) {
             $trap->log($trap->toString($detailed));
         }
-
-        // evaluate alert rules right away so alerts and SNMP forwarding don't wait for the poller
-        $rules = new AlertRules;
-        $rules->runRules($trap->getDevice()->device_id);
-
-        // Trigger background poller for the device IP
+        // Telequill: evaluate alert rules right away so alerts and SNMP forwarding don't wait for the poller
         if ($trap->getDevice()) {
+            $rules = new AlertRules($trap->getDevice());
+            $rules->run();
+
+            // Trigger background poller for the device IP
             $deviceModel = $trap->getDevice();
             $targetIp = $deviceModel->ip ?: $deviceModel->hostname ?: $deviceModel->device_id;
-            $pollerPath = base_path('poller.php');
+            $pollerPath = base_path("poller.php");
             // snmptrapd runs as root, poll as librenms so the rrd files stay writable for the dispatcher
-            $asUser = function_exists('posix_geteuid') && posix_geteuid() === 0 ? 's6-setuidgid librenms ' : '';
-            $cmd = sprintf('%sphp %s -h %s > /dev/null 2>&1 &', $asUser, escapeshellarg($pollerPath), escapeshellarg($targetIp));
+            $asUser = function_exists("posix_geteuid") && posix_geteuid() === 0 ? "s6-setuidgid librenms " : "";
+            $cmd = sprintf("%sphp %s -h %s > /dev/null 2>&1 &", $asUser, escapeshellarg($pollerPath), escapeshellarg($targetIp));
             exec($cmd);
         }
 

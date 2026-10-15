@@ -37,8 +37,10 @@ use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\Log;
 use LibreNMS\DB\SyncsModels;
 use LibreNMS\Interfaces\Data\DataStorageInterface;
+use LibreNMS\Interfaces\Models\Keyable;
 use LibreNMS\Interfaces\Module;
 use LibreNMS\OS;
+use LibreNMS\Polling\ConnectivityHelper;
 use LibreNMS\Polling\ModuleStatus;
 use LibreNMS\RRD\RrdDefinition;
 use LibreNMS\Util\IP;
@@ -57,9 +59,9 @@ class Ospfv3 implements Module
         return ['ports', 'vrf'];
     }
 
-    public function shouldDiscover(OS $os, ModuleStatus $status): bool
+    public function shouldDiscover(OS $os, ModuleStatus $status, ConnectivityHelper $connectivity): bool
     {
-        return $status->isEnabledAndDeviceUp($os->getDevice());
+        return $status->isEnabled() && $connectivity->snmpIsAvailable();
     }
 
     /**
@@ -100,48 +102,36 @@ class Ospfv3 implements Module
         Log::info(' (Total processes: ' . $instances->count() . ')');
 
         ModuleModelObserver::observe(Ospfv3Area::class, 'Areas');
-        $ospf_areas = $instances->map(function (Ospfv3Instance $instance) {
-            return SnmpQuery::context($instance->context_name)
-                ->hideMib()->enumStrings()
-                ->walk('OSPFV3-MIB::ospfv3AreaTable')
-                ->mapTable(function ($ospf_area, $ospfv3AreaId) use ($instance) {
-                    return $this->createArea($ospfv3AreaId, $instance, $ospf_area);
-                });
-        })->flatten(); // flatten one level
+        $ospf_areas = $instances->map(fn (Ospfv3Instance $instance) => SnmpQuery::context($instance->context_name)
+            ->hideMib()->enumStrings()
+            ->walk('OSPFV3-MIB::ospfv3AreaTable')
+            ->mapTable(fn ($ospf_area, $ospfv3AreaId) => $this->createArea($ospfv3AreaId, $instance, $ospf_area)))->flatten(); // flatten one level
 
         $ospf_areas = $this->syncModels($os->getDevice(), 'ospfv3Areas', $ospf_areas);
         Log::info(' (Total areas: ' . $ospf_areas->count() . ')');
 
         ModuleModelObserver::observe(Ospfv3Port::class, 'Ports');
-        $ospf_ports = $instances->map(function (Ospfv3Instance $instance) use ($ospf_areas) {
-            return SnmpQuery::context($instance->context_name)
-                ->hideMib()->enumStrings()
-                ->walk('OSPFV3-MIB::ospfv3IfTable')
-                ->mapTable(function ($ospf_port, $ospfv3IfIndex, $ospfv3IfInstId) use ($instance, $ospf_areas) {
-                    return $this->createPort($ospfv3IfIndex, $ospfv3IfInstId, $instance, $ospf_areas, $ospf_port);
-                });
-        })->flatten(); // flatten one level
+        $ospf_ports = $instances->map(fn (Ospfv3Instance $instance) => SnmpQuery::context($instance->context_name)
+            ->hideMib()->enumStrings()
+            ->walk('OSPFV3-MIB::ospfv3IfTable')
+            ->mapTable(fn ($ospf_port, $ospfv3IfIndex, $ospfv3IfInstId) => $this->createPort($ospfv3IfIndex, $ospfv3IfInstId, $instance, $ospf_areas, $ospf_port)))->flatten(); // flatten one level
 
         $this->syncModels($os->getDevice(), 'ospfv3Ports', $ospf_ports);
         Log::info(' (Total ports: ' . $ospf_ports->count() . ')');
 
         ModuleModelObserver::observe(Ospfv3Nbr::class, 'Neighbors');
-        $ospf_neighbors = $instances->map(function (Ospfv3Instance $instance) {
-            return SnmpQuery::context($instance->context_name)
-                ->hideMib()->enumStrings()
-                ->walk('OSPFV3-MIB::ospfv3NbrTable')
-                ->mapTable(function ($ospf_nbr, $ospfv3NbrIfIndex, $ospfv3NbrIfInstId, $ospfv3NbrRtrId) use ($instance) {
-                    return $this->createNeighbor($ospfv3NbrIfIndex, $ospfv3NbrIfInstId, $ospfv3NbrRtrId, $instance, $ospf_nbr);
-                });
-        })->flatten(); // flatten one level
+        $ospf_neighbors = $instances->map(fn (Ospfv3Instance $instance) => SnmpQuery::context($instance->context_name)
+            ->hideMib()->enumStrings()
+            ->walk('OSPFV3-MIB::ospfv3NbrTable')
+            ->mapTable(fn ($ospf_nbr, $ospfv3NbrIfIndex, $ospfv3NbrIfInstId, $ospfv3NbrRtrId) => $this->createNeighbor($ospfv3NbrIfIndex, $ospfv3NbrIfInstId, $ospfv3NbrRtrId, $instance, $ospf_nbr)))->flatten(); // flatten one level
 
         $this->syncModels($os->getDevice(), 'ospfv3Nbrs', $ospf_neighbors);
         Log::info(' (Total neighbors: ' . $ospf_neighbors->count() . ')');
     }
 
-    public function shouldPoll(OS $os, ModuleStatus $status): bool
+    public function shouldPoll(OS $os, ModuleStatus $status, ConnectivityHelper $connectivity): bool
     {
-        return $status->isEnabledAndDeviceUp($os->getDevice());
+        return $status->isEnabled() && $connectivity->snmpIsAvailable();
     }
 
     /**
@@ -158,7 +148,7 @@ class Ospfv3 implements Module
 
         // go through each instance (unique context) and fetch values displayed in ui
         ModuleModelObserver::observe(Ospfv3Instance::class, 'Instances');
-        $instances->each(function (Ospfv3Instance $instance) {
+        $instances->each(function (Ospfv3Instance $instance): void {
             $instanceValues = SnmpQuery::context($instance->context_name)->enumStrings()->get([
                 'OSPFV3-MIB::ospfv3AdminStatus.0',
                 'OSPFV3-MIB::ospfv3AreaBdrRtrStatus.0',
@@ -173,55 +163,44 @@ class Ospfv3 implements Module
 
         // Areas
         ModuleModelObserver::observe(Ospfv3Area::class, 'Areas');
-        $ospf_areas = $instances->map(function (Ospfv3Instance $instance) {
-            return SnmpQuery::context($instance->context_name)
-                ->hideMib()->walk([
-                    'OSPFV3-MIB::ospfv3AreaScopeLsaCount',
-                ])->mapTable(function ($ospf_area, $ospfv3AreaId) use ($instance) {
-                    // create new without full data
-                    return $this->createArea($ospfv3AreaId, $instance, $ospf_area);
-                });
-        })->flatten();
+        $ospf_areas = $instances->map(fn (Ospfv3Instance $instance) => SnmpQuery::context($instance->context_name)
+            ->hideMib()->walk([
+                'OSPFV3-MIB::ospfv3AreaScopeLsaCount',
+            ])->mapTable(fn ($ospf_area, $ospfv3AreaId) =>
+                // create new without full data
+                $this->createArea($ospfv3AreaId, $instance, $ospf_area)))->flatten();
 
         // fill data in new areas
-        Ospfv3Area::creating([$this, 'fetchAndFillArea']);
+        $this->fillNew($device->ospfv3Areas, $ospf_areas, $this->fetchAndFillArea(...));
         $ospf_areas = $this->syncModels($device, 'ospfv3Areas', $ospf_areas);
         ModuleModelObserver::done();
 
         // Ports
         ModuleModelObserver::observe(Ospfv3Port::class, 'Ports');
-        $ospf_ports = $instances->map(function (Ospfv3Instance $instance) use ($ospf_areas) {
-            return SnmpQuery::context($instance->context_name)
-                ->hideMib()->enumStrings()
-                ->walk([
-                    'OSPFV3-MIB::ospfv3IfAdminStatus',
-                    'OSPFV3-MIB::ospfv3IfState',
-                    'OSPFV3-MIB::ospfv3IfType',
-                    'OSPFV3-MIB::ospfv3IfMetricValue',
-                    'OSPFV3-MIB::ospfv3IfAreaId',
-                ])->mapTable(function ($ospf_port, $ospfv3IfIndex, $ospfv3IfInstId) use ($instance, $ospf_areas) {
-                    return $this->createPort($ospfv3IfIndex, $ospfv3IfInstId, $instance, $ospf_areas, $ospf_port);
-                });
-        })->flatten();
+        $ospf_ports = $instances->map(fn (Ospfv3Instance $instance) => SnmpQuery::context($instance->context_name)
+            ->hideMib()->enumStrings()
+            ->walk([
+                'OSPFV3-MIB::ospfv3IfAdminStatus',
+                'OSPFV3-MIB::ospfv3IfState',
+                'OSPFV3-MIB::ospfv3IfType',
+                'OSPFV3-MIB::ospfv3IfMetricValue',
+                'OSPFV3-MIB::ospfv3IfAreaId',
+            ])->mapTable(fn ($ospf_port, $ospfv3IfIndex, $ospfv3IfInstId) => $this->createPort($ospfv3IfIndex, $ospfv3IfInstId, $instance, $ospf_areas, $ospf_port)))->flatten();
 
-        Ospfv3Port::creating([$this, 'fetchAndFillPort']);
+        $this->fillNew($device->ospfv3Ports, $ospf_ports, $this->fetchAndFillPort(...));
         $this->syncModels($device, 'ospfv3Ports', $ospf_ports);
         ModuleModelObserver::done();
 
         // Neighbors
         ModuleModelObserver::observe(Ospfv3Nbr::class, 'Neighbors');
-        $ospf_neighbors = $instances->map(function (Ospfv3Instance $instance) {
-            return SnmpQuery::context($instance->context_name)
-                ->hideMib()->enumStrings()
-                ->walk([
-                    'OSPFV3-MIB::ospfv3NbrState',
-                    'OSPFV3-MIB::ospfv3NbrAddress',
-                ])->mapTable(function ($ospf_nbr, $ospfv3NbrIfIndex, $ospfv3NbrIfInstId, $ospfv3NbrRtrId) use ($instance) {
-                    return $this->createNeighbor($ospfv3NbrIfIndex, $ospfv3NbrIfInstId, $ospfv3NbrRtrId, $instance, $ospf_nbr);
-                });
-        })->flatten();
+        $ospf_neighbors = $instances->map(fn (Ospfv3Instance $instance) => SnmpQuery::context($instance->context_name)
+            ->hideMib()->enumStrings()
+            ->walk([
+                'OSPFV3-MIB::ospfv3NbrState',
+                'OSPFV3-MIB::ospfv3NbrAddress',
+            ])->mapTable(fn ($ospf_nbr, $ospfv3NbrIfIndex, $ospfv3NbrIfInstId, $ospfv3NbrRtrId) => $this->createNeighbor($ospfv3NbrIfIndex, $ospfv3NbrIfInstId, $ospfv3NbrRtrId, $instance, $ospf_nbr)))->flatten();
 
-        Ospfv3Nbr::creating([$this, 'fetchAndFillNeighbor']);
+        $this->fillNew($device->ospfv3Nbrs, $ospf_neighbors, $this->fetchAndFillNeighbor(...));
         $this->syncModels($device, 'ospfv3Nbrs', $ospf_neighbors);
         ModuleModelObserver::done();
 
@@ -239,7 +218,7 @@ class Ospfv3 implements Module
             'neighbours' => $ospf_neighbors->count(),
         ];
 
-        $datastore->put($os->getDeviceArray(), 'ospf-statistics', ['rrd_def' => $rrd_def], $fields);
+        $datastore->put($os->getDeviceArray(), 'ospfv3-statistics', ['rrd_def' => $rrd_def], $fields);
     }
 
     public function dataExists(Device $device): bool
@@ -301,6 +280,23 @@ class Ospfv3 implements Module
     }
 
     /**
+     * Fill full data only for models that do not exist in the database yet
+     *
+     * @template T of Keyable
+     *
+     * @param  Collection<int, T>  $existing
+     * @param  Collection<int, T>  $models
+     * @param  callable(T): void  $fill
+     */
+    private function fillNew(Collection $existing, Collection $models, callable $fill): void
+    {
+        $existing_keys = $existing->map(fn (Keyable $model) => $model->getCompositeKey())->flip();
+
+        $models->reject(fn (Keyable $model) => $existing_keys->has($model->getCompositeKey()))
+            ->each(fn ($model) => $fill($model));
+    }
+
+    /**
      * create a new area model if $data is null fetch values with individual gets
      */
     private function createArea(int $ospfv3AreaId, Ospfv3Instance $instance, array $data): Ospfv3Area
@@ -336,10 +332,8 @@ class Ospfv3 implements Module
         }
 
         $ospf_port->ospfv3_area_id = $ospf_areas
-            ->firstWhere(function (Ospfv3Area $area) use ($ospf_port) {
-                return $area->context_name == $ospf_port->context_name
-                    && $area->ospfv3AreaId == $ospf_port->ospfv3IfAreaId;
-            })?->id;
+            ->firstWhere(fn (Ospfv3Area $area) => $area->context_name == $ospf_port->context_name
+                && $area->ospfv3AreaId == $ospf_port->ospfv3IfAreaId)?->id;
 
         return $ospf_port;
     }
@@ -368,7 +362,7 @@ class Ospfv3 implements Module
 
     public function fetchAndFillArea(Ospfv3Area $area): void
     {
-        $area->fill(SnmpQuery::context($area->context_name)
+        $ospf_area = SnmpQuery::context($area->context_name)
             ->hideMib()->enumStrings()->get([
                 'OSPFV3-MIB::ospfv3AreaImportAsExtern.' . $area->ospfv3AreaId,
                 'OSPFV3-MIB::ospfv3AreaSpfRuns.' . $area->ospfv3AreaId,
@@ -384,7 +378,11 @@ class Ospfv3 implements Module
                 'OSPFV3-MIB::ospfv3AreaNssaTranslatorStabInterval.' . $area->ospfv3AreaId,
                 'OSPFV3-MIB::ospfv3AreaNssaTranslatorEvents.' . $area->ospfv3AreaId,
                 'OSPFV3-MIB::ospfv3AreaTEEnabled.' . $area->ospfv3AreaId,
-            ])->valuesByIndex()[$area->ospfv3AreaId] ?? []);
+            ])->valuesByIndex()["$area->ospfv3AreaId"] ?? [];
+
+        $ospf_area['ospfv3AreaScopeLsaCksumSum'] ??= 0;
+
+        $area->fill($ospf_area);
     }
 
     public function fetchAndFillPort(Ospfv3Port $port): void
@@ -410,7 +408,11 @@ class Ospfv3 implements Module
                 "OSPFV3-MIB::ospfv3IfTEDisabled.$port->ospfv3IfIndex.$port->ospfv3IfInstId",
             ])->valuesByIndex()["$port->ospfv3IfIndex.$port->ospfv3IfInstId"] ?? [];
 
-        $ospf_port['ospfv3IfBackupDesignatedRouter'] ??= '';  // missing on some devices
+        // Missing on some devices
+        $ospf_port['ospfv3IfRtrPriority'] ??= 1;
+        $ospf_port['ospfv3IfDesignatedRouter'] ??= '';
+        $ospf_port['ospfv3IfDemand'] ??= '';
+        $ospf_port['ospfv3IfBackupDesignatedRouter'] ??= '';
 
         $port->fill($ospf_port);
         $port->port_id = (int) PortCache::getIdFromIfIndex($port->ospfv3IfIndex, $port->device_id); // this was skipped in initial poll
@@ -418,7 +420,7 @@ class Ospfv3 implements Module
 
     public function fetchAndFillNeighbor(Ospfv3Nbr $nbr): void
     {
-        $nbr->fill(SnmpQuery::context($nbr->context_name)
+        $ospf_nbr = SnmpQuery::context($nbr->context_name)
             ->hideMib()->enumStrings()->get([
                 "OSPFV3-MIB::ospfv3NbrAddressType.$nbr->ospfv3NbrIfIndex.$nbr->ospfv3NbrIfInstId.$nbr->ospfv3NbrRtrId",
                 "OSPFV3-MIB::ospfv3NbrOptions.$nbr->ospfv3NbrIfIndex.$nbr->ospfv3NbrIfInstId.$nbr->ospfv3NbrRtrId",
@@ -430,8 +432,12 @@ class Ospfv3 implements Module
                 "OSPFV3-MIB::ospfv3NbrRestartHelperStatus.$nbr->ospfv3NbrIfIndex.$nbr->ospfv3NbrIfInstId.$nbr->ospfv3NbrRtrId",
                 "OSPFV3-MIB::ospfv3NbrRestartHelperAge.$nbr->ospfv3NbrIfIndex.$nbr->ospfv3NbrIfInstId.$nbr->ospfv3NbrRtrId",
                 "OSPFV3-MIB::ospfv3NbrRestartHelperExitReason.$nbr->ospfv3NbrIfIndex.$nbr->ospfv3NbrIfInstId.$nbr->ospfv3NbrRtrId",
-            ])->valuesByIndex()["$nbr->ospfv3NbrIfIndex.$nbr->ospfv3NbrIfInstId.$nbr->ospfv3NbrRtrId"] ?? []);
+            ])->valuesByIndex()["$nbr->ospfv3NbrIfIndex.$nbr->ospfv3NbrIfInstId.$nbr->ospfv3NbrRtrId"] ?? [];
 
+        // Missing on some devices
+        $ospf_nbr['ospfv3NbrHelloSuppressed'] ??= '';
+
+        $nbr->fill($ospf_nbr);
         $nbr->port_id = PortCache::getIdFromIp($nbr->ospfv3NbrAddress, $nbr->context_name); // this was skipped in initial poll
     }
 }

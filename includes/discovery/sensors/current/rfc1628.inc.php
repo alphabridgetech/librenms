@@ -1,18 +1,20 @@
 <?php
 
+use Illuminate\Support\Facades\Log;
 use LibreNMS\Util\Number;
+use LibreNMS\Enum\SensorType;
 
 echo 'RFC1628 ';
 
-$battery_current = snmp_get($device, 'upsBatteryCurrent.0', '-OqvU', 'UPS-MIB');
+$battery_current = SnmpQuery::get('UPS-MIB::upsBatteryCurrent.0')->value();
 
 if (is_numeric($battery_current)) {
     $oid = '.1.3.6.1.2.1.33.1.2.6.0';
-    $divisor = get_device_divisor($device, $pre_cache['poweralert_serial'] ?? '', 'current', $oid);
+    $divisor = get_device_divisor($device, $pre_cache['poweralert_serial'] ?? '', SensorType::Current, $oid);
 
     discover_sensor(
         null,
-        'current',
+        SensorType::Current,
         $device,
         $oid,
         500,
@@ -31,20 +33,26 @@ if (is_numeric($battery_current)) {
 $output_current = snmpwalk_group($device, 'upsOutputCurrent', 'UPS-MIB');
 foreach ($output_current as $index => $data) {
     $oid = ".1.3.6.1.2.1.33.1.4.4.1.3.$index";
-    $divisor = get_device_divisor($device, $pre_cache['poweralert_serial'] ?? '', 'current', $oid);
+    $divisor = get_device_divisor($device, $pre_cache['poweralert_serial'] ?? '', SensorType::Current, $oid);
     $descr = 'Output';
     if (count($output_current) > 1) {
         $descr .= " Phase $index";
     }
-    if (is_array($data['upsOutputCurrent'])) {
-        $data['upsOutputCurrent'] = $data['upsOutputCurrent'][0];
+    $outputCurrentValue = $data['upsOutputCurrent'] ?? null;
+    if (is_array($outputCurrentValue)) {
+        $outputCurrentValue = $outputCurrentValue[0];
         $oid .= '.0';
     }
-    $data['upsOutputCurrent'] = Number::cast($data['upsOutputCurrent']);
+
+    if (! is_numeric($outputCurrentValue)) {
+        Log::debug("skipped $descr: $outputCurrentValue is not numeric");
+
+        continue;
+    }
 
     discover_sensor(
         null,
-        'current',
+        SensorType::Current,
         $device,
         $oid,
         $index,
@@ -56,27 +64,33 @@ foreach ($output_current as $index => $data) {
         null,
         null,
         null,
-        $data['upsOutputCurrent'] / $divisor
+        Number::cast($outputCurrentValue) / $divisor
     );
 }
 
 $input_current = snmpwalk_group($device, 'upsInputCurrent', 'UPS-MIB');
 foreach ($input_current as $index => $data) {
     $oid = ".1.3.6.1.2.1.33.1.3.3.1.4.$index";
-    $divisor = get_device_divisor($device, $pre_cache['poweralert_serial'] ?? '', 'current', $oid);
+    $divisor = get_device_divisor($device, $pre_cache['poweralert_serial'] ?? '', SensorType::Current, $oid);
     $descr = 'Input';
     if (count($input_current) > 1) {
         $descr .= " Phase $index";
     }
-    if (is_array($data['upsInputCurrent'])) {
-        $data['upsInputCurrent'] = $data['upsInputCurrent'][0];
+    $inputCurrentValue = $data['upsInputCurrent'] ?? null;
+    if (is_array($inputCurrentValue)) {
+        $inputCurrentValue = $inputCurrentValue[0];
         $oid .= '.0';
     }
-    $data['upsInputCurrent'] = Number::cast($data['upsInputCurrent']);
+
+    if (! is_numeric($inputCurrentValue)) {
+        Log::debug("skipped $descr: $inputCurrentValue is not numeric");
+
+        continue;
+    }
 
     discover_sensor(
         null,
-        'current',
+        SensorType::Current,
         $device,
         $oid,
         100 + $index,
@@ -88,27 +102,33 @@ foreach ($input_current as $index => $data) {
         null,
         null,
         null,
-        $data['upsInputCurrent'] / $divisor
+        Number::cast($inputCurrentValue) / $divisor
     );
 }
 
 $bypass_current = snmpwalk_group($device, 'upsBypassCurrent', 'UPS-MIB');
 foreach ($bypass_current as $index => $data) {
     $oid = ".1.3.6.1.2.1.33.1.5.3.1.3.$index";
-    $divisor = get_device_divisor($device, $pre_cache['poweralert_serial'] ?? '', 'current', $oid);
+    $divisor = get_device_divisor($device, $pre_cache['poweralert_serial'] ?? '', SensorType::Current, $oid);
     $descr = 'Bypass';
     if (count($bypass_current) > 1) {
         $descr .= " Phase $index";
     }
-    if (is_array($data['upsBypassCurrent'])) {
-        $data['upsBypassCurrent'] = $data['upsBypassCurrent'][0];
+    $bypassCurrentValue = $data['upsBypassCurrent'] ?? null;
+    if (is_array($bypassCurrentValue)) {
+        $bypassCurrentValue = $bypassCurrentValue[0];
         $oid .= '.0';
     }
-    $data['upsBypassCurrent'] = Number::cast($data['upsBypassCurrent']);
+
+    if (! is_numeric($bypassCurrentValue)) {
+        Log::debug("skipped $descr: $bypassCurrentValue is not numeric");
+
+        continue;
+    }
 
     discover_sensor(
         null,
-        'current',
+        SensorType::Current,
         $device,
         $oid,
         200 + $index,
@@ -120,7 +140,7 @@ foreach ($bypass_current as $index => $data) {
         null,
         null,
         null,
-        $data['upsBypassCurrent'] / $divisor
+        Number::cast($bypassCurrentValue) / $divisor
     );
 }
 

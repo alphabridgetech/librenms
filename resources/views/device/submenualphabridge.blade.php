@@ -1,4 +1,4 @@
-@extends('device.index')
+@extends('device.telequill-layout')
 
 @section('tab')
     @php

@@ -39,7 +39,6 @@ use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\Validator;
 use LibreNMS\Interfaces\UI\DeviceTab;
-use App\Models\ApiToken;
 use Illuminate\Support\Facades\File;
 use Illuminate\Database\Eloquent\ModelNotFoundException;
 
@@ -151,14 +150,7 @@ class ConfigurationController implements DeviceTab
 
     private function getUserLibreNMSToken()
     {
-        try {
-            $apiToken = ApiToken::select('token_hash')
-                ->where('user_id', Auth::user()->user_id)
-                ->firstOrFail();
-            return $apiToken->token_hash;
-        } catch (ModelNotFoundException $e) {
-            return null;
-        }
+        return \App\Services\TelequillUiToken::forCurrentUser();
     }
 
     private function portData(Device $device, Request $request): array

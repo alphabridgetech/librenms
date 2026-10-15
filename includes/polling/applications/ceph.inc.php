@@ -6,9 +6,15 @@ $name = 'ceph';
 
 if (! empty($agent_data['app'][$name])) {
     $ceph_data = $agent_data['app'][$name];
+} else {
+    $ceph_data = SnmpQuery::get('NET-SNMP-EXTEND-MIB::nsExtendOutputFull."' . $name . '"')->value();
+    $ceph_data = preg_replace('/^.+\n/', '', (string) $ceph_data);
+    $ceph_data = str_replace("<<<app-ceph>>>\n", '', $ceph_data);
+}
 
+if (isset($ceph_data)) {
     $metrics = [];
-    foreach (explode('<', $ceph_data) as $section) {
+    foreach (explode('<', (string) $ceph_data) as $section) {
         if (empty($section)) {
             continue;
         }

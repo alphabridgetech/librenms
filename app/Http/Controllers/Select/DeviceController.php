@@ -27,37 +27,47 @@
 namespace App\Http\Controllers\Select;
 
 use App\Models\Device;
+use Illuminate\Database\Eloquent\Builder;
+use Illuminate\Database\Eloquent\Model;
+use Illuminate\Http\Request;
 
+/**
+ * @extends SelectController<Device>
+ */
 class DeviceController extends SelectController
 {
-    private $id = 'device_id';
+    private string $id = 'device_id';
 
-    protected function rules()
+    protected function rules(): array
     {
         return [
             'access' => 'nullable|in:normal,inverted',
             'user' => 'nullable|int',
-            // NOTE: intentionally not named 'id' - the base SelectController already
-            // reserves the 'id' query param to preload/filter by a specific record id.
+            // 'key' is upstream's name for this; 'field' is the name Telequill's own pages
+            // use (the base SelectController reserves 'id' to preload a specific record).
+            'key' => 'nullable|in:device_id,hostname',
             'field' => 'nullable|in:device_id,hostname',
+            'exclude' => 'nullable|int',
         ];
     }
 
-    protected function searchFields($request)
+    protected function searchFields($request): array
     {
         return ['hostname', 'sysName'];
     }
 
-    protected function baseQuery($request)
+    protected function baseQuery(Request $request): Builder
     {
-        $this->id = $request->get('field', 'device_id');
-        $user_id = $request->get('user');
+        $this->authorize('viewAny', Device::class);
+
+        $this->id = $request->input('key', $request->input('field', 'device_id'));
+        $user_id = $request->input('user');
 
         // list devices the user does not have access to
-        if ($request->get('access') == 'inverted' && $user_id && $request->user()->isAdmin()) {
+        if ($request->input('access') == 'inverted' && $user_id && $request->user()->can('viewAll', Device::class)) {
             return Device::query()
-                ->select('device_id', 'hostname', 'sysName', 'display', 'icon')
-                ->whereNotIn('device_id', function ($query) use ($user_id) {
+                ->select(['device_id', 'hostname', 'sysName', 'display', 'icon'])
+                ->whereNotIn('device_id', function ($query) use ($user_id): void {
                     $query->select('device_id')
                         ->from('devices_perms')
                         ->where('user_id', $user_id);
@@ -66,17 +76,22 @@ class DeviceController extends SelectController
         }
 
         return Device::hasAccess($request->user())
-            ->select('device_id', 'hostname', 'sysName', 'display', 'icon')
+            ->when($request->input('exclude'), fn ($query, $exclude) => $query->where('device_id', '!=', $exclude))
+            ->select(['device_id', 'hostname', 'sysName', 'display', 'icon'])
             ->orderBy('hostname');
     }
 
-    public function formatItem($device)
+    /**
+     * @param  Device  $model
+     * @return array{id: int|string, text: string, icon?: string}
+     */
+    public function formatItem(Model $model): array
     {
-        /** @var Device $device */
+        /** @var Device $model */
         return [
-            'id' => $device->{$this->id},
-            'text' => $this->id === 'hostname' ? ($device->sysName ?: $device->hostname) : $device->displayName(),
-            'icon' => $device->icon,
+            'id' => $model->{$this->id},
+            'text' => $this->id === 'hostname' ? ($model->sysName ?: $model->hostname) : $model->displayName(),
+            'icon' => $model->icon,
         ];
     }
 }

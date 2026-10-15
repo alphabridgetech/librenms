@@ -26,6 +26,10 @@
 
 namespace App\Models;
 
+use App\Observers\ConfigObserver;
+use Illuminate\Database\Eloquent\Attributes\ObservedBy;
+
+#[ObservedBy([ConfigObserver::class])]
 class Config extends BaseModel
 {
     public $timestamps = false;
@@ -37,7 +41,7 @@ class Config extends BaseModel
     ];
 
     /**
-     * @return array{config_default: 'array'}
+     * @return array<string, string>
      */
     protected function casts(): array
     {
@@ -50,7 +54,7 @@ class Config extends BaseModel
 
     public function getConfigValueAttribute($value)
     {
-        return json_decode($value, true);
+        return json_decode((string) $value, true);
     }
 
     public function setConfigValueAttribute($value)

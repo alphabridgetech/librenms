@@ -3,7 +3,7 @@
 
 use LibreNMS\Enum\PortAssociationMode;
 
-if (!Auth::user()->hasGlobalAdmin()) {
+if (!\Illuminate\Support\Facades\Gate::allows('admin')) {
     exit('Unauthorized');
 }
 

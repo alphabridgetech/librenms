@@ -7,10 +7,15 @@ use App\Models\Transceiver;
 use Illuminate\Support\Collection;
 use LibreNMS\Interfaces\Discovery\TransceiverDiscovery;
 use LibreNMS\OS;
+use LibreNMS\OS\Traits\NmsLldpMib;
 use SnmpQuery;
 
 class Switchv1alphabridge extends OS implements TransceiverDiscovery
 {
+    // Telequill: LLDP neighbours from the NMS LLDP MIB, as upstream does for BDCOM/PBN
+    // (previously a special case in includes/discovery/discovery-protocols.inc.php)
+    use NmsLldpMib;
+
     public function discoverTransceivers(): Collection
     {
         $device = $this->getDevice()->toArray();

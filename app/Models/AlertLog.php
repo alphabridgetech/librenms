@@ -2,8 +2,10 @@
 
 namespace App\Models;
 
-use Illuminate\Database\Eloquent\Casts\Attribute;
+use App\Casts\CompressedJson;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
+use Illuminate\Database\Eloquent\Relations\BelongsTo;
+use LibreNMS\Enum\AlertLogState;
 
 class AlertLog extends DeviceRelatedModel
 {
@@ -12,12 +14,40 @@ class AlertLog extends DeviceRelatedModel
     public const UPDATED_AT = null;
     public const CREATED_AT = 'time_logged';
     protected $table = 'alert_log';
+    protected $fillable = [
+        'device_id',
+        'rule_id',
+        'fault_id',
+        'state',
+        'time_logged',
+        'details',
+    ];
 
-    protected function details(): Attribute
+    /**
+     * @return array<string, string>
+     */
+    protected function casts(): array
     {
-        return Attribute::make(
-            get: fn ($details) => json_decode(@gzuncompress($details), true) ?? [],
-            set: fn ($details) => gzcompress(json_encode($details)),
-        )->shouldCache();
+        return [
+            'state' => AlertLogState::class,
+            'details' => CompressedJson::class,
+            'time_logged' => 'datetime',
+        ];
+    }
+
+    /**
+     * @return BelongsTo<AlertRule, $this>
+     */
+    public function rule(): BelongsTo
+    {
+        return $this->belongsTo(AlertRule::class, 'rule_id', 'id');
+    }
+
+    /**
+     * @return BelongsTo<AlertFault, $this>
+     */
+    public function fault(): BelongsTo
+    {
+        return $this->belongsTo(AlertFault::class, 'fault_id', 'id');
     }
 }

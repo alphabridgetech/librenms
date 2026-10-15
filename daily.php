@@ -7,6 +7,7 @@
  */
 
 use App\Facades\LibrenmsConfig;
+use App\Models\AlertRule;
 use App\Models\Device;
 use App\Models\DeviceGroup;
 use Illuminate\Database\Eloquent\Collection;
@@ -52,8 +53,18 @@ if ($options['f'] === 'update') {
         exit(0);
     }
 
+    $on_days = LibrenmsConfig::get('update_on_days', []);
+
+    if (is_array($on_days) && ! empty($on_days)) {
+        $today = strtolower(date('l')); // monday..sunday
+
+        if (! in_array($today, $on_days, true)) {
+            exit(0);
+        }
+    }
+
     if (LibrenmsConfig::get('update_channel') == 'master') {
-        exit(1);
+        exit(2);
     } elseif (LibrenmsConfig::get('update_channel') == 'release') {
         exit(3);
     }
@@ -68,41 +79,11 @@ if ($options['f'] === 'rrd_purge') {
 
         if (is_numeric($rrd_purge) && $rrd_purge > 0) {
             $cmd = "find $rrd_dir -name .gitignore -prune -o -type f -mtime +$rrd_purge -print -exec rm -f {} +";
-            $purge = `$cmd`;
+            $purge = shell_exec($cmd);
             if (! empty($purge)) {
                 echo "Purged the following RRD files due to old age (over $rrd_purge days old):\n";
                 echo $purge;
             }
-        }
-        $lock->release();
-    }
-}
-
-if ($options['f'] === 'syslog') {
-    $lock = Cache::lock('syslog_purge', 86000);
-    if ($lock->get()) {
-        $syslog_purge = LibrenmsConfig::get('syslog_purge');
-
-        if (is_numeric($syslog_purge)) {
-            $rows = (int) dbFetchCell('SELECT MIN(seq) FROM syslog');
-            $initial_rows = $rows;
-            while (true) {
-                $limit = dbFetchCell('SELECT seq FROM syslog WHERE seq >= ? ORDER BY seq LIMIT 1000,1', [$rows]);
-                if (empty($limit)) {
-                    break;
-                }
-
-                // Deletes are done in blocks of 1000 to avoid a single very large operation.
-                if (dbDelete('syslog', 'seq >= ? AND seq < ? AND timestamp < DATE_SUB(NOW(), INTERVAL ? DAY)', [$rows, $limit, $syslog_purge]) > 0) {
-                    $rows = $limit;
-                } else {
-                    break;
-                }
-            }
-
-            dbDelete('syslog', 'seq >= ? AND timestamp < DATE_SUB(NOW(), INTERVAL ? DAY)', [$rows, $syslog_purge]);
-            $final_rows = $rows - $initial_rows;
-            echo "Syslog cleared for entries over $syslog_purge days (about $final_rows rows)\n";
         }
         $lock->release();
     }
@@ -203,26 +184,11 @@ if ($options['f'] === 'handle_notifiable') {
                     2
                 );
                 exit(1);
-            } elseif ($options['r'] === 'python3-deps') {
-                Notifications::create($error_title,
-                    'Python 3 dependencies are missing. You need to install them via pip3 install -r requirements.txt or system packages to continue to receive updates.  If you do not install Python 3 and required packages, LibreNMS will continue to function but stop receiving bug fixes and updates.',
-                    'daily.sh',
-                    2
-                );
-                exit(1);
             }
         }
 
         Notifications::remove($error_title);
         exit(0);
-    }
-}
-
-if ($options['f'] === 'notifications') {
-    $lock = Cache::lock('notifications', 86000);
-    if ($lock->get()) {
-        Notifications::post();
-        $lock->release();
     }
 }
 
@@ -287,7 +253,7 @@ if ($options['f'] === 'purgeusers') {
         if ($purge > 0) {
             $users = \App\Models\AuthLog::where('datetime', '>=', \Carbon\Carbon::now()->subDays($purge))
                 ->distinct()->pluck('user')
-                ->merge(\App\Models\User::has('apiTokens')->pluck('username')) // don't purge users with api tokens
+                ->merge(\App\Models\User::has('tokens')->pluck('username')) // don't purge users with api tokens
                 ->unique();
 
             if (\App\Models\User::thisAuth()->whereNotIn('username', $users)->delete()) {
@@ -302,15 +268,11 @@ if ($options['f'] === 'refresh_alert_rules') {
     $lock = Cache::lock('refresh_alert_rules', 86000);
     if ($lock->get()) {
         echo 'Refreshing alert rules queries' . PHP_EOL;
-        $rules = dbFetchRows('SELECT `id`, `builder`, `extra` FROM `alert_rules`');
+        $rules = AlertRule::query()->select(['id', 'builder', 'extra'])->get();
         foreach ($rules as $rule) {
-            $rule_options = json_decode($rule['extra'], true);
-            if ($rule_options['options']['override_query'] !== 'on' && $rule_options['options']['override_query'] !== true) {
-                $data['query'] = QueryBuilderParser::fromJson($rule['builder'])->toSql();
-                if (! empty($data['query'])) {
-                    dbUpdate($data, 'alert_rules', 'id=?', [$rule['id']]);
-                    unset($data);
-                }
+            if (($rule->extra['options']['override_query'] ?? false) !== 'on' && ($rule->extra['options']['override_query'] ?? false) !== true) {
+                $rule->query = QueryBuilderParser::fromJson($rule->builder)->toSql();
+                $rule->save();
             }
         }
         $lock->release();
@@ -339,21 +301,6 @@ if ($options['f'] === 'notify') {
         } catch (Exception $e) {
             echo 'Failed to send update failed email. ' . $e->getMessage();
         }
-    }
-}
-
-if ($options['f'] === 'peeringdb') {
-    $lock = Cache::lock('peeringdb', 86000);
-    if ($lock->get()) {
-        cache_peeringdb();
-        $lock->release();
-    }
-}
-
-if ($options['f'] === 'refresh_os_cache') {
-    echo 'Clearing OS cache' . PHP_EOL;
-    if (is_file(LibrenmsConfig::get('install_dir') . '/cache/os_defs.cache')) {
-        unlink(LibrenmsConfig::get('install_dir') . '/cache/os_defs.cache');
     }
 }
 

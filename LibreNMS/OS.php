@@ -36,6 +36,7 @@ use LibreNMS\Device\WirelessSensor;
 use LibreNMS\Device\YamlDiscovery;
 use LibreNMS\Interfaces\Discovery\EntityPhysicalDiscovery;
 use LibreNMS\Interfaces\Discovery\MempoolsDiscovery;
+use LibreNMS\Interfaces\Discovery\NeighborDiscovery;
 use LibreNMS\Interfaces\Discovery\OSDiscovery;
 use LibreNMS\Interfaces\Discovery\ProcessorDiscovery;
 use LibreNMS\Interfaces\Discovery\StorageDiscovery;
@@ -55,6 +56,7 @@ use LibreNMS\OS\Generic;
 use LibreNMS\OS\Traits\BridgeMib;
 use LibreNMS\OS\Traits\EntityMib;
 use LibreNMS\OS\Traits\HostResources;
+use LibreNMS\OS\Traits\LldpMib;
 use LibreNMS\OS\Traits\NetstatsPolling;
 use LibreNMS\OS\Traits\QBridgeMib;
 use LibreNMS\OS\Traits\UcdResources;
@@ -71,6 +73,7 @@ class OS implements
     StpPortDiscovery,
     EntityPhysicalDiscovery,
     IcmpNetstatsPolling,
+    NeighborDiscovery,
     IpNetstatsPolling,
     IpForwardNetstatsPolling,
     SnmpNetstatsPolling,
@@ -98,6 +101,7 @@ class OS implements
     use NetstatsPolling;
     use BridgeMib;
     use EntityMib;
+    use LldpMib;
     use QBridgeMib;
 
     /**
@@ -171,16 +175,12 @@ class OS implements
         }
 
         // create missing graphs
-        $device->graphs()->saveMany($graphs->diff($device->graphs->pluck('graph'))->map(function ($graph) {
-            return new DeviceGraph(['graph' => $graph]);
-        }));
+        $device->graphs()->saveMany($graphs->diff($device->graphs->pluck('graph'))->map(fn ($graph) => new DeviceGraph(['graph' => $graph])));
     }
 
     public function preCache()
     {
-        if (is_null($this->pre_cache)) {
-            $this->pre_cache = YamlDiscovery::preCache($this);
-        }
+        $this->pre_cache ??= YamlDiscovery::preCache($this);
 
         return $this->pre_cache;
     }
@@ -205,7 +205,7 @@ class OS implements
 
         if (! isset($this->cache['cache_oid'][$oid])) {
             $data = snmpwalk_cache_oid($this->getDeviceArray(), $oid, [], $mib, null, $snmpflags);
-            $this->cache['cache_oid'][$oid] = array_map('current', $data);
+            $this->cache['cache_oid'][$oid] = array_map(current(...), $data);
         }
 
         return $this->cache['cache_oid'][$oid];
@@ -229,9 +229,7 @@ class OS implements
             return null;
         }
 
-        if (! isset($this->cache['group'][$depth][$oid])) {
-            $this->cache['group'][$depth][$oid] = snmpwalk_group($this->getDeviceArray(), $oid, $mib, $depth);
-        }
+        $this->cache['group'][$depth][$oid] ??= snmpwalk_group($this->getDeviceArray(), $oid, $mib, $depth);
 
         return $this->cache['group'][$depth][$oid];
     }
@@ -293,7 +291,7 @@ class OS implements
         $name = $rf->getShortName();
         preg_match_all('/[A-Z][a-z]*/', $name, $segments);
 
-        return implode('-', array_map('strtolower', $segments[0]));
+        return implode('-', array_map(strtolower(...), $segments[0]));
     }
 
     /**
@@ -318,13 +316,15 @@ class OS implements
 
         $data = [];
         foreach ($oids as $id => $oid) {
-            if (isset($callback)) {
-                $channel = call_user_func($callback, $snmp_data[$oid]);
-            } else {
-                $channel = $snmp_data[$oid];
-            }
+            if (isset($snmp_data[$oid])) {
+                if (isset($callback)) {
+                    $channel = call_user_func($callback, $snmp_data[$oid]);
+                } else {
+                    $channel = $snmp_data[$oid];
+                }
 
-            $data[$id] = WirelessSensor::channelToFrequency($channel);
+                $data[$id] = WirelessSensor::channelToFrequency($channel);
+            }
         }
 
         return $data;
@@ -400,8 +400,15 @@ class OS implements
     }
 
     /**
+     * Most devices support LLDP. OS that support other protocols should merge their neighbors in.
+     *
      * @inheritDoc
      */
+    public function discoverNeighbors(): Collection
+    {
+        return $this->discoverLldpNeighbors();
+    }
+
     public function discoverVlans(): Collection
     {
         $vlans = $this->discoverIetfQBridgeMibVlans();

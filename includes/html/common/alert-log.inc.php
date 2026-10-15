@@ -20,7 +20,7 @@ $pagetitle[] = 'Alert Log';
 
 $alert_states = [
     // divined from librenms/alerts.php
-    'Any' => -1,
+    'Any State' => '',
     'Ok (recovered)' => 0,
     'Alert' => 1,
     //    'Acknowledged' => 2,
@@ -31,19 +31,15 @@ $alert_states = [
 
 $alert_severities = [
     // alert_rules.status is enum('ok','warning','critical')
-    'Any' => '',
-    'Ok, warning and critical' => 1,
-    'Warning and critical' => 2,
     'Critical' => 3,
-    'OK' => 4,
-    'Warning' => 5,
+    'Warning' => 2,
+    'OK' => 1,
 ];
 
-if (Auth::user()->hasGlobalAdmin()) {
+$admin_verbose_details = '';
+if (Gate::allows('alert.detail')) {
     $admin_verbose_details = '<th data-column-id="verbose_details" data-sortable="false">Details</th>';
 }
-
-$device_id ??= (int) ($vars['device'] ?? 0);
 
 $common_output[] = '<div class="panel panel-default panel-condensed">
                 <div class="panel-heading">
@@ -51,46 +47,24 @@ $common_output[] = '<div class="panel panel-default panel-condensed">
                         <div class="col-md-2">
                             <strong>Alert Log entries</strong>
                         </div>
-                        <div class="col-md-2 col-md-offset-8">
-                            <div class="pull-right pdf-export"></div>
-                        </div>
                     </div>
                 </div>
             ';
 
-$device = DeviceCache::get($device_id);
+$device = DeviceCache::get(request()->input('device_id') ?: ($vars['device'] ?? 0));
 $device_selected = json_encode($device->exists ? ['id' => $device->device_id, 'text' => $device->displayName()] : '');
-
-if (isset($_POST['state'])) {
-    $selected_state = '<option value="' . htmlspecialchars($_POST['state']) . '" selected="selected">';
-    $selected_state .= array_search((int) $_POST['state'], $alert_states) . '</option>';
-} else {
-    $selected_state = '';
-    $_POST['state'] = -1;
-}
-if (isset($_POST['min_severity'])) {
-    $selected_min_severity = '<option value="' . htmlspecialchars($_POST['min_severity']) . '" selected="selected">';
-    $selected_min_severity .= array_search((int) $_POST['min_severity'], $alert_severities) . '</option>';
-} else {
-    $selected_min_severity = '';
-    $_POST['min_severity'] = '';
-}
-
-$date_range_val = htmlspecialchars($_POST['date_range'] ?? '');
-$date_from_val = htmlspecialchars($_POST['date_from'] ?? '');
-$date_to_val = htmlspecialchars($_POST['date_to'] ?? '');
 
 $common_output[] = '
 <div class="table-responsive">
-    <table id="alertlog" class="table table-hover table-condensed table-striped">
+    <table id="alertlog" class="table table-hover table-condensed table-striped" data-url="' . route('table.alertlog') . '">
         <thead>
         <tr>
-            <th data-column-id="status" data-sortable="false">State</th>
-            <th data-column-id="time_logged" data-order="desc">Timestamp</th>
+            <th data-column-id="status">State</th>
+            <th data-column-id="time_logged" data-order="desc" data-converter="datetime">Timestamp</th>
             <th data-column-id="details" data-sortable="false">&nbsp;</th>
             <th data-column-id="hostname">Device</th>
             <th data-column-id="device_ip" data-sortable="false">Device IP</th>
-            <th data-column-id="alert">Alert</th>
+            <th data-column-id="alert_rule">Alert</th>
             <th data-column-id="severity">Severity</th>
             ' . $admin_verbose_details . '
         </tr>
@@ -100,114 +74,83 @@ $common_output[] = '
 </div>
 
 <script>
-
+document.addEventListener("DOMContentLoaded", function () {
     var grid = $("#alertlog").bootgrid({
         ajax: true,
         rowCount: [50, 100, 250, -1],
         templates: {
-            header: \'<div id="{{ctx.id}}" class="{{css.header}}"> \
-                <div class="row" style="margin-bottom: 10px;"> \
-                <div class="col-xs-12"> \
-                <form method="post" action="" role="form" id="result_form"> \
-                ' . csrf_field() . ' \
-                <div class="row"> \
+            header: \'<div id="{{ctx.id}}" class="{{css.header}}"><div class="row"> \
+                <div class="col-sm-8 actionBar"><span class="pull-left"> \
+                <form method="get" action="" class="form-inline" role="form" id="alertlog-filter-form"> \
+            <input type=hidden name="hostname" id="hostname"> \
 ';
 
 if (isset($vars['fromdevice']) && ! $vars['fromdevice']) {
-    $common_output[] = '<div class="col-xs-6 col-sm-3 form-group"> \
-                <label>Device</label> \
-                <select name="device_id" id="device_id" class="form-control input-sm"></select> \
+    $common_output[] = '<div class="form-group"> \
+                <select name="device_id" id="device_id" class="form-control input-sm" style="min-width: 175px;"></select> \
                </div> \
                ';
 }
 
-$common_output[] = '<div class="col-xs-6 col-sm-3 form-group"> \
-               <label>Hostname</label> \
-               <select name="hostname" id="alertlog_hostname_filter" class="form-control input-sm"></select> \
+$common_output[] = '<div class="form-group"> \
+               <select name="state" id="state" class="form-control input-sm"> \\';
+
+$selected_state = request()->input('state', '');
+foreach ($alert_states as $text => $value) {
+    $selected = $value == $selected_state ? ' selected' : '';
+    $common_output[] = '<option value="' . htmlspecialchars((string) $value) . "\"$selected>$text</option> \\";
+}
+$common_output[] = '</select> \
                </div> \
-               <div class="col-xs-6 col-sm-3 form-group"> \
-               <label>State</label> \
-               <select name="state" id="state" class="form-control input-sm"> \
-                $common_output[] = ' . $selected_state . ' \
-               <option value="-1">Any</option> \
-               <option value="0">Ok (recovered)</option> \
-               <option value="1">Alert</option> \
-               <option value="3">Worse</option> \
-               <option value="4">Better</option> \
-               <option value="5">Changed</option> \
+               <div class="form-group"> \
+               <select name="severity[]" id="severity" class="form-control input-sm" multiple> \\';
+$selected_severity = request()->input('severity', []);
+foreach ($alert_severities as $text => $value) {
+    $selected = in_array($value, (array) $selected_severity) ? ' selected' : '';
+    $common_output[] = "<option value=\"$value\"$selected>$text</option> \\";
+}
+$common_output[] = '</select> \
+               </div> \
+               <div class="form-group"> \
+               <select name="date_range" id="date_range" class="form-control input-sm" title="Date Range"> \
+               <option value="">All Time</option> \
+               <option value="1">Last 24 Hours</option> \
+               <option value="7">Last 7 Days</option> \
+               <option value="14">Last 14 Days</option> \
+               <option value="30">Last 30 Days</option> \
+               <option value="90">Last 90 Days</option> \
                </select> \
                </div> \
-               <div class="col-xs-6 col-sm-3 form-group"> \
-               <label>Severity</label> \
-               <select name="min_severity" id="min_severity" class="form-control input-sm"> \
-                ' . $selected_min_severity . ' \
-               <option value>Any</option> \
-               <option value="3">Critical</option> \
-               <option value="5">Warning</option> \
-               <option value="4">Ok</option> \
-               <option value="2">Warning and critical</option> \
-               <option value="1">Ok, warning and critical</option> \
-               </select> \
+               <div class="form-group"> \
+               <input type="date" name="date_from" id="date_from" class="form-control input-sm" title="From"> \
+               <input type="date" name="date_to" id="date_to" class="form-control input-sm" title="To"> \
                </div> \
-               </div> \
-               <div class="row" style="margin-top: 10px;"> \
-               <div class="col-xs-6 col-sm-3 form-group"> \
-               <label>Date Range</label> \
-               <select name="date_range" id="date_range" class="form-control input-sm"> \
-               <option value="" ' . ($date_range_val == '' ? 'selected' : '') . '>All Time</option> \
-               <option value="1" ' . ($date_range_val == '1' ? 'selected' : '') . '>Last 24 Hours (1 Day)</option> \
-               <option value="7" ' . ($date_range_val == '7' ? 'selected' : '') . '>Last 7 Days</option> \
-               <option value="14" ' . ($date_range_val == '14' ? 'selected' : '') . '>Last 14 Days</option> \
-               <option value="30" ' . ($date_range_val == '30' ? 'selected' : '') . '>Last 30 Days</option> \
-               <option value="90" ' . ($date_range_val == '90' ? 'selected' : '') . '>Last 90 Days</option> \
-               </select> \
-               </div> \
-               <div class="col-xs-6 col-sm-3 form-group"> \
-               <label>From</label> \
-               <input type="date" name="date_from" id="date_from" class="form-control input-sm" value="' . $date_from_val . '"> \
-               </div> \
-               <div class="col-xs-6 col-sm-3 form-group"> \
-               <label>To</label> \
-               <input type="date" name="date_to" id="date_to" class="form-control input-sm" value="' . $date_to_val . '"> \
-               </div> \
-               <div class="col-xs-6 col-sm-3 form-group"> \
-               <label>&nbsp;</label> \
-               <div> \
-               <button type="submit" class="btn btn-primary input-sm">Filter</button> \
-               <button type="button" id="clear_filters" class="btn btn-default input-sm" style="margin-left: 5px;"><i class="fa fa-refresh"></i> Clear Filter</button> \
-               </div> \
-               </div> \
-               </div> \
-               </form> \
-               </div> \
-               </div> \
-               <div class="row"> \
-               <div class="col-sm-12 actionBar"><p class="{{css.search}}"></p><p class="{{css.actions}}"></p></div> \
-               </div> \
-               </div>\'
+               <button id="filter" type="submit" class="btn btn-default input-sm">Filter</button> \
+               </form></span></div> \
+               <div class="col-sm-4 actionBar"><p class="{{css.search}}"></p><p class="{{css.actions}}"></p></div></div></div>\'
         },
         post: function () {
             return {
-                id: "alertlog",
-                device_id: \'' . htmlspecialchars($device_id ?: '') . '\',
-                state: $(\'#state\').val() || \'' . htmlspecialchars($_POST['state']) . '\',
-                min_severity: $(\'#min_severity\').val() || \'' . htmlspecialchars($_POST['min_severity']) . '\',
-                date_range: $(\'#date_range\').val(),
-                date_from: $(\'#date_from\').val(),
-                date_to: $(\'#date_to\').val(),
-                hostname: $(\'#alertlog_hostname_filter\').val() || \'\'
+                device_id: $(\'#device_id\').val() || \'' . $device->device_id . '\',
+                state: $(\'#state\').val(),
+                severity: $(\'#severity\').val() || [],
+                // Telequill date filters: a preset range wins over the From date
+                from: $(\'#date_range\').val() ? \'-\' + $(\'#date_range\').val() + \'d\' : ($(\'#date_from\').val() || \'\'),
+                to: $(\'#date_to\').val() ? $(\'#date_to\').val() + \' 23:59:59\' : \'\'
             };
         },
-        url: "ajax_table.php"
+        converters: {
+            datetime: {
+              to: LibreNMS.Date.display
+            }
+        }
     }).on("loaded.rs.jquery.bootgrid", function () {
 
         var results = $("div.infos").text().split(" ");
-        low = results[1] - 1;
-        high = results[3];
-        max = high - low;
-        search = $(\'.search-field\').val();
-
-        $(".pdf-export").html("<a href=\'pdf.php?report=alert-log&device_id=' . htmlspecialchars($device_id) . '&string=" + search + "&results=" + max + "&start=" + low + "\'><i class=\'fa fa-file-pdf-o fa-lg icon-theme\' aria-hidden=\'true\'></i> Export to PDF</a>");
+        var low = results[1] - 1;
+        var high = results[3];
+        var max = high - low;
+        var search = $(\'.search-field\').val();
 
         grid.find(".incident-toggle").each(function () {
             $(this).parent().addClass(\'incident-toggle-td\');
@@ -247,31 +190,32 @@ $common_output[] = '<div class="col-xs-6 col-sm-3 form-group"> \
         });
     });
 
-    $(document).on("submit", "#result_form", function(e) {
-        e.preventDefault();
-        $("#alertlog").bootgrid("reload");
-    });
-
-    $(document).on("change", "#alertlog_hostname_filter", function(e) {
-        $("#alertlog").bootgrid("reload");
-    });
-
-    $(document).on("click", "#clear_filters", function(e) {
-        e.preventDefault();
-        if ($("#device_id").length) {
-            $("#device_id").val(null).trigger("change");
-        }
-        $("#state").val("-1");
-        $("#min_severity").val("");
-        $("#date_range").val("");
-        $("#date_from").val("");
-        $("#date_to").val("");
-        $("#alertlog_hostname_filter").val(null).trigger("change");
-        $(".search-field").val("");
-        $("#alertlog").bootgrid("reload");
-    });
-
+    $("#severity").select2({
+        placeholder: "Any Severity",
+        width: "13.1em",
+        maximumSelectionLength: 2,
+        containerCssClass: "severity-select-box"
+     });
     init_select2("#device_id", "device", {}, ' . $device_selected . ' , "All Devices");
-    init_select2("#alertlog_hostname_filter", "device", {field: "hostname"}, \'\', "All Hostnames");
+
+    $("#alertlog-filter-form").on("submit", function (e) {
+        e.preventDefault();
+        var formData = $(this).serializeArray().filter(function(item) {
+            return item.value !== "";
+        });
+        var queryString = $.param(formData);
+        var newUrl = window.location.origin + window.location.pathname + (queryString ? "?" + queryString : "");
+        window.history.pushState({path: newUrl}, "", newUrl);
+        grid.bootgrid("reload");
+    });
+});
 </script>
+<style>
+.severity-select-box .select2-search--inline {
+    display: none;
+}
+.severity-select-box .select2-search--inline:first-child {
+    display: inline-block;
+}
+</style>
 ';

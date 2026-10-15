@@ -107,7 +107,7 @@ class Stats
         return [
             'alert_rules' => $this->selectTotal(DB::table('alert_rules')->where('disabled', 0), ['severity']),
             'alert_templates' => $this->selectTotal('alert_templates'),
-            'api_tokens' => $this->selectTotal(DB::table('api_tokens')->where('disabled', 0)),
+            'api_tokens' => $this->selectTotal(DB::table('personal_access_tokens')->where(fn ($query) => $query->whereNull('expires_at')->orWhere('expires_at', '>', now()))),
             'applications' => $this->selectTotal('applications', ['app_type']),
             'bgppeer_state' => $this->selectTotal('bgpPeers', ['bgpPeerState']),
             'bgppeer_status' => $this->selectTotal('bgpPeers', ['bgpPeerAdminStatus']),
@@ -169,19 +169,15 @@ class Stats
         // sanitize sysDescr
         return $device_info->map(function ($entry) {
             // remove hostnames from linux, macosx, and SunOS
-            $entry->sysDescr = preg_replace_callback('/^(Linux |Darwin |FreeBSD |SunOS )[A-Za-z0-9._\-]+ ([0-9.]{3,9})/', function ($matches) {
-                return $matches[1] . 'hostname ' . $matches[2];
-            }, $entry->sysDescr);
+            $entry->sysDescr = preg_replace_callback('/^(Linux |Darwin |FreeBSD |SunOS )[A-Za-z0-9._\-]+ ([0-9.]{3,9})/', fn ($matches) => $matches[1] . 'hostname ' . $matches[2], (string) $entry->sysDescr);
 
             // wipe serial numbers, preserve the format
             $sn_patterns = ['/[A-Z]/', '/[a-z]/', '/[0-9]/'];
             $sn_replacements = ['A', 'a', '0'];
             $entry->sysDescr = preg_replace_callback(
                 '/((s\/?n|serial num(ber)?)[:=]? ?)([a-z0-9.\-]{4,16})/i',
-                function ($matches) use ($sn_patterns, $sn_replacements) {
-                    return $matches[1] . preg_replace($sn_patterns, $sn_replacements, $matches[4]);
-                },
-                $entry->sysDescr
+                fn ($matches) => $matches[1] . preg_replace($sn_patterns, $sn_replacements, $matches[4]),
+                (string) $entry->sysDescr
             );
 
             return $entry;

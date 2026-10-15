@@ -1,5 +1,7 @@
 <?php
 
+use LibreNMS\Enum\SensorType;
+
 echo 'APC Load ';
 
 $phasecount = $phasecount = $pre_cache['apcups_phase_count'];
@@ -8,12 +10,12 @@ if ($phasecount > 1) {
     d_echo($oids);
     foreach ($oids as $index => $data) {
         $type = 'apcUPS';
-        $descr = 'Phase ' . substr($index, -1);
+        $descr = 'Phase ' . substr((string) $index, -1);
         $load_oid = '.1.3.6.1.4.1.318.1.1.1.9.3.3.1.10.' . $index;
         $divisor = 1;
         $load = $data['upsPhaseOutputPercentLoad'];
         if ($load >= 0) {
-            discover_sensor(null, 'load', $device, $load_oid, $index, $type, $descr, $divisor, 1, null, null, null, null, $load);
+            discover_sensor(null, SensorType::Load, $device, $load_oid, $index, $type, $descr, $divisor, 1, null, null, null, null, $load);
         }
     }
     unset($oids);
@@ -47,7 +49,7 @@ if ($phasecount > 1) {
             if ($oids) {
                 echo $item['type'] . ' ' . $item['mib'] . ' UPS';
             }
-            discover_sensor(null, 'load', $device, $current_oid . '.' . $item['index'], $current_oid . '.' . $item['index'], $item['type'], $item['descr'], $item['divisor'], 1, null, null, null, null, $current);
+            discover_sensor(null, SensorType::Load, $device, $current_oid . '.' . $item['index'], $current_oid . '.' . $item['index'], $item['type'], $item['descr'], $item['divisor'], 1, null, null, null, null, $current);
         }
     }//end foreach
 }

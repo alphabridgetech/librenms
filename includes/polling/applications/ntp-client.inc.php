@@ -1,5 +1,6 @@
 <?php
 
+use Illuminate\Support\Facades\Log;
 use LibreNMS\Exceptions\JsonAppException;
 use LibreNMS\Exceptions\JsonAppParsingFailedException;
 use LibreNMS\RRD\RrdDefinition;
@@ -16,9 +17,9 @@ try {
         'data' => [],
     ];
     [$ntp['data']['offset'], $ntp['data']['frequency'], $ntp['data']['sys_jitter'],
-        $ntp['data']['clk_jitter'], $ntp['data']['clk_wander']] = explode("\n", $legacy);
+        $ntp['data']['clk_jitter'], $ntp['data']['clk_wander']] = explode("\n", (string) $legacy);
 } catch (JsonAppException $e) {
-    echo PHP_EOL . $name . ':' . $e->getCode() . ':' . $e->getMessage() . PHP_EOL;
+    Log::info($name . ':' . $e->getCode() . ':' . $e->getMessage());
     update_application($app, $e->getCode() . ':' . $e->getMessage(), []); // Set empty metrics and error message
 
     return;

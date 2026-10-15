@@ -13,7 +13,9 @@
  */
 
 // Define some error messages
+use Illuminate\Support\Facades\Log;
 use LibreNMS\Util\IP;
+use LibreNMS\Util\ProgressList;
 
 $error_poolaction = [];
 $error_poolaction[0] = 'Unused';
@@ -123,7 +125,7 @@ if (! empty($ltmPoolEntry['name'])) {
     d_echo("No Pools Found\n");
 }
 
-echo "#### Unload disco module ltm-bwc ####\n\n";
+Log::info("#### Unload disco module ltm-bwc ####\n");
 $ltmBwcEntry = [];
 //Check for Virtual Server Enries
 $ltmBwcEntry['name'] = snmpwalk_array_num($device, '1.3.6.1.4.1.3375.2.2.13.1.3.1.1', 0);
@@ -160,7 +162,7 @@ if (! empty($f5CertEntry) || ! empty($ltmBwcEntry) || ! empty($ltmVirtualServEnt
             // and convert it into days, for better human readability
             $result['daysLeft'] = intval(($array[$CERT_BASE_OID_NAME] - getdate()[0]) / (3600 * 24));
             // UID might be to long for use in a RRD filename, use a hash instead
-            $result['hash'] = hash('crc32', $result['UID']);
+            $result['hash'] = hash('crc32', (string) $result['UID']);
 
             //let's check when the cert expires
             if ($result['daysLeft'] <= 0) {
@@ -196,8 +198,8 @@ if (! empty($f5CertEntry) || ! empty($ltmBwcEntry) || ! empty($ltmVirtualServEnt
             $result = [];
 
             // Find all Virtual server names and UID's, then we can find everything else we need.
-            if (strpos($oid, '1.3.6.1.4.1.3375.2.2.10.1.2.1.1.') !== false) {
-                [$null, $index] = explode('1.3.6.1.4.1.3375.2.2.10.1.2.1.1.', $oid);
+            if (str_contains((string) $oid, '1.3.6.1.4.1.3375.2.2.10.1.2.1.1.')) {
+                [$null, $index] = explode('1.3.6.1.4.1.3375.2.2.10.1.2.1.1.', (string) $oid);
                 $result['type'] = 'f5-ltm-vs';
                 $result['UID'] = (string) $index;
                 $result['label'] = $value;
@@ -205,8 +207,8 @@ if (! empty($f5CertEntry) || ! empty($ltmBwcEntry) || ! empty($ltmVirtualServEnt
                 $result['hash'] = hash('crc32', $result['UID']);
 
                 // Trim IPv4 response to remove route domain ID
-                if (strlen($ltmVirtualServEntry['ip']['1.3.6.1.4.1.3375.2.2.10.1.2.1.3.' . $index]) == 23) {
-                    $ltmVirtualServEntry['ip']['1.3.6.1.4.1.3375.2.2.10.1.2.1.3.' . $index] = substr($ltmVirtualServEntry['ip']['1.3.6.1.4.1.3375.2.2.10.1.2.1.3.' . $index], 0, 11);
+                if (strlen((string) $ltmVirtualServEntry['ip']['1.3.6.1.4.1.3375.2.2.10.1.2.1.3.' . $index]) == 23) {
+                    $ltmVirtualServEntry['ip']['1.3.6.1.4.1.3375.2.2.10.1.2.1.3.' . $index] = substr((string) $ltmVirtualServEntry['ip']['1.3.6.1.4.1.3375.2.2.10.1.2.1.3.' . $index], 0, 11);
                 }
 
                 // Now that we have our UID we can pull all the other data we need.
@@ -250,8 +252,8 @@ if (! empty($f5CertEntry) || ! empty($ltmBwcEntry) || ! empty($ltmVirtualServEnt
             $result = [];
 
             // Find all Bandwidth Controller  names and UID's, then we can find everything else we need.
-            if (strpos($oid, '1.3.6.1.4.1.3375.2.2.13.1.3.1.1.') !== false) {
-                [$null, $index] = explode('1.3.6.1.4.1.3375.2.2.13.1.3.1.1.', $oid);
+            if (str_contains((string) $oid, '1.3.6.1.4.1.3375.2.2.13.1.3.1.1.')) {
+                [$null, $index] = explode('1.3.6.1.4.1.3375.2.2.13.1.3.1.1.', (string) $oid);
                 $result['type'] = 'f5-ltm-bwc';
                 $result['UID'] = (string) $index;
                 $result['label'] = $value;
@@ -273,8 +275,8 @@ if (! empty($f5CertEntry) || ! empty($ltmBwcEntry) || ! empty($ltmVirtualServEnt
             $result = [];
 
             // Find all Pool names and UID's, then we can find everything else we need.
-            if (strpos($oid, '1.3.6.1.4.1.3375.2.2.5.1.2.1.1.') !== false) {
-                [$null, $index] = explode('1.3.6.1.4.1.3375.2.2.5.1.2.1.1.', $oid);
+            if (str_contains((string) $oid, '1.3.6.1.4.1.3375.2.2.5.1.2.1.1.')) {
+                [$null, $index] = explode('1.3.6.1.4.1.3375.2.2.5.1.2.1.1.', (string) $oid);
                 $result['type'] = 'f5-ltm-pool';
                 $result['UID'] = (string) $index;
                 $result['label'] = $value;
@@ -320,8 +322,8 @@ if (! empty($f5CertEntry) || ! empty($ltmBwcEntry) || ! empty($ltmVirtualServEnt
             $result = [];
 
             // Find all Pool member names and UID's, then we can find everything else we need.
-            if (strpos($oid, '1.3.6.1.4.1.3375.2.2.5.3.2.1.1.') !== false) {
-                [$null, $index] = explode('1.3.6.1.4.1.3375.2.2.5.3.2.1.1.', $oid);
+            if (str_contains((string) $oid, '1.3.6.1.4.1.3375.2.2.5.3.2.1.1.')) {
+                [$null, $index] = explode('1.3.6.1.4.1.3375.2.2.5.3.2.1.1.', (string) $oid);
                 $result['type'] = 'f5-ltm-poolmember';
                 $result['UID'] = (string) $index;
                 $result['label'] = $value;
@@ -329,8 +331,8 @@ if (! empty($f5CertEntry) || ! empty($ltmBwcEntry) || ! empty($ltmVirtualServEnt
                 $result['hash'] = hash('crc32', $result['UID']);
 
                 //Remove route domain ID from v4 IPs
-                if (strlen($ltmPoolMemberEntry['ip']['1.3.6.1.4.1.3375.2.2.5.3.2.1.3.' . $index]) == 23) {
-                    $ltmPoolMemberEntry['ip']['1.3.6.1.4.1.3375.2.2.5.3.2.1.3.' . $index] = substr($ltmPoolMemberEntry['ip']['1.3.6.1.4.1.3375.2.2.5.3.2.1.3.' . $index], 0, 11);
+                if (strlen((string) $ltmPoolMemberEntry['ip']['1.3.6.1.4.1.3375.2.2.5.3.2.1.3.' . $index]) == 23) {
+                    $ltmPoolMemberEntry['ip']['1.3.6.1.4.1.3375.2.2.5.3.2.1.3.' . $index] = substr((string) $ltmPoolMemberEntry['ip']['1.3.6.1.4.1.3375.2.2.5.3.2.1.3.' . $index], 0, 11);
                 }
 
                 // Now that we have our UID we can pull all the other data we need.
@@ -376,6 +378,7 @@ if (! empty($f5CertEntry) || ! empty($ltmBwcEntry) || ! empty($ltmVirtualServEnt
      * Let's loop over the SNMP data to see if we need to ADD or UPDATE any components.
      */
 
+    $progress = ProgressList::start('LTM components');
     foreach ($tblBigIP as $key => $array) {
         $component_key = false;
 
@@ -391,11 +394,11 @@ if (! empty($f5CertEntry) || ! empty($ltmBwcEntry) || ! empty($ltmVirtualServEnt
             $new_component = $component->createComponent($device['device_id'], $array['type']);
             $component_key = key($new_component);
             $components[$component_key] = array_merge($new_component[$component_key], $array);
-            echo '+';
+            $progress->mark('+');
         } else {
             // The component does exist, merge the details in - UPDATE.
             $components[$component_key] = array_merge($components[$component_key], $array);
-            echo '.';
+            $progress->mark('.');
         }
     }
 
@@ -406,7 +409,7 @@ if (! empty($f5CertEntry) || ! empty($ltmBwcEntry) || ! empty($ltmVirtualServEnt
         // Guilty until proven innocent
         $found = false;
 
-        foreach ($tblBigIP as $k => $v) {
+        foreach ($tblBigIP as $v) {
             if (($array['UID'] == $v['UID']) && ($array['type'] == $v['type'])) {
                 // Yay, we found it...
                 $found = true;
@@ -415,12 +418,12 @@ if (! empty($f5CertEntry) || ! empty($ltmBwcEntry) || ! empty($ltmVirtualServEnt
 
         if ($found === false) {
             // The component has not been found. we should delete it.
-            echo '-';
+            $progress->mark('-');
             $component->deleteComponent($key);
         }
     }
 
     // Write the Components back to the DB.
     $component->setComponentPrefs($device['device_id'], $components);
-    echo "\n";
+    $progress->end();
 }// End if not error

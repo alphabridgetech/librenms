@@ -16,19 +16,21 @@
  * @author     Rudy Broersma
  */
 
-$fgDhcpTables = SnmpQuery::hideMIB()->walk('FORTINET-FORTIGATE-MIB::fgDhcpTables')->table(0);
+use LibreNMS\Enum\SensorType;
+
+$fgDhcpTables = SnmpQuery::hideMib()->walk('FORTINET-FORTIGATE-MIB::fgDhcpTables')->table(0);
 
 if (! empty($fgDhcpTables['fgDhcpLeaseUsage'])) {
     foreach ($fgDhcpTables['fgDhcpLeaseUsage'] as $vdomID => $table) {
-        $vdomName = SnmpQuery::enumStrings()->hideMIB()->get('FORTINET-FORTIGATE-MIB:fgVdEntName.' . $vdomID)->value();
+        $vdomName = SnmpQuery::enumStrings()->hideMib()->get('FORTINET-FORTIGATE-MIB::fgVdEntName.' . $vdomID)->value();
 
         foreach ($table as $index => $value) {
-            $indexSplit = explode('.', $index);
+            $indexSplit = explode('.', (string) $index);
             $fgDhcpServerID = $indexSplit[1];
 
             discover_sensor(
                 null,
-                'percent',
+                SensorType::Percent,
                 $device,
                 '.1.3.6.1.4.1.12356.101.23.2.1.1.2.' . $vdomID . '.' . $fgDhcpServerID,
                 'fgDhcpLeaseUsage.' . $vdomID . '.' . $fgDhcpServerID,

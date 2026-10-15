@@ -27,59 +27,57 @@
 namespace App\Providers;
 
 use Illuminate\Contracts\Foundation\Application;
+use Illuminate\Support\Facades\Facade;
 use Illuminate\Support\ServiceProvider;
 use LibreNMS\Data\Store\Datastore;
-use LibreNMS\Interfaces\Data\Datastore as DatastoreContract;
 
 class DatastoreServiceProvider extends ServiceProvider
 {
     protected $namespace = 'LibreNMS\\Data\\Store\\';
-    protected $stores = [
-        'LibreNMS\Data\Store\Graphite',
-        'LibreNMS\Data\Store\InfluxDB',
-        'LibreNMS\Data\Store\InfluxDBv2',
-        'LibreNMS\Data\Store\OpenTSDB',
-        'LibreNMS\Data\Store\Prometheus',
-        'LibreNMS\Data\Store\Rrd',
-        'LibreNMS\Data\Store\Kafka',
+    private const STORES = [
+        \LibreNMS\Data\Store\Graphite::class,
+        \LibreNMS\Data\Store\InfluxDB::class,
+        \LibreNMS\Data\Store\InfluxDBv2::class,
+        \LibreNMS\Data\Store\OpenTSDB::class,
+        \LibreNMS\Data\Store\Prometheus::class,
+        \LibreNMS\Data\Store\Rrd::class,
+        \LibreNMS\Data\Store\Kafka::class,
+    ];
+    private const CLIENTS = [
+        \InfluxDB\Database::class => [\LibreNMS\Data\Store\InfluxDB::class, 'createFromConfig'],
+        \RdKafka\Producer::class => [\LibreNMS\Data\Store\Kafka::class, 'getClient'],
     ];
 
     public function register(): void
     {
         // set up bindings
-        foreach ($this->stores as $store) {
+        foreach (self::STORES as $store) {
             $this->app->singleton($store);
         }
 
         // bind the Datastore object
-        $this->app->singleton('Datastore', function (Application $app, $options) {
-            // only tag datastores enabled by config
-            $stores = array_filter($this->stores, function ($store) {
-                /** @var DatastoreContract $store */
-                return $store::isEnabled();
-            });
+        $this->app->singleton('Datastore', function (Application $app) {
+            // only datastores enabled by config
+            $stores = array_filter(self::STORES, fn (string $store): bool => $store::isEnabled());
 
-            $app->tag($stores, ['datastore']);
-
-            return new Datastore(iterator_to_array($app->tagged('datastore')));
+            return new Datastore(array_map($app->make(...), array_values($stores)));
         });
 
-        // additional bindings
-        $this->registerInflux();
-        $this->registerKafka();
+        // clients used by the datastores
+        foreach (self::CLIENTS as $client => $factory) {
+            $this->app->singleton($client, fn () => $factory());
+        }
     }
 
-    public function registerInflux()
+    /**
+     * Release the datastores, they are created again from the current config when next used.
+     * Releasing the last reference terminates (flushes) each store via its destructor.
+     */
+    public static function reset(Application $app): void
     {
-        $this->app->singleton('InfluxDB\Database', function ($app) {
-            return \LibreNMS\Data\Store\InfluxDB::createFromConfig();
-        });
-    }
-
-    public function registerKafka()
-    {
-        $this->app->singleton('RdKafka\Producer', function ($app) {
-            return \LibreNMS\Data\Store\Kafka::getClient();
-        });
+        foreach ([...self::STORES, ...array_keys(self::CLIENTS), 'Datastore'] as $abstract) {
+            $app->forgetInstance($abstract);
+            Facade::clearResolvedInstance($abstract);
+        }
     }
 }

@@ -20,6 +20,7 @@
 * @author     Cercel Valentin <crc@nuamchefazi.ro>
 */
 
+use Illuminate\Support\Facades\Log;
 use LibreNMS\Exceptions\JsonAppException;
 use LibreNMS\Exceptions\JsonAppParsingFailedException;
 use LibreNMS\RRD\RrdDefinition;
@@ -31,7 +32,7 @@ try {
     $json_return = json_app_get($device, $name);
 } catch (JsonAppParsingFailedException $e) {
     // Legacy script, build compatible array
-    $legacy = trim($e->getOutput());
+    $legacy = trim((string) $e->getOutput());
 
     // pull apart the legacy info and create the basic required hash with it
     [$line_volt, $load, $charge, $remaining, $bat_volt, $line_nominal, $bat_nominal] = explode("\n", $legacy);
@@ -47,7 +48,7 @@ try {
         ],
     ];
 } catch (JsonAppException $e) {
-    echo PHP_EOL . $name . ':' . $e->getCode() . ':' . $e->getMessage() . PHP_EOL;
+    Log::info($name . ':' . $e->getCode() . ':' . $e->getMessage());
     update_application($app, $e->getCode() . ':' . $e->getMessage(), []); // Set empty metrics and error message
 
     return;

@@ -26,7 +26,7 @@ foreach (dbFetchRows('SELECT * FROM device_graphs WHERE device_id = ? ORDER BY g
 $sep = '';
 foreach ($graph_enable as $section => $nothing) {
     if (isset($graph_enable) && is_array($graph_enable[$section])) {
-        $type = strtolower($section);
+        $type = strtolower((string) $section);
         if (empty($vars['group'])) {
             $vars['group'] = $type;
         }
@@ -53,7 +53,7 @@ unset($sep);
 
 print_optionbar_end();
 
-$group = $vars['group'] ?? array_key_first($graph_enable);
+$group = basename((string) ($vars['group'] ?? array_key_first($graph_enable)));
 $graph_enable = $graph_enable[$group] ?? [];
 
 if (($group != 'customoid') && is_file("includes/html/pages/device/graphs/$group.inc.php")) {

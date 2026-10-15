@@ -1,6 +1,7 @@
 <?php
 
 use App\Models\Eventlog;
+use Illuminate\Support\Facades\Log;
 use LibreNMS\Exceptions\JsonAppException;
 use LibreNMS\RRD\RrdDefinition;
 
@@ -9,7 +10,7 @@ $name = 'poudriere';
 try {
     $returned = json_app_get($device, $name, 1);
 } catch (JsonAppException $e) {
-    echo PHP_EOL . $name . ':' . $e->getCode() . ':' . $e->getMessage() . PHP_EOL;
+    Log::info($name . ':' . $e->getCode() . ':' . $e->getMessage());
     update_application($app, $e->getCode() . ':' . $e->getMessage(), []); // Set empty metrics and error message
 
     return;
@@ -84,7 +85,7 @@ $gauge_rrd_def = RrdDefinition::make()
     ->addDataset('data', 'GAUGE', 0);
 
 // process total stats, .data.stats
-foreach ($stat_vars as $key => $stat) {
+foreach ($stat_vars as $stat) {
     $var_name = 'totals_' . $stat;
     $value = $data['stats'][$stat] ?? null;
     $rrd_name = ['app', $name, $app->app_id, $var_name];
@@ -98,7 +99,7 @@ foreach ($stat_vars as $key => $stat) {
 $sets = [];
 foreach ($data['jailANDportsANDset'] as $jps_key => $jps) {
     $sets[] = $jps_key;
-    foreach ($stat_vars as $key => $stat) {
+    foreach ($stat_vars as $stat) {
         $var_name = 'jps___' . $jps_key . '___' . $stat;
         $value = $jps[$stat] ?? null;
         $rrd_name = ['app', $name, $app->app_id, $var_name];

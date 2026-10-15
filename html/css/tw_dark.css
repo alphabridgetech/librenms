@@ -6,10 +6,6 @@
     color: #bfc0c0
 }
 
-.dark a {
-    background-color: transparent
-}
-
 .dark mark {
     color: #000
 }
@@ -18,11 +14,16 @@
     color: #FFF
 }
 
-.dark button,
-.dark input,
-.dark select,
-.dark textarea {
-    color: inherit
+/* match Tailwind's layer order so utilities (tw:text-*) can override this */
+@layer theme, base, components, utilities;
+
+@layer components {
+    .dark button,
+    .dark input,
+    .dark select,
+    .dark textarea {
+        color: inherit
+    }
 }
 
 @media print {
@@ -252,7 +253,7 @@
 .dark .table > tbody > tr.success > td,
 .dark .table > thead > tr.success > th,
 .dark .table > tbody > tr.success > th {
-    background-color: #62c462
+    background-color: #1c4b1c
 }
 
 .dark .table-hover > tbody > tr > td.success:hover,
@@ -260,7 +261,7 @@
 .dark .table-hover > tbody > tr.success:hover > td,
 .dark .table-hover > tbody > tr:hover > .success,
 .dark .table-hover > tbody > tr.success:hover > th {
-    background-color: #4fbd4f
+    background-color: #215821
 }
 
 .dark .table > thead > tr > td.info,
@@ -271,7 +272,7 @@
 .dark .table > tbody > tr.info > td,
 .dark .table > thead > tr.info > th,
 .dark .table > tbody > tr.info > th {
-    background-color: #5bc0de
+    background-color: #124858
 }
 
 .dark .table-hover > tbody > tr > td.info:hover,
@@ -279,7 +280,7 @@
 .dark .table-hover > tbody > tr.info:hover > td,
 .dark .table-hover > tbody > tr:hover > .info,
 .dark .table-hover > tbody > tr.info:hover > th {
-    background-color: #46b8da
+    background-color: #155467
 }
 
 .dark .table > thead > tr > td.warning,
@@ -290,7 +291,7 @@
 .dark .table > tbody > tr.warning > td,
 .dark .table > thead > tr.warning > th,
 .dark .table > tbody > tr.warning > th {
-    background-color: #ba6f05
+    background-color: #603903
 }
 
 .dark .table-hover > tbody > tr > td.warning:hover,
@@ -298,7 +299,7 @@
 .dark .table-hover > tbody > tr.warning:hover > td,
 .dark .table-hover > tbody > tr:hover > .warning,
 .dark .table-hover > tbody > tr.warning:hover > th {
-    background-color: #a76404
+    background-color: #704304
 }
 
 .dark .table > thead > tr > td.danger,
@@ -309,7 +310,7 @@
 .dark .table > tbody > tr.danger > td,
 .dark .table > thead > tr.danger > th,
 .dark .table > tbody > tr.danger > th {
-    background-color: #ee5f5b
+    background-color: #85110e
 }
 
 .dark .table-hover > tbody > tr > td.danger:hover,
@@ -317,7 +318,7 @@
 .dark .table-hover > tbody > tr.danger:hover > td,
 .dark .table-hover > tbody > tr:hover > .danger,
 .dark .table-hover > tbody > tr.danger:hover > th {
-    background-color: #ec4844
+    background-color: #9b1410
 }
 
 .dark .bootgrid-table th > .column-header-anchor {
@@ -441,7 +442,6 @@
 
 .dark .btn {
     color: #fff;
-    border-color: rgba(0, 0, 0, 0.6);
 }
 
 .dark .btn-default {
@@ -548,7 +548,7 @@
 .dark .nav .open > a:hover,
 .dark .nav .open > a:focus {
     background-color: #3e444c;
-    border-color: #fff
+    border-color: rgba(0, 0, 0, 0.6)
 }
 
 .dark .nav-tabs {
@@ -569,6 +569,7 @@
     color: #fff;
     background-color: #3e444c;
     border-color: #1c1e22;
+    border-bottom-color: rgba(0, 0, 0, 0.2);
 }
 
 @media (min-width: 768px) {
@@ -781,7 +782,6 @@
 
 .dark .badge {
     color: #fff;
-    background-color: #7a8288
 }
 
 .dark a.badge:hover,
@@ -1103,18 +1103,6 @@
     border-left-color: #2e3338;
 }
 
-.dark .navbar .navbar-nav > li > a:hover {
-    border-left-color: transparent
-}
-
-.dark .navbar .nav .open > a {
-    border-color: transparent
-}
-
-.dark .navbar-nav > li.active > a {
-    border-left-color: transparent
-}
-
 .dark .table .success,
 .dark .table .warning,
 .dark .table .danger,
@@ -1197,12 +1185,6 @@
     background-color: #3a3f44;
     color: #fff;
     border-color: rgba(0, 0, 0, 0.6);
-}
-
-.dark .nav .open > a,
-.dark .nav .open > a:hover,
-.dark .nav .open > a:focus {
-    border-color: rgba(0, 0, 0, 0.6)
 }
 
 .dark .pagination > li.disabled > a,
@@ -1303,7 +1285,8 @@
     color: #d61818
 }
 
-.dark .gridster .gs-w {
+.dark .gs-w,
+.dark .grid-stack .grid-stack-item-content {
     color: var(--color-light2);
     background-color: #353a41;
 }
@@ -1317,7 +1300,7 @@
 }
 
 .dark tr.iftype:nth-child(even) {
-    background: #353a41;
+    background: #272b30;
 }
 
 .dark div[role=listbox] {

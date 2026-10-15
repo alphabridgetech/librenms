@@ -1,5 +1,6 @@
 <?php
 
+use Illuminate\Support\Facades\Log;
 use LibreNMS\Exceptions\JsonAppException;
 use LibreNMS\RRD\RrdDefinition;
 
@@ -8,7 +9,7 @@ $name = 'logsize';
 try {
     $returned = json_app_get($device, $name, 1);
 } catch (JsonAppException $e) {
-    echo PHP_EOL . $name . ':' . $e->getCode() . ':' . $e->getMessage() . PHP_EOL;
+    Log::info($name . ':' . $e->getCode() . ':' . $e->getMessage());
 
     update_application($app, $e->getCode() . ':' . $e->getMessage(), []); // Set empty metrics and error message
 
@@ -106,13 +107,7 @@ foreach ($data['sets'] as $set_name => $set_data) {
             //$metrics['set_' . $set_name . '_files_' .$log_name] = 0;
         }
 
-        uasort($app_data['sets'][$set_name]['log_sizes'], function ($a, $b) {
-            if ($a == $b) {
-                return 0;
-            }
-
-            return ($a > $b) ? -1 : 1;
-        });
+        uasort($app_data['sets'][$set_name]['log_sizes'], fn ($a, $b) => $b <=> $a);
     }
 }
 

@@ -7,7 +7,8 @@
  *
 */
 
-$class = 'load';
+use LibreNMS\Enum\SensorType;
+
 $multiplier = 100;
 $low_limit = null;
 $low_warn_limit = null;
@@ -44,7 +45,7 @@ if (! empty($dhcp_networks[$dhcp_networks_base_oid])) {
     foreach ($dhcp_networks[$dhcp_networks_base_oid] as $dhcp_type_index => $ignore_this) {
         if (! empty($dhcp_networks[$dhcp_networks_base_oid][$dhcp_type_index])) {
             foreach ($dhcp_networks[$dhcp_networks_base_oid][$dhcp_type_index] as $index => $entry) {
-                $description = explode('[', $entry);
+                $description = explode('[', (string) $entry);
                 $data_array[$array_index]['index'] = $index;
                 if ($dhcp_type_index === intval($auth_dhcp_index)) {
                     $data_array[$array_index]['type'] = 'dhcpatriotAuthDHCP';
@@ -57,7 +58,7 @@ if (! empty($dhcp_networks[$dhcp_networks_base_oid])) {
                 $data_array[$array_index]['description'] = $description[0];
                 $data_array[$array_index]['oid'] = '.' . $pool_usage_base_oid . '.' . $dhcp_type_index . '.' . $index;
                 $data_array[$array_index]['size_oid'] = '.' . $pool_size_base_oid . '.' . $dhcp_type_index . '.' . $index;
-                $array_index = $array_index + 1;
+                $array_index += 1;
             }
         }
     }
@@ -65,7 +66,7 @@ if (! empty($dhcp_networks[$dhcp_networks_base_oid])) {
     $merged_array = array_merge(array_column($data_array, 'oid'), array_column($data_array, 'size_oid'));
     $pool_data = snmp_get_multi_oid($device, $merged_array);
 
-    foreach ($data_array as $key => $value) {
+    foreach ($data_array as $value) {
         $oid = $value['oid'];
         $index = $value['index'];
         $type = $value['type'];
@@ -76,7 +77,7 @@ if (! empty($dhcp_networks[$dhcp_networks_base_oid])) {
 
         discover_sensor(
             null,
-            $class,
+            SensorType::Load,
             $device,
             $oid,
             $index,
@@ -98,4 +99,4 @@ if (! empty($dhcp_networks[$dhcp_networks_base_oid])) {
     }
 }
 
-unset($class, $oid, $index, $type, $descr, $divisor, $multiplier, $low_limit, $low_warn_limit, $warn_limit, $high_limit, $current, $poller_type, $entPhysicalIndex, $entPhysicalIndex_measured, $user_func, $group, $dhcp_networks_base_oid, $pool_usage_base_oid, $pool_size_base_oid, $auth_dhcp_index, $standard_dhcp_index, $auth_dhcp_networks_descr, $standard_dhcp_networks_descr, $dhcp_networks, $array_index, $description, $data_array, $merged_array, $pool_data);
+unset($oid, $index, $type, $descr, $divisor, $multiplier, $low_limit, $low_warn_limit, $warn_limit, $high_limit, $current, $poller_type, $entPhysicalIndex, $entPhysicalIndex_measured, $user_func, $group, $dhcp_networks_base_oid, $pool_usage_base_oid, $pool_size_base_oid, $auth_dhcp_index, $standard_dhcp_index, $auth_dhcp_networks_descr, $standard_dhcp_networks_descr, $dhcp_networks, $array_index, $description, $data_array, $merged_array, $pool_data);

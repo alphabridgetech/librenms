@@ -124,19 +124,27 @@ class IPv4 extends IP
      */
     public function getNetworkAddress($cidr = null)
     {
-        if (is_null($cidr)) {
-            $cidr = $this->cidr;
-        }
+        $cidr ??= $this->cidr;
 
         return long2ip(ip2long($this->ip) & $this->cidr2long($cidr));
     }
 
     /**
-     * Convert this IP to an snmp index hex encoded
+     * Convert this IP to an snmp index decimal encoded
      *
      * @return string
      */
     public function toSnmpIndex()
+    {
+        return (string) $this->ip;
+    }
+
+    /**
+     * Convert this IP to an snmp string
+     *
+     * @return string
+     */
+    public function toSnmpString()
     {
         return (string) $this->ip;
     }

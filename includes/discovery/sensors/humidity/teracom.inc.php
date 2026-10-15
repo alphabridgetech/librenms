@@ -15,6 +15,7 @@
 
 use Illuminate\Support\Arr;
 use Illuminate\Support\Str;
+use LibreNMS\Enum\SensorType;
 
 $teracom_devices = [
     // Only supported by certain models
@@ -41,13 +42,13 @@ $teracom_devices = [
 ];
 
 if (Arr::exists($teracom_devices, $device['hardware'])) {
-    $teracom_mib = 'TERACOM-' . strtoupper($device['hardware']) . '-MIB';
+    $teracom_mib = 'TERACOM-' . strtoupper((string) $device['hardware']) . '-MIB';
     $teracom_sensorsSetup = SnmpQuery::cache()->hideMib()->walk("$teracom_mib::sensorsSetup")->table(1);
     $teracom_sensors = SnmpQuery::cache()->hideMib()->walk("$teracom_mib::sensors")->table(1);
     $teracom_temps = array_merge($teracom_sensors[0], $teracom_sensorsSetup[0]);
     foreach ($teracom_temps as $t_k => $t_v) {
         // Reformat the array to make it easier to use.
-        preg_match("/(s[\d])([\d]*)(.*)/", $t_k, $t_d);
+        preg_match("/(s[\d])([\d]*)(.*)/", (string) $t_k, $t_d);
         if ($t_d[2] == '') {
             $teracom_data[$t_d[1]][$t_d[3]] = $t_v;
         } else {
@@ -65,7 +66,7 @@ if (Arr::exists($teracom_devices, $device['hardware'])) {
             $low_limit = $t_data[1]['MINInt'];
             $current = $t_data[1]['Int'];
 
-            discover_sensor(null, 'humidity', $device, $oid, $index, 'teracom', $t_data['description'], $divisor, '1', $low_limit, null, null, $high_limit, $current);
+            discover_sensor(null, SensorType::Humidity, $device, $oid, $index, 'teracom', $t_data['description'], $divisor, '1', $low_limit, null, null, $high_limit, $current);
         }
     }
 }

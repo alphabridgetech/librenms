@@ -2,6 +2,7 @@
 
 use App\Facades\LibrenmsConfig;
 use App\Models\Eventlog;
+use Illuminate\Support\Facades\Log;
 use LibreNMS\Exceptions\JsonAppException;
 use LibreNMS\RRD\RrdDefinition;
 
@@ -10,7 +11,7 @@ $name = 'oslv_monitor';
 try {
     $returned = json_app_get($device, $name, 1);
 } catch (JsonAppException $e) {
-    echo PHP_EOL . $name . ':' . $e->getCode() . ':' . $e->getMessage() . PHP_EOL;
+    Log::info($name . ':' . $e->getCode() . ':' . $e->getMessage());
     update_application($app, $e->getCode() . ':' . $e->getMessage(), []); // Set empty metrics and error message
 
     return;
@@ -163,7 +164,7 @@ if (isset($data['has']) && is_array($data['has'])) {
 
 // process total stats, .data.totals
 if (isset($data['totals']) && is_array($data['totals'])) {
-    foreach ($stat_vars as $key => $stat) {
+    foreach ($stat_vars as $stat) {
         if (isset($data['totals'][$stat])) {
             $var_name = 'totals_' . $stat;
             $value = $data['totals'][$stat];
@@ -190,7 +191,7 @@ if (isset($data['oslvms']) && is_array($data['oslvms'])) {
         $metrics['running_' . $oslvms_key] = 1;
 
         $oslvms[] = $oslvms_key;
-        foreach ($stat_vars as $key => $stat) {
+        foreach ($stat_vars as $stat) {
             if (isset($oslvms_stats[$stat])) {
                 $var_name = 'oslvm___' . $oslvms_key . '___' . $stat;
                 $value = $oslvms_stats[$stat];

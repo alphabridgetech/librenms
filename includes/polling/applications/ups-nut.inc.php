@@ -29,7 +29,7 @@ use LibreNMS\RRD\RrdDefinition;
 //NET-SNMP-EXTEND-MIB::nsExtendOutputFull."ups-nut"
 $name = 'ups-nut';
 $oid = '.1.3.6.1.4.1.8072.1.3.2.3.1.2.7.117.112.115.45.110.117.116';
-$ups_nut = snmp_get($device, $oid, '-Oqv');
+$ups_nut = SnmpQuery::get($oid)->value();
 
 // If "extend" (used above) fails, try "exec" support.
 // Note, exec always splits outputs on newline, so need to use snmp_walk (not a single SNMP entry!)
@@ -65,7 +65,7 @@ if (! $ups_nut) {
     $UPSUPSBoost,
     $UPSForcedShutdown,
     $UPSAlarm
-] = array_pad(explode("\n", $ups_nut), 23, 0);
+] = array_pad(explode("\n", (string) $ups_nut), 23, 0);
 
 $rrd_def = RrdDefinition::make()
     ->addDataset('charge', 'GAUGE', 0, 100)
@@ -106,7 +106,7 @@ $sensors = [
     ['state_name' => 'UPSAlarm', 'value' => $UPSAlarm],
 ];
 
-foreach ($sensors as $index => $sensor) {
+foreach ($sensors as $sensor) {
     $rrd_def->addDataset($sensor['state_name'], 'GAUGE', 0);
     $fields[$sensor['state_name']] = $sensor['value'];
 }

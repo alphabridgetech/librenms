@@ -6,13 +6,8 @@ session_start();
 $user_id = Auth::user()->user_id ?? null;
 $token = null;
 
-// Get user API token
-try {
-    $apiToken = \App\Models\ApiToken::select('token_hash')->where('user_id', $user_id)->firstOrFail();
-    $token = $apiToken->token_hash;
-} catch (\Illuminate\Database\Eloquent\ModelNotFoundException $e) {
-    $token = null;
-}
+// Get user API token (Sanctum token for Telequill pages)
+$token = \App\Services\TelequillUiToken::forCurrentUser();
 
 $TELEQUILL_URL = "http://127.0.0.1:8000";
 $GEMINI_API_KEY = "AIzaSyDMYopkI7e4B1zHuSgTRu7wWcxaQjWKTko";

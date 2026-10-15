@@ -33,6 +33,9 @@ use App\Models\Route;
 use App\Models\Vlan;
 use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\Log;
+use LibreNMS\Discovery\Neighbors\Neighbor;
+use LibreNMS\Discovery\Neighbors\NeighborParser;
+use LibreNMS\Enum\LldpPortIdSubtype;
 use LibreNMS\Exceptions\InvalidIpException;
 use LibreNMS\Interfaces\Discovery\Ipv6AddressDiscovery;
 use LibreNMS\Interfaces\Discovery\RouteDiscovery;
@@ -81,10 +84,10 @@ class Jetstream extends OS implements Ipv6AddressDiscovery, RouteDiscovery, Vlan
         $routes = $routes->merge(\SnmpQuery::hideMib()->walk(['TPLINK-STATICROUTE-MIB::tpStaticRouteConfigTable'])
         ->mapTable(function ($data) {
             // iterface name "vlan[xxx]" where xxx=ifIndex
-            if (preg_match('/^vlan([\d]+)$/i', $data['tpStaticRouteItemInterfaceName'], $intName)) { //other TP-LINKs
+            if (preg_match('/^vlan([\d]+)$/i', (string) $data['tpStaticRouteItemInterfaceName'], $intName)) { //other TP-LINKs
                 $metric = $data['tpStaticRouteItemDistance'];
             } else {
-                preg_match('/^vlan([\d]+)$/i', $data['tpStaticRouteItemDistance'], $intName); //T1600g-28TS wrong data, swapped distance/name fields
+                preg_match('/^vlan([\d]+)$/i', (string) $data['tpStaticRouteItemDistance'], $intName); //T1600g-28TS wrong data, swapped distance/name fields
                 $metric = $data['tpStaticRouteItemInterfaceName'];
             }
 
@@ -114,10 +117,10 @@ class Jetstream extends OS implements Ipv6AddressDiscovery, RouteDiscovery, Vlan
         $routes = $routes->merge(\SnmpQuery::hideMib()->walk(['TPLINK-IPV6STATICROUTE-MIB::tpIPv6StaticRouteConfigTable'])
         ->mapTable(function ($data) {
             // iterface name "vlan[xxx]" where xxx=ifIndex
-            if (preg_match('/^vlan([\d]+)$/i', $data['tpIPv6StaticRouteItemInterfaceName'], $intName)) { //other TP-LINKs
+            if (preg_match('/^vlan([\d]+)$/i', (string) $data['tpIPv6StaticRouteItemInterfaceName'], $intName)) { //other TP-LINKs
                 $metric = $data['tpIPv6StaticRouteItemDistance'];
             } else {
-                preg_match('/^vlan([\d]+)$/i', $data['tpIPv6StaticRouteItemDistance'], $intName); //T1600g-28TS wrong data, swapped distance/name fields
+                preg_match('/^vlan([\d]+)$/i', (string) $data['tpIPv6StaticRouteItemDistance'], $intName); //T1600g-28TS wrong data, swapped distance/name fields
                 $metric = $data['tpIPv6StaticRouteItemInterfaceName'];
             }
             if (! empty($intName)) {
@@ -153,13 +156,11 @@ class Jetstream extends OS implements Ipv6AddressDiscovery, RouteDiscovery, Vlan
         }
 
         return SnmpQuery::cache()->walk('TPLINK-DOT1Q-VLAN-MIB::vlanConfigTable')
-            ->mapTable(function ($data, $vlan_id) {
-                return new Vlan([
-                    'vlan_vlan' => $vlan_id,
-                    'vlan_domain' => 1,
-                    'vlan_name' => $data['TPLINK-DOT1Q-VLAN-MIB::dot1qVlanDescription'],
-                ]);
-            });
+            ->mapTable(fn ($data, $vlan_id) => new Vlan([
+                'vlan_vlan' => $vlan_id,
+                'vlan_domain' => 1,
+                'vlan_name' => $data['TPLINK-DOT1Q-VLAN-MIB::dot1qVlanDescription'],
+            ]));
     }
 
     public function discoverVlanPorts(Collection $vlans): Collection
@@ -179,7 +180,7 @@ class Jetstream extends OS implements Ipv6AddressDiscovery, RouteDiscovery, Vlan
             $types = ['TPLINK-DOT1Q-VLAN-MIB::vlanTagPortMemberAdd' => 0, 'TPLINK-DOT1Q-VLAN-MIB::vlanUntagPortMemberAdd' => 1];
             foreach ($types as $type => $tag) {
                 $expand = $this->jetstreamExpand($data[$type] ?? []);
-                foreach ($expand as $key => $port) {
+                foreach ($expand as $port) {
                     $ifIndex = $portConfig[$port] ?? 0;
                     $ports->push(new PortVlan([
                         'vlan' => $vlan_id,
@@ -198,7 +199,7 @@ class Jetstream extends OS implements Ipv6AddressDiscovery, RouteDiscovery, Vlan
     {
         $result = [];
 
-        preg_match_all('#(LAG|\d+/\d+/)(\d+)(?:-(\d+))?#', $var, $lags);
+        preg_match_all('#(LAG|\d+/\d+/)(\d+)(?:-(\d+))?#', (string) $var, $lags);
 
         foreach ($lags[2] as $index => $start) {
             $end = $lags[3][$index] ?: $start;
@@ -208,5 +209,49 @@ class Jetstream extends OS implements Ipv6AddressDiscovery, RouteDiscovery, Vlan
         }
 
         return $result;
+    }
+
+    protected function discoverLldpNeighbors(): Collection
+    {
+        $ports = $this->lldpLocalPorts();
+
+        return SnmpQuery::hideMib()->walk('TPLINK-LLDPINFO-MIB::lldpNeighborInfoTable')
+            ->mapTable(function (array $entry, $ifIndex, $neighborIndex = null) use ($ports) {
+                if ($neighborIndex === null) {
+                    return null; // invalid index
+                }
+
+                $portIdSubtype = self::lldpPortIdSubtype($entry['lldpNeighborPortIdType'] ?? '');
+                $managementIp = preg_replace('/^::(?=\d+\.\d+\.\d+\.\d+$)/', '', (string) ($entry['lldpNeighborManageIpAddr'] ?? '')); // ::169.254.2.1
+
+                return new Neighbor(
+                    protocol: 'lldp',
+                    localPortId: ($ports->byName('gigabitEthernet ' . ($entry['lldpNeighborPortId'] ?? '')) ?? $ports->byIfIndex($ifIndex))?->port_id,
+                    sysName: NeighborParser::parseName($entry['lldpNeighborDeviceName'] ?? ''),
+                    sysDescr: NeighborParser::parseText($entry['lldpNeighborDeviceDescr'] ?? ''),
+                    managementIp: in_array($managementIp, ['', '::', '0.0.0.0']) ? null : $managementIp,
+                    chassisMac: str_contains(strtolower((string) ($entry['lldpNeighborChassisIdType'] ?? '')), 'mac') ? NeighborParser::parseMac($entry['lldpNeighborChassisId'] ?? '') : null,
+                    portId: NeighborParser::parsePortId((string) ($entry['lldpNeighborPortIdDescr'] ?? ''), $portIdSubtype),
+                    portIdSubtype: $portIdSubtype,
+                    portDescr: NeighborParser::parseText($entry['lldpNeighborPortDescr'] ?? ''),
+                    portMac: $portIdSubtype === LldpPortIdSubtype::MacAddress ? NeighborParser::parseMac($entry['lldpNeighborPortIdDescr'] ?? '') : null,
+                );
+            })->filter()->values();
+    }
+
+    /**
+     * TP-Link reports the port id subtype as text
+     */
+    private static function lldpPortIdSubtype(string $type): LldpPortIdSubtype
+    {
+        return match (strtolower(trim($type))) {
+            'interface alias' => LldpPortIdSubtype::InterfaceAlias,
+            'port component' => LldpPortIdSubtype::PortComponent,
+            'mac address' => LldpPortIdSubtype::MacAddress,
+            'network address' => LldpPortIdSubtype::NetworkAddress,
+            'interface name' => LldpPortIdSubtype::InterfaceName,
+            'agent circuit id' => LldpPortIdSubtype::AgentCircuitId,
+            default => LldpPortIdSubtype::Local,
+        };
     }
 }

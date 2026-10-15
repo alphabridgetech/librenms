@@ -66,7 +66,7 @@ function updateHostsYml($device)
     }
 }
 
-if (! Auth::user()->hasGlobalAdmin()) {
+if (! \Illuminate\Support\Facades\Gate::allows('admin')) {
     include 'includes/html/error-no-perm.inc.php';
     exit;
 }
@@ -282,7 +282,7 @@ if (!empty($upload_result)) {
     if ($type === 'success') {
         print_message($message);
         if (!empty($additional)) {
-            print_warning($additional);
+            echo '<div class="alert alert-warning"><i class="fa fa-fw fa-exclamation-triangle" aria-hidden="true"></i> ' . $additional . '</div>';
         }
     } else {
         print_error($message);

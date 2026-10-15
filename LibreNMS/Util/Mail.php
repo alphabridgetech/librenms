@@ -29,37 +29,39 @@ namespace LibreNMS\Util;
 use App\Facades\LibrenmsConfig;
 use LibreNMS\Exceptions\RrdGraphException;
 use PHPMailer\PHPMailer\PHPMailer;
+use Symfony\Component\Mime\Address;
+use Symfony\Component\Mime\Exception\ExceptionInterface as MimeException;
 
 class Mail
 {
     /**
      * Parse string with emails. Return array with email (as key) and name (as value)
      *
-     * @param  string  $emails
-     * @return array|false
+     * @return array<string, string>
      */
-    public static function parseEmails($emails)
+    public static function parseEmails(string $emails): array
     {
         $result = [];
-        $regex = '/^[\"\']?([^\"\']+)[\"\']?\s{0,}<([^@]+@[^>]+)>$/';
-        if (is_string($emails)) {
-            $emails = preg_split('/[,;]\s{0,}/', $emails);
-            foreach ($emails as $email) {
-                if (preg_match($regex, $email, $out, PREG_OFFSET_CAPTURE)) {
-                    $result[$out[2][0]] = $out[1][0];
-                } else {
-                    if (strpos($email, '@')) {
-                        $from_name = LibrenmsConfig::get('email_user');
-                        $result[$email] = $from_name;
-                    }
-                }
+
+        // split on , or ; but not inside a double quoted name
+        foreach (preg_split('/"[^"]*"(*SKIP)(*FAIL)|[,;]/', $emails) as $email) {
+            $email = trim($email);
+            if ($email === '') {
+                continue;
             }
 
-            return $result;
+            try {
+                $address = Address::create($email);
+            } catch (MimeException) {
+                continue;
+            }
+
+            if (filter_var($address->getAddress(), FILTER_VALIDATE_EMAIL) !== false) {
+                $result[$address->getAddress()] = $address->getName() ?: LibrenmsConfig::get('email_user');
+            }
         }
 
-        // Return FALSE if input not string
-        return false;
+        return $result;
     }
 
     /**
@@ -80,9 +82,9 @@ class Mail
         if (is_array($emails) || ($emails = self::parseEmails($emails))) {
             d_echo("Attempting to email $subject to: " . implode('; ', array_keys($emails)) . PHP_EOL);
             $mail = new PHPMailer(true);
-            $mail->Hostname = php_uname('n');
+            $mail->Hostname = gethostbyaddr(gethostbyname(gethostname()));
 
-            foreach (self::parseEmails(LibrenmsConfig::get('email_from')) as $from => $from_name) {
+            foreach (self::parseEmails((string) LibrenmsConfig::get('email_from')) as $from => $from_name) {
                 $mail->setFrom($from, $from_name);
             }
 

@@ -31,6 +31,39 @@ use App\Models\Device;
 
 class Rewrite
 {
+    public static function ipmiSensorName(?string $hardware, string $sensor): string
+    {
+        $names = [
+            'HP ProLiant BL460c G6' => [
+                'Temp 1' => 'Ambient zone',
+                'Temp 2' => 'CPU 1',
+                'Temp 3' => 'CPU 2',
+                'Temp 4' => 'Memory zone',
+                'Temp 5' => 'Memory zone',
+                'Temp 6' => 'Memory zone',
+                'Temp 7' => 'System zone',
+                'Temp 8' => 'System zone',
+                'Temp 9' => 'System zone',
+                'Temp 10' => 'Storage zone',
+                'Power Meter' => 'Power usage',
+            ],
+            'HP ProLiant BL460c G1' => [
+                'Temp 1' => 'System zone',
+                'Temp 2' => 'CPU 1 zone',
+                'Temp 3' => 'CPU 1',
+                'Temp 4' => 'CPU 1',
+                'Temp 5' => 'CPU 2 zone',
+                'Temp 6' => 'CPU 2',
+                'Temp 7' => 'CPU 2',
+                'Temp 8' => 'Memory zone',
+                'Temp 9' => 'Ambient zone',
+                'Power Meter' => 'Power usage',
+            ],
+        ];
+
+        return $names[$hardware][$sensor] ?? $sensor;
+    }
+
     public static function normalizeIfType($type)
     {
         $rewrite_iftype = [
@@ -52,11 +85,7 @@ class Rewrite
             'propPointToPointSerial' => 'PtP Serial',
         ];
 
-        if (isset($rewrite_iftype[$type])) {
-            return $rewrite_iftype[$type];
-        }
-
-        return $type;
+        return $rewrite_iftype[$type] ?? $type;
     }
 
     public static function shortenIfType($type)
@@ -149,29 +178,29 @@ class Rewrite
     {
         if ($device['os'] == 'ios') {
             if (! empty($device['hardware'])) {
-                if (preg_match('/^WS-C([A-Za-z0-9]+)/', $device['hardware'], $matches)) {
+                if (preg_match('/^WS-C([A-Za-z0-9]+)/', (string) $device['hardware'], $matches)) {
                     if (! $short) {
                         $device['hardware'] = 'Catalyst ' . $matches[1] . ' (' . $device['hardware'] . ')';
                     } else {
                         $device['hardware'] = 'Catalyst ' . $matches[1];
                     }
-                } elseif (preg_match('/^CISCO([0-9]+)(.*)/', $device['hardware'], $matches)) {
+                } elseif (preg_match('/^CISCO([0-9]+)(.*)/', (string) $device['hardware'], $matches)) {
                     if (! $short && $matches[2]) {
                         $device['hardware'] = 'Cisco ' . $matches[1] . ' (' . $device['hardware'] . ')';
                     } else {
                         $device['hardware'] = 'Cisco ' . $matches[1];
                     }
                 }
-            } elseif (preg_match('/Cisco IOS Software, C([A-Za-z0-9]+) Software.*/', $device['sysDescr'], $matches)) {
+            } elseif (preg_match('/Cisco IOS Software, C([A-Za-z0-9]+) Software.*/', (string) $device['sysDescr'], $matches)) {
                 $device['hardware'] = 'Catalyst ' . $matches[1];
-            } elseif (preg_match('/Cisco IOS Software, ([0-9]+) Software.*/', $device['sysDescr'], $matches)) {
+            } elseif (preg_match('/Cisco IOS Software, ([0-9]+) Software.*/', (string) $device['sysDescr'], $matches)) {
                 $device['hardware'] = 'Cisco ' . $matches[1];
             }
         }
 
         if ($device['os'] == 'iosxe') {
             if ($device['hardware']) {
-                if (preg_match('/CAT9K/', $device['sysDescr'], $matches) && preg_match('/^C(9[A-Za-z0-9]+)/', $device['hardware'], $matches2)) {
+                if (preg_match('/CAT9K/', (string) $device['sysDescr'], $matches) && preg_match('/^C(9[A-Za-z0-9]+)/', (string) $device['hardware'], $matches2)) {
                     if (! $short) {
                         $device['hardware'] = 'Catalyst ' . $matches2[1] . ' (' . $device['hardware'] . ')';
                     } else {
@@ -408,5 +437,24 @@ class Rewrite
     public static function celsiusToFahrenheit(float $celsius): float
     {
         return round($celsius * 1.8 + 32, 2);
+    }
+
+    /**
+     * Take a BGP error code and subcode to return a string representation of it
+     * https://www.iana.org/assignments/bgp-parameters/bgp-parameters.xhtml#bgp-parameters-3
+     */
+    public static function bgpErrorCode(int|string $code, int|string $subcode): string
+    {
+        $codeKey = "bgp.error_codes.$code";
+        $subcodeKey = "bgp.error_subcodes.$code.$subcode";
+
+        $codeMessage = __($codeKey);
+        $subcodeMessage = __($subcodeKey);
+
+        if ($subcodeMessage !== $subcodeKey) {
+            return "$codeMessage - $subcodeMessage";
+        }
+
+        return $codeMessage !== $codeKey ? $codeMessage : 'Unknown';
     }
 }

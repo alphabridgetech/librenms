@@ -1,6 +1,7 @@
 <?php
 
 use App\Models\Eventlog;
+use Illuminate\Support\Facades\Log;
 use LibreNMS\Exceptions\JsonAppException;
 use LibreNMS\Exceptions\JsonAppParsingFailedException;
 use LibreNMS\RRD\RrdDefinition;
@@ -11,7 +12,7 @@ try {
     $f2b = json_app_get($device, $name);
 } catch (JsonAppParsingFailedException $e) {
     // Legacy script, build compatible array
-    $legacy = explode("\n", $e->getOutput());
+    $legacy = explode("\n", (string) $e->getOutput());
     $f2b = [
         'data' => [
             'total' => array_shift($legacy), // total was first line in legacy app
@@ -20,13 +21,14 @@ try {
     ];
 
     foreach ($legacy as $jail_data) {
-        [$jail, $banned] = explode(' ', $jail_data);
-        if (isset($jail) && isset($banned)) {
-            $f2b['data']['jails'][$jail] = $banned;
+        // skip lines that are not "jail count" pairs, such as the legacy firewalled count
+        $jail_parts = explode(' ', trim($jail_data), 2);
+        if (count($jail_parts) === 2) {
+            $f2b['data']['jails'][$jail_parts[0]] = $jail_parts[1];
         }
     }
 } catch (JsonAppException $e) {
-    echo PHP_EOL . $name . ':' . $e->getCode() . ':' . $e->getMessage() . PHP_EOL;
+    Log::info($name . ':' . $e->getCode() . ':' . $e->getMessage());
     update_application($app, $e->getCode() . ':' . $e->getMessage(), []); // Set empty metrics and error message
 
     return;
@@ -43,7 +45,7 @@ $rrd_def = RrdDefinition::make()
 
 $fields = ['banned' => $f2b['total']];
 $metrics['total'] = $fields; // don't include legacy ds in db
-$fields['firewalled'] = 'U'; // legacy ds
+$fields['firewalled'] = null; // legacy ds
 
 $tags = ['name' => $name, 'app_id' => $app->app_id, 'rrd_def' => $rrd_def, 'rrd_name' => $rrd_name];
 app('Datastore')->put($device, 'app', $tags, $fields);
@@ -71,7 +73,7 @@ if (count($added_jails) > 0 || count($removed_jails) > 0) {
     $app->data = ['jails' => $jails]; // save jails list
     $log_message = 'Fail2ban Jail Change:';
     $log_message .= count($added_jails) > 0 ? ' Added ' . implode(',', $added_jails) : '';
-    $log_message .= count($removed_jails) > 0 ? ' Removed ' . implode(',', $added_jails) : '';
+    $log_message .= count($removed_jails) > 0 ? ' Removed ' . implode(',', $removed_jails) : '';
     Eventlog::log($log_message, $device['device_id'], 'application');
 }
 

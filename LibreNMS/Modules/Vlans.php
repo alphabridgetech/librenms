@@ -36,6 +36,7 @@ use LibreNMS\DB\SyncsModels;
 use LibreNMS\Interfaces\Data\DataStorageInterface;
 use LibreNMS\Interfaces\Module;
 use LibreNMS\OS;
+use LibreNMS\Polling\ConnectivityHelper;
 use LibreNMS\Polling\ModuleStatus;
 
 class Vlans implements Module
@@ -53,21 +54,21 @@ class Vlans implements Module
     /**
      * @inheritDoc
      */
-    public function shouldDiscover(OS $os, ModuleStatus $status): bool
+    public function shouldDiscover(OS $os, ModuleStatus $status, ConnectivityHelper $connectivity): bool
     {
-        return $status->isEnabledAndDeviceUp($os->getDevice());
+        return $status->isEnabled() && $connectivity->snmpIsAvailable();
     }
 
     /**
      * @inheritDoc
      */
-    public function shouldPoll(OS $os, ModuleStatus $status): bool
+    public function shouldPoll(OS $os, ModuleStatus $status, ConnectivityHelper $connectivity): bool
     {
         if (defined('PHPUNIT_RUNNING')) {
             return false; // FIXME improve test suite to skip polling when polling data is null
         }
 
-        return $status->isEnabledAndDeviceUp($os->getDevice());
+        return $status->isEnabled() && $connectivity->snmpIsAvailable();
     }
 
     /**
@@ -75,9 +76,7 @@ class Vlans implements Module
      */
     public function discover(OS $os): void
     {
-        $vlans = $os->discoverVlans()->filter(function (?Vlan $data) {
-            return ! empty($data->vlan_vlan);
-        })->each(function (Vlan $data) {
+        $vlans = $os->discoverVlans()->filter(fn (?Vlan $data) => ! empty($data->vlan_vlan))->each(function (Vlan $data): void {
             if (empty($data->vlan_name)) {
                 $data->vlan_name = 'VLAN ' . $data->vlan_vlan; // default VLAN name
             }
@@ -87,9 +86,7 @@ class Vlans implements Module
         $vlans = $this->syncModels($os->getDevice(), 'vlans', $vlans);
         ModuleModelObserver::done();
 
-        $ports = $os->discoverVlanPorts($vlans)->filter(function (PortVlan $data) {
-            return ! empty($data->vlan) && ! empty($data->port_id);
-        })->each(function (PortVlan $data) {
+        $ports = $os->discoverVlanPorts($vlans)->filter(fn (PortVlan $data) => ! empty($data->vlan) && ! empty($data->port_id))->each(function (PortVlan $data): void {
             $data->priority ??= 0;
             $data->state ??= 'unknown';
             $data->cost ??= 0;

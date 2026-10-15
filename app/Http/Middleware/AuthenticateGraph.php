@@ -57,7 +57,7 @@ class AuthenticateGraph
     public function handle(Request $request, Closure $next, $relative = null): Response
     {
         // if user is logged in, allow
-        if (\Auth::check()) {
+        if ($request->user() !== null) {
             return $next($request);
         }
 
@@ -93,7 +93,7 @@ class AuthenticateGraph
                     return true;
                 }
             }
-        } catch (InvalidIpException $e) {
+        } catch (InvalidIpException) {
             d_echo("Client IP ($ip) is invalid.\n");
         }
 

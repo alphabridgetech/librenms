@@ -1,6 +1,6 @@
 <?php
 
-require_once 'includes/systemd-shared.inc.php';
+require 'includes/systemd-shared.inc.php';
 
 /**
  * Builds the graphs variable
@@ -11,7 +11,7 @@ require_once 'includes/systemd-shared.inc.php';
  * @param  array  $graphs
  * @return $graphs
  */
-function systemd_graph_builder(
+$systemd_graph_builder = function (
     $state_type,
     $systemd_mapper,
     $state_type_ternary_depth,
@@ -26,14 +26,14 @@ function systemd_graph_builder(
     } else {
         foreach ($systemd_mapper as $flattened_type => $state_statuses) {
             // Ternary-depth systemd type check.
-            if (! preg_match('/^(.+)_(.+)$/', $flattened_type, $regex_matches)) {
+            if (! preg_match('/^(.+)_(.+)$/', (string) $flattened_type, $regex_matches)) {
                 continue;
             }
             if ($regex_matches[1] !== $state_type) {
                 continue;
             }
 
-            $graph_descr = ucfirst($flattened_type) . ' State';
+            $graph_descr = ucfirst((string) $flattened_type) . ' State';
             $graphs[$graph_name]['sub_states'][$flattened_type][
                 'desc'
             ] = $graph_descr;
@@ -41,7 +41,7 @@ function systemd_graph_builder(
     }
 
     return $graphs;
-}
+};
 
 /**
  * Builds a graph array and outputs the graph.
@@ -51,12 +51,12 @@ function systemd_graph_builder(
  * @param  null|string  $sub_state_type
  * @param  string  $graph_desc
  */
-function systemd_graph_printer(
+$systemd_graph_printer = function (
     $state_type,
     $app_id,
     $sub_state_type,
     $graph_desc
-) {
+): void {
     $graph_type = $state_type;
     $graph_array['height'] = '100';
     $graph_array['width'] = '215';
@@ -78,7 +78,7 @@ function systemd_graph_printer(
     echo '</div>';
     echo '</div>';
     echo '</div>';
-}
+};
 
 $link_array = [
     'page' => 'device',
@@ -93,7 +93,7 @@ echo generate_link('All Unit States', $link_array) . ' | ';
 
 $i = 0;
 foreach ($systemd_state_types as $state_type) {
-    echo generate_link(ucfirst($state_type) . ' State', $link_array, [
+    echo generate_link(ucfirst((string) $state_type) . ' State', $link_array, [
         'section' => $state_type,
     ]);
 
@@ -111,7 +111,7 @@ $graphs = [];
 // Build graphs variable
 if (isset($vars['section'])) {
     // Build graphs for the individual state sections (load, active, or sub).
-    $graphs = systemd_graph_builder(
+    $graphs = $systemd_graph_builder(
         $vars['section'],
         $systemd_mapper,
         $state_type_ternary_depth,
@@ -120,7 +120,7 @@ if (isset($vars['section'])) {
 } else {
     // Build graphs for the combined states section (load, active, and sub).
     foreach ($systemd_state_types as $state_type) {
-        $graphs = systemd_graph_builder(
+        $graphs = $systemd_graph_builder(
             $state_type,
             $systemd_mapper,
             $state_type_ternary_depth,
@@ -133,7 +133,7 @@ if (isset($vars['section'])) {
 foreach ($graphs as $state_type => $values) {
     if (in_array($values['type'], $state_type_ternary_depth)) {
         foreach ($values['sub_states'] as $sub_state_type => $text) {
-            systemd_graph_printer(
+            $systemd_graph_printer(
                 $state_type,
                 $app['app_id'],
                 $sub_state_type,
@@ -141,7 +141,7 @@ foreach ($graphs as $state_type => $values) {
             );
         }
     } else {
-        systemd_graph_printer(
+        $systemd_graph_printer(
             $state_type,
             $app['app_id'],
             null,

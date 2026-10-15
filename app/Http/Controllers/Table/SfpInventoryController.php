@@ -8,9 +8,9 @@ use App\Models\EntPhysical;
 
 class SfpInventoryController extends TableController
 {
-    protected $model = Transceiver::class;
+    protected ?string $model = Transceiver::class;
 
-    public function rules()
+    public function rules(): array
     {
         return [
             'device' => 'nullable|int',
@@ -21,14 +21,14 @@ class SfpInventoryController extends TableController
         ];
     }
 
-    protected function filterFields($request)
+    protected function filterFields($request): array
     {
         return [
             'device_id' => 'device',
         ];
     }
 
-    protected function searchFields($request)
+    protected function searchFields($request): array
     {
         return [
             'vendor',
@@ -43,7 +43,7 @@ class SfpInventoryController extends TableController
         ];
     }
 
-    protected function sortFields($request)
+    protected function sortFields($request): array
     {
         return [
             'device_ip' => 'device_id',
@@ -55,7 +55,7 @@ class SfpInventoryController extends TableController
         ];
     }
 
-    protected function baseQuery($request)
+    protected function baseQuery($request): \Illuminate\Database\Eloquent\Builder|\Illuminate\Database\Query\Builder
     {
         $user = $request->user();
         $accessibleDeviceIds = Device::hasAccess($user)->pluck('device_id')->toArray();
@@ -111,7 +111,7 @@ class SfpInventoryController extends TableController
         }
     }
 
-    protected function getExportHeaders()
+    protected function getExportHeaders(): array
     {
         return [
             'Device IP',
@@ -128,7 +128,7 @@ class SfpInventoryController extends TableController
         ];
     }
 
-    public function formatItem($item)
+    public function formatItem($item): \Illuminate\Database\Eloquent\Model|array|\Illuminate\Support\Collection
     {
         if ($item instanceof Transceiver) {
             $device = $item->device;

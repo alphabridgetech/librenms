@@ -102,6 +102,7 @@ $graphs['powerdns'] = [
 $graphs['sneck'] = [
     'results',
     'time',
+    'runtime',
 ];
 $graphs['ntp-client'] = [
     'stats',
@@ -181,6 +182,10 @@ $graphs['gpsd'] = [
     'satellites',
     'dop',
     'mode',
+    'altitude',
+    'location',
+    'latitude',
+    'longitude',
 ];
 $graphs['exim-stats'] = [
     'frozen',
@@ -631,6 +636,31 @@ $graphs['poudriere'] = [
     'voluntary_context_switches',
     'involuntary_context_switches',
 ];
+$graphs['i2pd'] = [
+    'uptime',
+    'bw_1s',
+    'bw_15s',
+    'net_status',
+    'tunnels_participating',
+    'tunnels_successrate',
+    'peers',
+    'total_bytes',
+];
+$graphs['syslog-ng'] = [
+    'center',
+    'batch_size_avg',
+    'batch_size_max',
+    'memory_usage',
+    'msg_size_avg',
+    'connections',
+    'discarded',
+    'dropped',
+    'processed',
+    'queued',
+    'truncated_bytes',
+    'truncated_count',
+    'written',
+];
 
 echo '<div class="panel panel-default">';
 echo '<div class="panel-heading">';
@@ -658,7 +688,7 @@ foreach ($apps as $app_group) {
         echo "<span class='pagemenu-selected'>";
     }
     echo $app_state_info;
-    echo generate_link(htmlentities($app->displayName()), ['page' => 'apps', 'app' => $app->app_type]);
+    echo generate_link(htmlentities((string) $app->displayName()), ['page' => 'apps', 'app' => $app->app_type]);
     if ($selected_app == $app->app_type) {
         echo '</span>';
     }

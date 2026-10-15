@@ -1,21 +1,20 @@
 <?php
 
 use Illuminate\Support\Str;
+use LibreNMS\Util\ProgressList;
 
 if ($device['os_group'] == 'cisco') {
-    echo ' CISCO-ENTITY-SENSOR: ';
-
     $oids = [];
-    echo 'Caching OIDs:';
+    $progress = ProgressList::start('CISCO-ENTITY-SENSOR caching OIDs');
 
     if (empty($entity_array)) {
         $tmp_oids = ['entPhysicalDescr', 'entPhysicalName', 'entPhysicalClass', 'entPhysicalContainedIn', 'entPhysicalParentRelPos'];
         $entity_array = [];
         foreach ($tmp_oids as $tmp_oid) {
-            echo " $tmp_oid";
+            $progress->add($tmp_oid);
             $entity_array = snmpwalk_cache_multi_oid($device, $tmp_oid, $entity_array, 'ENTITY-MIB:CISCO-ENTITY-SENSOR-MIB');
         }
-        echo ' entAliasMappingIdentifier';
+        $progress->add('entAliasMappingIdentifier');
         $entity_array = snmpwalk_cache_twopart_oid($device, 'entAliasMappingIdentifier', $entity_array, 'ENTITY-MIB:IF-MIB');
     }
 
@@ -23,29 +22,33 @@ if ($device['os_group'] == 'cisco') {
     $port_array = snmpwalk_cache_multi_oid($device, 'ifName', $port_array, 'ENTITY-MIB:IF-MIB');
     $port_reverse_array = [];
     foreach ($port_array as $index => $port) {
+        if (! isset($port['ifName'])) {
+            continue;
+        }
         $port['ifIndex'] = $index;
         $port_reverse_array[$port['ifName']] = $port;
     }
     d_echo($port_reverse_array);
 
-    echo '  entSensorType';
+    $progress->add('entSensorType');
     $oids = snmpwalk_cache_multi_oid($device, 'entSensorType', $oids, 'CISCO-ENTITY-SENSOR-MIB');
-    echo ' entSensorScale';
+    $progress->add('entSensorScale');
     $oids = snmpwalk_cache_multi_oid($device, 'entSensorScale', $oids, 'CISCO-ENTITY-SENSOR-MIB');
-    echo ' entSensorValue';
+    $progress->add('entSensorValue');
     $oids = snmpwalk_cache_multi_oid($device, 'entSensorValue', $oids, 'CISCO-ENTITY-SENSOR-MIB');
-    echo ' entSensorMeasuredEntity';
+    $progress->add('entSensorMeasuredEntity');
     $oids = snmpwalk_cache_multi_oid($device, 'entSensorMeasuredEntity', $oids, 'CISCO-ENTITY-SENSOR-MIB');
-    echo ' entSensorPrecision';
+    $progress->add('entSensorPrecision');
     $oids = snmpwalk_cache_multi_oid($device, 'entSensorPrecision', $oids, 'CISCO-ENTITY-SENSOR-MIB');
 
     $t_oids = [];
-    echo ' entSensorThresholdSeverity';
+    $progress->add('entSensorThresholdSeverity');
     $t_oids = snmpwalk_cache_twopart_oid($device, 'entSensorThresholdSeverity', $t_oids, 'CISCO-ENTITY-SENSOR-MIB');
-    echo ' entSensorThresholdRelation';
+    $progress->add('entSensorThresholdRelation');
     $t_oids = snmpwalk_cache_twopart_oid($device, 'entSensorThresholdRelation', $t_oids, 'CISCO-ENTITY-SENSOR-MIB');
-    echo ' entSensorThresholdValue';
+    $progress->add('entSensorThresholdValue');
     $t_oids = snmpwalk_cache_twopart_oid($device, 'entSensorThresholdValue', $t_oids, 'CISCO-ENTITY-SENSOR-MIB');
+    $progress->end();
 
     d_echo($oids);
 
@@ -91,42 +94,19 @@ if ($device['os_group'] == 'cisco') {
                 $current = $entry['entSensorValue'];
                 $type = $entitysensor[$entry['entSensorType']];
 
-                // echo("$index : ".$entry['entSensorScale']."|");
-                // FIXME this stuff is foul
-                if ($entry['entSensorScale'] == 'nano') {
-                    $divisor = '1000000000';
-                    $multiplier = '1';
-                }
-
-                if ($entry['entSensorScale'] == 'micro') {
-                    $divisor = '1000000';
-                    $multiplier = '1';
-                }
-
-                if ($entry['entSensorScale'] == 'milli') {
-                    $divisor = '1000';
-                    $multiplier = '1';
-                }
-
-                if ($entry['entSensorScale'] == 'units') {
-                    $divisor = '1';
-                    $multiplier = '1';
-                }
-
-                if ($entry['entSensorScale'] == 'kilo') {
-                    $divisor = '1';
-                    $multiplier = '1000';
-                }
-
-                if ($entry['entSensorScale'] == 'mega') {
-                    $divisor = '1';
-                    $multiplier = '1000000';
-                }
-
-                if ($entry['entSensorScale'] == 'giga') {
-                    $divisor = '1';
-                    $multiplier = '1000000000';
-                }
+                // Try to handle the scale
+                [$divisor, $multiplier] = match ($entry['entSensorScale']) {
+                    'zepto' => [1000000000000000000, 1],
+                    'nano' => [1000000000, 1],
+                    'micro' => [1000000, 1],
+                    'milli' => [1000, 1],
+                    'units' => [1, 1],
+                    'kilo' => [1, 1000],
+                    'mega' => [1, 1000000],
+                    'giga' => [1, 1000000000],
+                    'yocto' => [1, 1],
+                    default => [1, 1],
+                };
 
                 if (is_numeric($entry['entSensorPrecision'])
                         && $entry['entSensorPrecision'] > '0'
@@ -144,20 +124,32 @@ if ($device['os_group'] == 'cisco') {
                 $limit_low = null;
                 $warn_limit = null;
                 $warn_limit_low = null;
+                $other_limit = null;
+                $other_limit_low = null;
 
                 // Check thresholds for this entry (bit dirty, but it works!)
                 if (isset($t_oids[$index]) && is_array($t_oids[$index])) {
-                    foreach ($t_oids[$index] as $t_index => $key) {
+                    foreach ($t_oids[$index] as $key) {
                         // Skip invalid treshold values
-                        if (! isset($key['entSensorThresholdValue']) || $key['entSensorThresholdValue'] == '-32768') {
+                        if (! isset($key['entSensorThresholdValue']) || $key['entSensorThresholdValue'] == '-32768' || $key['entSensorThresholdValue'] == '2147483647') {
+                            continue;
+                        } elseif ($type == 'fanspeed' && $key['entSensorThresholdValue'] == '-1') {
                             continue;
                         }
                         // Critical Limit
                         if (($key['entSensorThresholdSeverity'] == 'major' || $key['entSensorThresholdSeverity'] == 'critical') && ($key['entSensorThresholdRelation'] == 'greaterOrEqual' || $key['entSensorThresholdRelation'] == 'greaterThan')) {
+                            if ($key['entSensorThresholdValue'] == '0' && isset($limit)) {
+                                // Ignore a threshold of 0 if another threshold has been set (major vs critical)
+                                continue;
+                            }
                             $limit = ($key['entSensorThresholdValue'] * $multiplier / $divisor);
                         }
 
                         if (($key['entSensorThresholdSeverity'] == 'major' || $key['entSensorThresholdSeverity'] == 'critical') && ($key['entSensorThresholdRelation'] == 'lessOrEqual' || $key['entSensorThresholdRelation'] == 'lessThan')) {
+                            if ($key['entSensorThresholdValue'] == '0' && isset($limit_low)) {
+                                // Ignore a threshold of 0 if another threshold has been set (major vs critical)
+                                continue;
+                            }
                             $limit_low = ($key['entSensorThresholdValue'] * $multiplier / $divisor);
                         }
 
@@ -168,6 +160,15 @@ if ($device['os_group'] == 'cisco') {
 
                         if ($key['entSensorThresholdSeverity'] == 'minor' && ($key['entSensorThresholdRelation'] == 'lessOrEqual' || $key['entSensorThresholdRelation'] == 'lessThan')) {
                             $warn_limit_low = ($key['entSensorThresholdValue'] * $multiplier / $divisor);
+                        }
+
+                        // Other Limit
+                        if ($key['entSensorThresholdSeverity'] == 'other' && ($key['entSensorThresholdRelation'] == 'greaterOrEqual' || $key['entSensorThresholdRelation'] == 'greaterThan')) {
+                            $other_limit = ($key['entSensorThresholdValue'] * $multiplier / $divisor);
+                        }
+
+                        if ($key['entSensorThresholdSeverity'] == 'other' && ($key['entSensorThresholdRelation'] == 'lessOrEqual' || $key['entSensorThresholdRelation'] == 'lessThan')) {
+                            $other_limit_low = ($key['entSensorThresholdValue'] * $multiplier / $divisor);
                         }
                     }//end foreach
                 }//end if
@@ -181,6 +182,15 @@ if ($device['os_group'] == 'cisco') {
                     if ($limit_low == 0) {
                         $limit_low = -5;
                     }
+                }
+
+                // Handle platforms that do not have the "Minor"/"Major"/"Critical" threshold for a sensor but instead only have the "Other" threshold for such sensor (ISR1k / ISR4k)
+                // Since there is no other threshold available other than "Other", treat these as Critical Limit
+                if (! isset($limit_low) && ! isset($warn_limit_low) && isset($other_limit_low)) {
+                    $limit_low = $other_limit_low;
+                }
+                if (! isset($limit) && ! isset($warn_limit) && isset($other_limit)) {
+                    $limit = $other_limit;
                 }
 
                 // End Threshold code
@@ -198,6 +208,12 @@ if ($device['os_group'] == 'cisco') {
                             break;
                         }
 
+                        if (! isset($entity_array[$phys_index])) {
+                            // NX-OS: entPhysicalContainedIn may reference a parent index (e.g. 1)
+                            // that is not returned by the SNMP walk — stop traversal safely.
+                            break;
+                        }
+
                         $entPhysicalClass = $entity_array[$phys_index]['entPhysicalClass'];
                         $entPhysicalName = $entity_array[$phys_index]['entPhysicalName'];
                         $transceivers = \App\Models\Transceiver::where('device_id', $device['device_id'])->where('index', '=', $phys_index)->first();
@@ -212,7 +228,7 @@ if ($device['os_group'] == 'cisco') {
                         if ($entPhysicalClass === 'port') {
                             $entAliasMappingIdentifier = $entity_array[$phys_index][0]['entAliasMappingIdentifier'];
                             if (Str::contains($entAliasMappingIdentifier, 'ifIndex.')) {
-                                [, $tmp_ifindex] = explode('.', $entAliasMappingIdentifier);
+                                [, $tmp_ifindex] = explode('.', (string) $entAliasMappingIdentifier);
                             }
                             break;
                             //or sensor entity has a parent entity with module class and entPhysicalName set to an existing ifName.
@@ -258,7 +274,9 @@ if ($device['os_group'] == 'cisco') {
         $entity_array
     );
 
+    $progress = ProgressList::start('CISCO-ENTITY-SENSOR sensors');
     foreach (array_flip($entitysensor) as $type) {
         app('sensor-discovery')->sync(sensor_class: $type, poller_type: 'snmp');
     }
+    $progress->end();
 }//end if

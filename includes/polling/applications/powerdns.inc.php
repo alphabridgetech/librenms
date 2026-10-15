@@ -2,6 +2,7 @@
 
 // Polls powerdns statistics from script via SNMP
 
+use Illuminate\Support\Facades\Log;
 use LibreNMS\Exceptions\JsonAppException;
 use LibreNMS\Exceptions\JsonAppParsingFailedException;
 use LibreNMS\RRD\RrdDefinition;
@@ -48,7 +49,7 @@ if (isset($agent_data) && isset($agent_data['app'][$name])) {
     } catch (JsonAppParsingFailedException $e) {
         $legacy = $e->getOutput();
     } catch (JsonAppException $e) {
-        echo PHP_EOL . $name . ':' . $e->getCode() . ':' . $e->getMessage() . PHP_EOL;
+        Log::info($name . ':' . $e->getCode() . ':' . $e->getMessage());
         update_application($app, $e->getCode() . ':' . $e->getMessage(), []); // Set empty metrics and error message
 
         return;
@@ -89,7 +90,7 @@ $rrd_def = RrdDefinition::make();
 $fields = [];
 foreach ($powerdns_metrics as $ds => $metric) {
     $rrd_def->addDataset($ds, 'DERIVE', 0, 125000000000);
-    $fields[$ds] = isset($powerdns[$metric]) ? $powerdns[$metric] : 'U';
+    $fields[$ds] = $powerdns[$metric] ?? null;
 }
 
 $tags = [

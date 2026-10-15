@@ -50,7 +50,7 @@ $components = $keep;
     </thead>
     <tbody>
     <?php
-    foreach ($components as $cert => $array) {
+    foreach ($components as $array) {
         if ($array['type'] != 'f5-cert') {
             continue;
         }
@@ -62,10 +62,10 @@ $components = $keep;
             $status = '';
         } ?>
         <tr <?php echo $error; ?>>
-            <td><?php echo $array['label']; ?></td>
+            <td><?php echo e($array['label']); ?></td>
             <td><?php echo $array['daysLeft']; ?></td>
-            <td><?php echo $status; ?></td>
-            <td><?php echo $message; ?></td>
+            <td><?php echo e($status); ?></td>
+            <td><?php echo e($message); ?></td>
         </tr>
         <?php
     }

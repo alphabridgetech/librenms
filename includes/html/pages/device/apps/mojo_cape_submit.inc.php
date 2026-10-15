@@ -15,12 +15,14 @@ echo ' | Slugs: ';
 $slugs = $app->data['slugs'];
 
 foreach (array_keys($slugs) as $index => $slug) {
-    $slug = htmlspecialchars($slug);
-    $label = $vars['slug'] == $slug
-        ? '<span class="pagemenu-selected">' . $slug . '</span>'
-        : $slug;
+    $slug = htmlspecialchars((string) $slug);
+    $link = generate_link($slug, $link_array, ['slug' => $slug]);
 
-    echo generate_link($label, $link_array, ['slug' => $slug]);
+    $label = $vars['slug'] == $slug
+        ? '<span class="pagemenu-selected">' . $link . '</span>'
+        : $link;
+
+    echo $link;
 
     if ($index < (count($slugs) - 1)) {
         echo ', ';

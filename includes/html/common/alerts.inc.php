@@ -16,6 +16,8 @@
 
 /* FIXME: is there a central place we can put this? */
 
+use Illuminate\Support\Facades\Gate;
+
 $alert_states = [
     // divined from librenms/alerts.php
     'recovered' => 0,
@@ -35,19 +37,20 @@ $alert_severities = [
     'warning only' => 5,
     'critical only' => 6,
 ];
-if (Auth::user()->hasGlobalAdmin()) {
+$admin_verbose_details = '';
+if (Gate::allows('alert.detail')) {
     $admin_verbose_details = '<th data-column-id="verbose_details" data-sortable="false">Details</th>';
 }
 
 //if( defined('SHOW_SETTINGS') || empty($widget_settings) ) {
 if (defined('SHOW_SETTINGS')) {
-    $current_acknowledged = isset($widget_settings['acknowledged']) ? $widget_settings['acknowledged'] : '';
-    $current_fired = isset($widget_settings['fired']) ? $widget_settings['fired'] : '';
-    $current_severity = isset($widget_settings['severity']) ? $widget_settings['severity'] : '';
-    $current_state = isset($widget_settings['state']) ? $widget_settings['state'] : '';
-    $current_group = isset($widget_settings['group']) ? $widget_settings['group'] : '';
-    $current_proc = isset($widget_settings['proc']) ? $widget_settings['proc'] : '';
-    $current_sorting = isset($widget_settings['sort']) ? $widget_settings['sort'] : '';
+    $current_acknowledged = $widget_settings['acknowledged'] ?? '';
+    $current_fired = $widget_settings['fired'] ?? '';
+    $current_severity = $widget_settings['severity'] ?? '';
+    $current_state = $widget_settings['state'] ?? '';
+    $current_group = $widget_settings['group'] ?? '';
+    $current_proc = $widget_settings['proc'] ?? '';
+    $current_sorting = $widget_settings['sort'] ?? '';
 
     $common_output[] = '
 <form class="form" onsubmit="widget_settings(this); return false;">
@@ -176,7 +179,7 @@ if (defined('SHOW_SETTINGS')) {
     $group = $widget_settings['group'] ?? '';
     $proc = $widget_settings['proc'] ?? '';
     $sort = $widget_settings['sort'] ?? '';
-    $unique_id = $unique_id ?? '';
+    $unique_id ??= '';
 
     $title = 'Alerts';
 
@@ -252,131 +255,19 @@ if (defined('SHOW_SETTINGS')) {
             </tr>
         </thead>
     </table>
-</div>
-<script>
-var alerts_grid = $("#alerts_' . $unique_id . '").bootgrid({
-    ajax: true,
-    templates: {
-        header: \'<div id="{{ctx.id}}" class="{{css.header}}"><div class="row"> \
-            <div class="col-sm-12 actionBar" style="margin-bottom: 10px;"><span class="pull-left"> \
-            <div class="form-inline"> \
-            <div class="form-group"> \
-            <label> \
-            <strong>Device&nbsp;</strong> \
-            </label> \
-            <select id="alerts_device_id_' . $unique_id . '" class="form-control input-sm" style="min-width: 150px;"></select> \
-            </div> \
-            <div class="form-group" style="margin-left: 5px;"> \
-            <label> \
-            <strong>Hostname&nbsp;</strong> \
-            </label> \
-            <select id="alerts_hostname_filter_' . $unique_id . '" class="form-control input-sm" style="min-width: 150px;"></select> \
-            </div> \
-            <button type="button" id="alerts_clear_filter_' . $unique_id . '" class="btn btn-default input-sm" style="margin-left: 5px;"><i class="fa fa-refresh"></i> Clear Filter</button> \
-            </div></span></div> \
-            <div class="col-sm-12 actionBar"><p class="{{css.search}}"></p><p class="{{css.actions}}"></p></div></div></div>\'
-    },
-    post: function ()
-    {
-        return {
-            id: "alerts",
-            device_id: $("#alerts_device_id_' . $unique_id . '").val() || \'-1\',
-            hostname: $("#alerts_hostname_filter_' . $unique_id . '").val() || \'\',
-';
+</div>';
 
-    if (is_numeric($rule_id)) {
-        $common_output[] = "rule_id: '$rule_id',\n";
-    }
-    if (is_numeric($alert_id)) {
-        $common_output[] = "alert_id: '$alert_id',\n";
-    }
-
-    if (is_numeric($acknowledged)) {
-        $common_output[] = "acknowledged: '$acknowledged',\n";
-    }
-    if (is_numeric($fired)) {
-        $common_output[] = "fired: '$fired',\n";
-    }
-    if (isset($state) && $state != '') {
-        $common_output[] = "state: '$state',\n";
-    }
-    if (isset($min_severity) && $min_severity != '') {
-        $common_output[] = "min_severity: '$min_severity',\n";
-    }
-
-    if (is_numeric($group)) {
-        $common_output[] = "group: '$group',\n";
-    }
-    if (is_numeric($proc)) {
-        $common_output[] = "proc: '$proc',\n";
-    }
-
-    if (isset($sort) && $sort != '') {
-        $common_output[] = "sort: '$sort',\n";
-    }
-
-    $common_output[] = '
-            _placeholder: null
-        }
-    },
-    url: "ajax_table.php",
-    rowCount: [50, 100, 250, -1],
-
-}).on("loaded.rs.jquery.bootgrid", function() {
-    alerts_grid = $(this);
-    alerts_grid.find(".incident-toggle").each( function() {
-      $(this).parent().addClass(\'incident-toggle-td\');
-    }).on("click", function(e) {
-      var target = $(this).data("target");
-      $(target).collapse(\'toggle\');
-      $(this).toggleClass(\'fa-plus fa-minus\');
-    });
-    alerts_grid.find(".incident").each( function() {
-      $(this).parent().addClass(\'col-lg-4 col-md-4 col-sm-4 col-xs-4\');
-      $(this).parent().parent().on("mouseenter", function() {
-        $(this).find(".incident-toggle").fadeIn(200);
-      }).on("mouseleave", function() {
-        $(this).find(".incident-toggle").fadeOut(200);
-      });
-    });
-    alerts_grid.find(".command-ack-alert").on("click", function(e) {
-        e.preventDefault();
-        var alert_state = $(this).data("alert_state");
-        var alert_id = $(this).data(\'alert_id\');
-        $(\'#ack_alert_id\').val(alert_id);
-        $(\'#ack_alert_state\').val(alert_state);
-        $(\'#ack_msg\').val(\'\');
-        $("#alert_ack_modal").modal(\'show\');
-    });
-    alerts_grid.find(".command-alert-note").on("click", function(e) {
-        e.preventDefault();
-        var alert_id = $(this).data(\'alert_id\');
-        $(\'#alert_id\').val(alert_id);
-        $("#alert_notes_modal").modal(\'show\');
-    });
-    alerts_grid.find(".command-alert-details").on("click", function(e) {
-      e.preventDefault();
-      var alert_log_id = $(this).data(\'alert_log_id\');
-      $(\'#alert_log_id\').val(alert_log_id);
-      $("#alert_details_modal").modal(\'show\');
-    });
-});
-
-$(document).on("change", "#alerts_device_id_' . $unique_id . '", function(e) {
-    $("#alerts_' . $unique_id . '").bootgrid("reload");
-});
-
-$(document).on("change", "#alerts_hostname_filter_' . $unique_id . '", function(e) {
-    $("#alerts_' . $unique_id . '").bootgrid("reload");
-});
-
-$(document).on("click", "#alerts_clear_filter_' . $unique_id . '", function(e) {
-    e.preventDefault();
-    $("#alerts_hostname_filter_' . $unique_id . '").val(null).trigger("change");
-    $("#alerts_device_id_' . $unique_id . '").val(null).trigger("change");
-});
-
-init_select2("#alerts_device_id_' . $unique_id . '", "device", {}, \'\', "All Devices");
-init_select2("#alerts_hostname_filter_' . $unique_id . '", "device", {field: "hostname"}, \'\', "All Hostnames");
-</script>';
+    $common_output[] = view('alerts.partials.active-table-script', [
+        'unique_id' => $unique_id,
+        'rule_id' => $rule_id,
+        'alert_id' => $alert_id,
+        'acknowledged' => $acknowledged,
+        'fired' => $fired,
+        'state' => $state,
+        'min_severity' => $min_severity,
+        'group' => $group,
+        'proc' => $proc,
+        'sort' => $sort,
+        'device_id' => $device['device_id'],
+    ])->render();
 }

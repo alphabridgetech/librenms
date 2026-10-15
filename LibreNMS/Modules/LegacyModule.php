@@ -33,19 +33,20 @@ use Illuminate\Support\Facades\Log;
 use LibreNMS\Component;
 use LibreNMS\Interfaces\Data\DataStorageInterface;
 use LibreNMS\Interfaces\Module;
+use LibreNMS\Interfaces\SupportsSubmodules;
 use LibreNMS\OS;
+use LibreNMS\Polling\ConnectivityHelper;
 use LibreNMS\Polling\ModuleStatus;
 use LibreNMS\Util\Debug;
 use Symfony\Component\Yaml\Yaml;
 
-class LegacyModule implements Module
+class LegacyModule implements Module, SupportsSubmodules
 {
-    /** @var array */
-    private $module_deps = [
+    private array $module_deps = [
         'arp-table' => ['ports'],
         'bgp-peers' => ['ports', 'vrf', 'ipv4-addresses', 'ipv6-addresses'],
-        'cisco-mac-accounting' => ['ports'],
         'fdb-table' => ['ports', 'vlans'],
+        'transceivers' => ['ports'],
         'vlans' => ['ports'],
         'vrf' => ['ports'],
     ];
@@ -58,19 +59,21 @@ class LegacyModule implements Module
         return $this->module_deps[$this->name] ?? [];
     }
 
-    /**
-     * @var string
-     */
-    private $name;
+    /** @var string[]|null */
+    private ?array $submodules = null;
 
-    public function __construct(string $name)
+    public function __construct(private readonly string $name)
     {
-        $this->name = $name;
     }
 
-    public function shouldDiscover(OS $os, ModuleStatus $status): bool
+    public function setSubmodules(?array $submodules): void
     {
-        return $this->shouldPoll($os, $status);
+        $this->submodules = $submodules;
+    }
+
+    public function shouldDiscover(OS $os, ModuleStatus $status, ConnectivityHelper $connectivity): bool
+    {
+        return $this->shouldPoll($os, $status, $connectivity);
     }
 
     public function discover(OS $os): void
@@ -82,19 +85,23 @@ class LegacyModule implements Module
         }
 
         $device = &$os->getDeviceArray();
+        $module = $this->name;
+        $submodules = $this->submodules;
         Debug::disableErrorReporting(); // ignore errors in legacy code
 
-        include_once base_path('includes/dbFacile.php');
-        include_once base_path('includes/rewrites.php');
-        include base_path("includes/discovery/$this->name.inc.php");
-
-        Debug::enableErrorReporting(); // and back to normal
+        try {
+            include_once base_path('includes/dbFacile.php');
+            include_once base_path('includes/rewrites.php');
+            include base_path("includes/discovery/$this->name.inc.php");
+        } finally {
+            Debug::enableErrorReporting(); // and back to normal
+        }
     }
 
-    public function shouldPoll(OS $os, ModuleStatus $status): bool
+    public function shouldPoll(OS $os, ModuleStatus $status, ConnectivityHelper $connectivity): bool
     {
-        // all legacy modules require snmp except ipmi and unix-agent
-        return $status->isEnabledAndDeviceUp($os->getDevice(), check_snmp: ! in_array($this->name, ['ipmi', 'unix-agent']));
+        // all legacy modules require snmp
+        return $status->isEnabled() && $connectivity->snmpIsAvailable();
     }
 
     public function poll(OS $os, DataStorageInterface $datastore): void
@@ -106,6 +113,7 @@ class LegacyModule implements Module
         }
 
         $device = &$os->getDeviceArray();
+        $submodules = $this->submodules;
 
         include_once base_path('includes/dbFacile.php');
         include_once base_path('includes/rewrites.php');
@@ -162,8 +170,8 @@ class LegacyModule implements Module
 
                     $default_select = [];
                 } else {
-                    [$left, $lkey] = explode('.', $join_info['left']);
-                    [$right, $rkey] = explode('.', $join_info['right']);
+                    [$left, $lkey] = explode('.', (string) $join_info['left']);
+                    [$right, $rkey] = explode('.', (string) $join_info['right']);
                     $join .= " LEFT JOIN `$right` ON (`$left`.`$lkey` = `$right`.`$rkey`)";
 
                     $default_select = ["`$right`.*"];
@@ -185,14 +193,10 @@ class LegacyModule implements Module
             // remove unwanted fields
             if (isset($info['included_fields'])) {
                 $keys = array_flip($info['included_fields']);
-                $rows = array_map(function ($row) use ($keys) {
-                    return array_intersect_key((array) $row, $keys);
-                }, $rows);
+                $rows = array_map(fn ($row) => array_intersect_key((array) $row, $keys), $rows);
             } elseif (isset($info['excluded_fields'])) {
                 $keys = array_flip($info['excluded_fields']);
-                $rows = array_map(function ($row) use ($keys) {
-                    return array_diff_key((array) $row, $keys);
-                }, $rows);
+                $rows = array_map(fn ($row) => array_diff_key((array) $row, $keys), $rows);
             }
 
             $data[$table] = $rows;
@@ -205,10 +209,7 @@ class LegacyModule implements Module
     {
         static $def;
 
-        if ($def === null) {
-            // only load the yaml once, then keep it in memory
-            $def = Yaml::parse(file_get_contents(base_path('/tests/module_tables.yaml')));
-        }
+        $def ??= Yaml::parse(file_get_contents(base_path('/tests/module_tables.yaml')));
 
         return $def[$this->name] ?? [];
     }
@@ -216,9 +217,7 @@ class LegacyModule implements Module
     private function collectComponents(int $device_id): array
     {
         $components = (new Component())->getComponents($device_id)[$device_id] ?? [];
-        $components = Arr::sort($components, function ($item) {
-            return $item['type'] . $item['label'];
-        });
+        $components = Arr::sort($components, fn ($item) => $item['type'] . $item['label']);
 
         return array_values($components);
     }

@@ -32,6 +32,7 @@ use App\Facades\PortCache;
 use App\Models\PortVlan;
 use App\Models\Vlan;
 use Illuminate\Support\Collection;
+use LibreNMS\Discovery\Neighbors\NeighborParser;
 use LibreNMS\Interfaces\Discovery\VlanDiscovery;
 use LibreNMS\Interfaces\Discovery\VlanPortDiscovery;
 use LibreNMS\OS;
@@ -46,14 +47,12 @@ class Aos7 extends OS implements VlanDiscovery, VlanPortDiscovery
         }
 
         return SnmpQuery::mibDir('nokia/aos7')->walk('ALCATEL-IND1-VLAN-MGR-MIB::vlanDescription')
-            ->mapTable(function ($vlans, $vlan_id) {
-                return new Vlan([
-                    'vlan_vlan' => $vlan_id,
-                    'vlan_name' => $vlans['ALCATEL-IND1-VLAN-MGR-MIB::vlanDescription'] ?? null,
-                    'vlan_domain' => 1,
-                    'vlan_type' => null,
-                ]);
-            });
+            ->mapTable(fn ($vlans, $vlan_id) => new Vlan([
+                'vlan_vlan' => $vlan_id,
+                'vlan_name' => $vlans['ALCATEL-IND1-VLAN-MGR-MIB::vlanDescription'] ?? null,
+                'vlan_domain' => 1,
+                'vlan_type' => null,
+            ]));
     }
 
     public function discoverVlanPorts(Collection $vlans): Collection
@@ -76,5 +75,15 @@ class Aos7 extends OS implements VlanDiscovery, VlanPortDiscovery
                     'port_id' => PortCache::getIdFromIfIndex($vpaIfIndex, $this->getDeviceId()) ?? 0, // ifIndex from device
                 ]);
             })->filter();
+    }
+
+    /**
+     * AOS7 numbers LLDP ports with its own scheme, map them by description instead
+     */
+    protected function lldpLocalPortId(int $lldpPortNum): ?int
+    {
+        $descr = NeighborParser::parseText($this->lldpLocPortTable()[$lldpPortNum]['lldpLocPortDesc'] ?? '');
+
+        return $this->lldpLocalPorts()->byDescr($descr)?->port_id;
     }
 }

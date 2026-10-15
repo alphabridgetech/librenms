@@ -23,12 +23,16 @@
  * @copyright  2025 LibreNMS
  * @author     LibreNMS Contributors
  */
-echo 'Grandstream GXW: ';
+
+use Illuminate\Support\Facades\Log;
+use LibreNMS\Enum\SensorType;
+
+Log::info('Grandstream GXW: ', ['nlb' => true]);
 
 $state_name = 'hookStatus';
 $states = [
-    ['value' => 0, 'generic' => 0, 'graph' => 1, 'descr' => 'On Hook'],
-    ['value' => 1, 'generic' => 0, 'graph' => 1, 'descr' => 'Off Hook'],
+    ['value' => 0, 'generic' => 0, 'descr' => 'On Hook'],
+    ['value' => 1, 'generic' => 0, 'descr' => 'Off Hook'],
 ];
 
 create_state_index($state_name, $states);
@@ -44,14 +48,14 @@ $statuses = SnmpQuery::hideMib()->walk([
 if (is_array($statuses)) {
     foreach ($statuses as $index => $entry) {
         $status = $entry;
-        $numeric_value = isset($state_lookup[$status]) ? $state_lookup[$status] : $status;
-        preg_match('/(\d+)/', $index, $matches);
+        $numeric_value = $state_lookup[$status] ?? $status;
+        preg_match('/(\d+)/', (string) $index, $matches);
         $oid = "$status_oid.{$matches[1]}.0.0";
         $descr = "Port {$matches[1]} Hook Status";
 
         discover_sensor(
             null,
-            'state',
+            SensorType::State,
             $device,
             $oid,
             $index,
@@ -75,8 +79,8 @@ if (is_array($statuses)) {
 
 $state_name = 'regStatus';
 $states = [
-    ['value' => 0, 'generic' => 0, 'graph' => 1, 'descr' => 'Registered'],
-    ['value' => 1, 'generic' => 2, 'graph' => 1, 'descr' => 'Not Registered'],
+    ['value' => 0, 'generic' => 0, 'descr' => 'Registered'],
+    ['value' => 1, 'generic' => 2, 'descr' => 'Not Registered'],
 ];
 
 create_state_index($state_name, $states);
@@ -92,14 +96,14 @@ $statuses = SnmpQuery::hideMib()->walk([
 if (is_array($statuses)) {
     foreach ($statuses as $index => $entry) {
         $status = $entry;
-        $numeric_value = isset($state_lookup[$status]) ? $state_lookup[$status] : $status;
-        preg_match('/(\d+)/', $index, $matches);
+        $numeric_value = $state_lookup[$status] ?? $status;
+        preg_match('/(\d+)/', (string) $index, $matches);
         $oid = "$status_oid.{$matches[1]}.0.0";
         $descr = "Port {$matches[1]} Reg Status";
 
         discover_sensor(
             null,
-            'state',
+            SensorType::State,
             $device,
             $oid,
             $index,

@@ -2,8 +2,9 @@
 
 use App\Facades\LibrenmsConfig;
 use App\Models\Eventlog;
+use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Str;
-use LibreNMS\Enum\Sensor;
+use LibreNMS\Enum\SensorType;
 use LibreNMS\Enum\Severity;
 use LibreNMS\Exceptions\JsonAppBase64DecodeException;
 use LibreNMS\Exceptions\JsonAppBlankJsonException;
@@ -17,6 +18,7 @@ use LibreNMS\RRD\RrdDefinition;
 use LibreNMS\Util\Debug;
 use LibreNMS\Util\Number;
 use LibreNMS\Util\Oid;
+use LibreNMS\Util\ProgressList;
 use LibreNMS\Util\UserFuncHelper;
 
 function bulk_sensor_snmpget($device, $sensors)
@@ -25,30 +27,13 @@ function bulk_sensor_snmpget($device, $sensors)
     $sensors = array_chunk($sensors, $oid_per_pdu);
     $cache = [];
     foreach ($sensors as $chunk) {
-        $oids = array_map(function ($data) {
-            return $data['sensor_oid'];
-        }, $chunk);
+        $oids = array_map(fn ($data) => $data['sensor_oid'], $chunk);
         $oids = implode(' ', $oids);
         $multi_response = snmp_get_multi_oid($device, $oids, '-OUQntea');
         $cache = array_merge($cache, $multi_response);
     }
 
     return $cache;
-}
-
-/**
- * @param  $device
- * @param  string  $type  type/class of sensor
- * @return array
- */
-function sensor_precache($device, $type)
-{
-    $sensor_cache = [];
-    if (file_exists(LibrenmsConfig::get('install_dir') . '/includes/polling/sensors/pre-cache/' . $device['os'] . '.inc.php')) {
-        include LibrenmsConfig::get('install_dir') . '/includes/polling/sensors/pre-cache/' . $device['os'] . '.inc.php';
-    }
-
-    return $sensor_cache;
 }
 
 function poll_sensor($device, $class)
@@ -68,8 +53,6 @@ function poll_sensor($device, $class)
     }
 
     $snmp_data = bulk_sensor_snmpget($device, $sensors);
-
-    $sensor_cache = sensor_precache($device, $class);
 
     foreach ($sensors as $sensor) {
         Log::info('Checking (' . $sensor['poller_type'] . ") $class " . $sensor['sensor_descr'] . '... ');
@@ -100,7 +83,10 @@ function poll_sensor($device, $class)
                     }
                 }
             }//end if
-            unset($mib);
+            if (isset($mib)) {
+                // @phpstan-ignore unset.variable
+                unset($mib);
+            }
             unset($mibdir);
             $sensor['new_value'] = $sensor_value;
             $all_sensors[] = $sensor;
@@ -110,6 +96,7 @@ function poll_sensor($device, $class)
     foreach ($misc_sensors as $sensor) {
         if ($sensor['poller_type'] == 'agent') {
             if (isset($agent_sensors)) {
+                // @phpstan-ignore variable.undefined
                 $sensor_value = $agent_sensors[$class][$sensor['sensor_type']][$sensor['sensor_index']]['current'];
                 $sensor['new_value'] = $sensor_value;
                 $all_sensors[] = $sensor;
@@ -119,7 +106,7 @@ function poll_sensor($device, $class)
             }
         } elseif ($sensor['poller_type'] == 'ipmi') {
             Log::info(' already polled.');
-            // ipmi should probably move here from the ipmi poller file (FIXME)
+            // polled by the ipmi module (LibreNMS\Modules\Ipmi)
             continue;
         } else {
             Log::info('unknown poller type!');
@@ -137,21 +124,21 @@ function record_sensor_data($device, $all_sensors)
 {
     foreach ($all_sensors as $sensor) {
         $class = trans('sensors.' . $sensor['sensor_class'] . '.short');
-        $unit = Sensor::from($sensor['sensor_class'])->unit();
+        $unit = SensorType::from($sensor['sensor_class'])->unit();
         $sensor_value = Number::extract($sensor['new_value']);
         $prev_sensor_value = $sensor['sensor_current'];
 
         if ($sensor_value == -32768 || is_nan($sensor_value)) {
-            echo 'Invalid (-32768 or NaN)';
+            Log::info('Invalid (-32768 or NaN)');
             $sensor_value = 0;
         }
 
         if ($sensor['sensor_divisor'] && $sensor_value !== 0) {
-            $sensor_value = ($sensor_value / $sensor['sensor_divisor']);
+            $sensor_value /= $sensor['sensor_divisor'];
         }
 
         if ($sensor['sensor_multiplier']) {
-            $sensor_value = ($sensor_value * $sensor['sensor_multiplier']);
+            $sensor_value *= $sensor['sensor_multiplier'];
         }
 
         if (isset($sensor['user_func'])) {
@@ -184,10 +171,10 @@ function record_sensor_data($device, $all_sensors)
 
         // FIXME also warn when crossing WARN level!
         if ($sensor['sensor_limit_low'] != '' && $prev_sensor_value > $sensor['sensor_limit_low'] && $sensor_value < $sensor['sensor_limit_low'] && $sensor['sensor_alert'] == 1) {
-            echo 'Alerting for ' . $device['hostname'] . ' ' . $sensor['sensor_descr'] . "\n";
+            Log::info('Alerting for ' . $device['hostname'] . ' ' . $sensor['sensor_descr']);
             Eventlog::log("$class under threshold: $sensor_value $unit (< {$sensor['sensor_limit_low']} $unit)", $device['device_id'], $sensor['sensor_class'], Severity::Warning, $sensor['sensor_id']);
         } elseif ($sensor['sensor_limit'] != '' && $prev_sensor_value < $sensor['sensor_limit'] && $sensor_value > $sensor['sensor_limit'] && $sensor['sensor_alert'] == 1) {
-            echo 'Alerting for ' . $device['hostname'] . ' ' . $sensor['sensor_descr'] . "\n";
+            Log::info('Alerting for ' . $device['hostname'] . ' ' . $sensor['sensor_descr']);
             Eventlog::log("$class above threshold: $sensor_value $unit (> {$sensor['sensor_limit']} $unit)", $device['device_id'], $sensor['sensor_class'], Severity::Warning, $sensor['sensor_id']);
         }
         if ($sensor['sensor_class'] == 'state' && $prev_sensor_value != $sensor_value) {
@@ -237,6 +224,7 @@ function update_application($app, $response, $metrics = [], $status = '')
         // if the response indicates an error, set it and set app_status to the raw response
         if (Str::contains($response, [
             'Traceback (most recent call last):',
+            'Connection refused',
         ])) {
             $app->app_state = 'ERROR';
             $app->app_status = $response;
@@ -305,7 +293,7 @@ function update_application($app, $response, $metrics = [], $status = '')
             );
         }
 
-        echo ': ';
+        $progress = ProgressList::start('Metrics');
         foreach ($metrics as $metric_name => $value) {
             $value = (float) $value; // cast
             if (! isset($db_metrics[$metric_name])) {
@@ -318,7 +306,7 @@ function update_application($app, $response, $metrics = [], $status = '')
                     ],
                     'application_metrics'
                 );
-                echo '+';
+                $progress->mark('+');
             } elseif ($value != $db_metrics[$metric_name]['value']) {
                 dbUpdate(
                     [
@@ -329,9 +317,9 @@ function update_application($app, $response, $metrics = [], $status = '')
                     'app_id=? && metric=?',
                     [$app['app_id'], $metric_name]
                 );
-                echo 'U';
+                $progress->mark('U');
             } else {
-                echo '.';
+                $progress->mark('.');
             }
 
             unset($db_metrics[$metric_name]);
@@ -339,15 +327,12 @@ function update_application($app, $response, $metrics = [], $status = '')
 
         // remove no longer existing metrics (generally should not happen
         foreach ($db_metrics as $db_metric) {
-            dbDelete(
-                'application_metrics',
-                'app_id=? && metric=?',
-                [$app['app_id'], $db_metric['metric']]
-            );
-            echo '-';
+            \App\Models\ApplicationMetric::where('app_id', $app['app_id'])
+                ->where('metric', $db_metric['metric'])
+                ->delete();
+            $progress->mark('-');
         }
-
-        echo PHP_EOL;
+        $progress->end();
     }
 }
 

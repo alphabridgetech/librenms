@@ -28,78 +28,90 @@ namespace App\Http\Controllers\Table;
 
 use App\Models\Device;
 use App\Models\Location;
+use Illuminate\Database\Eloquent\Builder;
+use Illuminate\Database\Eloquent\Model;
+use Illuminate\Http\Request;
 
+/**
+ * @extends TableController<Location>
+ */
 class LocationController extends TableController
 {
     /**
      * Defines search fields will be searched in order
-     *
-     * @param  \Illuminate\Http\Request  $request
-     * @return array
      */
-    public function searchFields($request)
+    public function searchFields(Request $request): array
     {
         return ['location'];
     }
 
-    protected function sortFields($request)
+    protected function sortFields(Request $request): array
     {
-        return ['location', 'devices', 'down'];
+        return [
+            'location',
+            'devices' => 'devices_count',
+            'down' => 'down_count',
+        ];
     }
 
     /**
      * Defines the base query for this resource
-     *
-     * @param  \Illuminate\Http\Request  $request
-     * @return \Illuminate\Database\Eloquent\Builder|\Illuminate\Database\Query\Builder
      */
-    public function baseQuery($request)
+    public function baseQuery(Request $request): Builder
     {
-        // joins are needed for device count sorts
-        $sort = $request->get('sort');
-        $key = key($sort);
-        $join = $this->getJoinQuery($key);
+        $this->authorize('viewAny', Location::class);
 
-        if ($join) {
-            return Location::hasAccess($request->user())
-                ->select(['id', 'location', 'lat', 'lng', \DB::raw("COUNT(device_id) AS `$key`")])
-                ->leftJoin('devices', $join)
-                ->groupBy(['id', 'location', 'lat', 'lng']);
-        }
-
-        return Location::hasAccess($request->user());
+        return Location::hasAccess($request->user())->withCount([
+            'devices',
+            'devices as down_count' => fn ($q) => (new Device)->scopeIsDown($q),
+        ]);
     }
 
     /**
-     * @param  Location  $location
-     * @return array|\Illuminate\Database\Eloquent\Model|\Illuminate\Support\Collection
+     * @return list<string>
      */
-    public function formatItem($location)
+    protected function getExportHeaders(): array
     {
         return [
-            'id' => $location->id,
-            'location' => htmlspecialchars($location->location),
-            'lat' => $location->lat,
-            'lng' => $location->lng,
-            'down' => $location->devices()->isDown()->count(),
-            'devices' => $location->devices()->count(),
+            __('ID'),
+            __('Location'),
+            __('Latitude'),
+            __('Longitude'),
+            __('Devices'),
+            __('Down'),
         ];
     }
 
-    private function getJoinQuery($field)
+    /**
+     * @param  Location  $item
+     * @return list<scalar|null>
+     */
+    protected function formatExportRow(Model $item): array
     {
-        switch ($field) {
-            case 'devices':
-                return function ($query) {
-                    $query->on('devices.location_id', 'locations.id');
-                };
-            case 'down':
-                return function ($query) {
-                    $query->on('devices.location_id', 'locations.id');
-                    (new Device)->scopeIsDown($query);
-                };
-            default:
-                return null;
-        }
+        return [
+            $item->id,
+            $item->location,
+            $item->lat,
+            $item->lng,
+            $item->devices_count,
+            $item->getAttribute('down_count'),
+        ];
+    }
+
+    /**
+     * @param  Location  $model
+     * @return array<string, scalar>
+     */
+    public function formatItem(Model $model): array
+    {
+        return [
+            'id' => $model->id,
+            'location' => $model->location,
+            'lat' => $model->lat,
+            'lng' => $model->lng,
+            'devices' => $model->devices_count,
+            /** @phpstan-ignore property.notFound (dynamic property from withCount) */
+            'down' => $model->down_count,
+        ];
     }
 }

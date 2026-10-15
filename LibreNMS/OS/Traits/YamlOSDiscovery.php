@@ -107,7 +107,7 @@ trait YamlOSDiscovery
 
         Log::debug('Yaml location data:', $data);
 
-        $location = $this->findFirst($data, $name, $numeric) ?? snmp_get($this->getDeviceArray(), 'SNMPv2-MIB::sysLocation.0', '-Oqv');
+        $location = $this->findFirst($data, $name, $numeric) ?? SnmpQuery::get('SNMPv2-MIB::sysLocation.0')->value();
 
         return new Location([
             'location' => StringHelpers::inferEncoding($location),
@@ -137,7 +137,7 @@ trait YamlOSDiscovery
         $device = $this->getDevice();
 
         foreach (Arr::wrap($regexes) as $regex) {
-            if (preg_match($regex, $subject, $matches)) {
+            if (preg_match($regex, (string) $subject, $matches)) {
                 foreach ($this->osDbFields as $field) {
                     if (isset($matches[$field])) {
                         $device->$field = $matches[$field];
@@ -147,9 +147,17 @@ trait YamlOSDiscovery
         }
     }
 
-    private function fetch(array $oids, $numeric)
+    /**
+     * @param  string[]  $oids
+     * @return array<string, string> values keyed by oid
+     */
+    private function fetch(array $oids, bool $numeric): array
     {
-        return snmp_get_multi_oid($this->getDeviceArray(), $oids, $numeric ? '-OUQn' : '-OUQ');
+        if (empty($oids)) {
+            return [];
+        }
+
+        return SnmpQuery::options($numeric ? '-OUQn' : '-OUQ')->get($oids)->values();
     }
 
     private function replaceStringsInFields(Device $device, array $os_yaml): void
@@ -166,7 +174,7 @@ trait YamlOSDiscovery
                 }
 
                 if (isset($device->$field)) {
-                    $device->$field = preg_replace($search, $replacement, $device->$field);
+                    $device->$field = preg_replace($search, (string) $replacement, $device->$field);
                 }
             }
         }

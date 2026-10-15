@@ -254,9 +254,6 @@ return [
         'textual' => 'ტექსტური',
         'value' => 'მნიშვნელობა',
     ],
-    'translation:generate' => [
-        'description' => 'განახლებული JSON ენის ფაილების გენერაცია მათი ვების წინაბოლოში გამოსაყენებლად',
-    ],
     'user:add' => [
         'description' => 'ლოკალური მომხმარებლის დამატება. ამ მომხმარებლით, მხოლოდ, მაშინ შეგეძლებათ შესვლა, თუ ავთენტიკაცია mysql-ზეა დაყენებული',
         'arguments' => [
@@ -273,7 +270,7 @@ return [
         'success' => 'წარმატებით დაემატა მომხმარებელი: :username',
         'wrong-auth' => 'ფრთხილად! You will not be able to log in with this user because you are not using MySQL auth',
     ],
-    'maintenance:database-cleanup' => [
+    'maintenance:cleanup-database' => [
         'description' => 'მონაცემთა ბაზის გასუფთავება მიტოვებული ელემენტებისგან.',
     ],
 ];

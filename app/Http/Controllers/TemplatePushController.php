@@ -11,7 +11,6 @@ use Illuminate\Support\Facades\Log;
 use Carbon\Carbon;
 use App\Http\Controllers\Traits\HandlesPushConfiguration;
 
-use App\Models\ApiToken;
 use Illuminate\Support\Facades\Auth;
 
 class TemplatePushController extends Controller
@@ -20,14 +19,7 @@ class TemplatePushController extends Controller
 
     private function getUserLibreNMSToken()
     {
-        try {
-            $apiToken = ApiToken::select('token_hash')
-                ->where('user_id', Auth::user()->user_id)
-                ->firstOrFail();
-            return $apiToken->token_hash;
-        } catch (\Exception $e) {
-            return null;
-        }
+        return \App\Services\TelequillUiToken::forCurrentUser();
     }
 
     public function addHostTemplate(Request $request)

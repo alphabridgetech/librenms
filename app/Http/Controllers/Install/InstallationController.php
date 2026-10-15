@@ -110,8 +110,21 @@ class InstallationController extends Controller
     {
         $data['steps'] = $this->hydrateControllers();
         $data['step'] = $this->step;
+        $data['primary_step'] = $this->getPrimaryStep();
 
         return $data;
+    }
+
+    protected function getPrimaryStep(): ?string
+    {
+        foreach ($this->hydrateControllers() as $name => $controller) {
+            /** @var InstallerStep $controller */
+            if ($controller->enabled() && ! $controller->complete()) {
+                return $name;
+            }
+        }
+
+        return null;
     }
 
     protected function configureDatabase()
@@ -142,9 +155,7 @@ class InstallationController extends Controller
 
     protected function hydrateControllers()
     {
-        $this->steps = array_map(function ($class) {
-            return is_object($class) ? $class : app()->make($class);
-        }, $this->steps);
+        $this->steps = array_map(fn ($class) => is_object($class) ? $class : app()->make($class), $this->steps);
 
         return $this->steps;
     }
@@ -153,11 +164,9 @@ class InstallationController extends Controller
     {
         $this->hydrateControllers();
 
-        return array_map(function (InstallerStep $controller) {
-            return [
-                'enabled' => $controller->enabled(),
-                'complete' => $controller->complete(),
-            ];
-        }, $this->steps);
+        return array_map(fn (InstallerStep $controller) => [
+            'enabled' => $controller->enabled(),
+            'complete' => $controller->complete(),
+        ], $this->steps);
     }
 }

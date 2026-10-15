@@ -5,7 +5,6 @@ namespace App\Http\Controllers;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Log;
-use App\Models\ApiToken;
 use Illuminate\Support\Facades\Auth;
 use Illuminate\Database\Eloquent\ModelNotFoundException;
 
@@ -51,14 +50,7 @@ class ChatBotController extends Controller
      * --------------------- */
     private function getUserLibreNMSToken()
     {
-        try {
-            $apiToken = ApiToken::select('token_hash')
-                ->where('user_id', Auth::user()->user_id)
-                ->firstOrFail();
-            return $apiToken->token_hash;
-        } catch (ModelNotFoundException $e) {
-            return null;
-        }
+        return \App\Services\TelequillUiToken::forCurrentUser();
     }
 
     /** -----------------------

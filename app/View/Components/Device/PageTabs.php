@@ -37,13 +37,14 @@ class PageTabs extends Component
 {
     public array $tabs = [];
     public readonly string $currentTab;
+    public array $primaryDeviceLink = [];
+    public array $deviceLinks = [];
     public static array $tabsClasses = [
         'overview' => \App\Http\Controllers\Device\Tabs\OverviewController::class,
         'graphs' => \App\Http\Controllers\Device\Tabs\GraphsController::class,
         'health' => \App\Http\Controllers\Device\Tabs\HealthController::class,
         'apps' => \App\Http\Controllers\Device\Tabs\AppsController::class,
         'processes' => \App\Http\Controllers\Device\Tabs\ProcessesController::class,
-        'collectd' => \App\Http\Controllers\Device\Tabs\CollectdController::class,
         'munin' => \App\Http\Controllers\Device\Tabs\MuninController::class,
         'ports' => \App\Http\Controllers\Device\Tabs\PortsController::class,
         'port' => \App\Http\Controllers\Device\Tabs\PortController::class,
@@ -66,6 +67,7 @@ class PageTabs extends Component
         'logs' => \App\Http\Controllers\Device\Tabs\LogsController::class,
         'alerts' => \App\Http\Controllers\Device\Tabs\AlertsController::class,
         'alert-stats' => \App\Http\Controllers\Device\Tabs\AlertStatsController::class,
+        'config' => \App\Http\Controllers\Device\Tabs\ConfigController::class,
         'showconfig' => \App\Http\Controllers\Device\Tabs\ShowConfigController::class,
         'netflow' => \App\Http\Controllers\Device\Tabs\NetflowController::class,
         'qos' => \App\Http\Controllers\Device\Tabs\QosController::class,
@@ -88,6 +90,10 @@ class PageTabs extends Component
         foreach (self::$tabsClasses as $tab => $class) {
             $this->tabs[$tab] = app()->make($class);
         }
+
+        $pageLinks = new PageLinks($device, $this->currentTab, $this->dropdownLinks);
+        $this->primaryDeviceLink = $pageLinks->primaryDeviceLink;
+        $this->deviceLinks = $pageLinks->deviceLinks;
     }
 
     /**

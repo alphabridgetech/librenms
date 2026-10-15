@@ -29,14 +29,12 @@ namespace App\Console;
 use Illuminate\Console\Command;
 use Illuminate\Validation\Rule;
 use Illuminate\Validation\ValidationException;
-use LibreNMS\Util\Debug;
 use Symfony\Component\Console\Exception\InvalidArgumentException;
-use Symfony\Component\Console\Output\OutputInterface;
 use Validator;
 
 abstract class LnmsCommand extends Command
 {
-    protected $developer = false;
+    protected bool $developer = false;
 
     /** @var string[][]|callable[]|null */
     protected $optionValues;
@@ -58,7 +56,7 @@ abstract class LnmsCommand extends Command
     {
         $env = $this->getLaravel() ? $this->getLaravel()->environment() : getenv('APP_ENV');
 
-        return $this->hidden || ($this->developer && $env !== 'production');
+        return $this->hidden || ($this->developer && $env === 'production');
     }
 
     /**
@@ -156,33 +154,51 @@ abstract class LnmsCommand extends Command
             $validator->validate();
 
             return $validator->validated();
-        } catch (ValidationException $e) {
-            collect($validator->getMessageBag()->all())->each(function ($message) {
+        } catch (ValidationException) {
+            collect($validator->getMessageBag()->all())->each(function ($message): void {
                 $this->error($message);
             });
             exit(1);
         }
     }
 
-    protected function configureOutputOptions(): void
+    protected function validatePromptInput(string $attributeName, string|array $rules): callable
     {
-        $verbosity = $this->getOutput()->getVerbosity();
+        return function (string|array $value) use ($attributeName, $rules): ?string {
+            $validator = Validator::make([$attributeName => $value], [$attributeName => $rules]);
 
-        if ($verbosity === OutputInterface::VERBOSITY_QUIET) {
-            \Log::setDefaultDriver('stack'); // this omits stdout
-            Debug::setCliQuietOutput();
-
-            return;
-        }
-
-        \Log::setDefaultDriver('console');
-
-        if ($verbosity >= OutputInterface::VERBOSITY_VERY_VERBOSE) {
-            Debug::set();
-            if ($verbosity >= OutputInterface::VERBOSITY_DEBUG) {
-                Debug::setVerbose();
+            if ($validator->fails()) {
+                return $validator->errors()->first($attributeName);
             }
+
+            return null;
+        };
+    }
+
+    /**
+     * Parse a comma-separated option into an array of strings.
+     *
+     * @return array<int, string>
+     */
+    protected function commaSeparatedOption(string $name, bool $filterEmpty = true, bool $unique = true): array
+    {
+        $value = $this->option($name);
+        if (! is_string($value) && ! is_array($value)) {
+            return [];
         }
+
+        $items = is_array($value) ? $value : explode(',', $value);
+        $trimmed = array_map(trim(...), $items);
+
+        if ($filterEmpty) {
+            $trimmed = array_filter($trimmed, fn (string $item) => $item !== '');
+        }
+
+        if ($unique) {
+            $trimmed = array_unique($trimmed);
+        }
+
+        return array_values($trimmed);
     }
 
     private function getCallable(string $type, string $name): ?callable
@@ -196,8 +212,6 @@ abstract class LnmsCommand extends Command
             return $values;
         }
 
-        return function () use ($values) {
-            return $values;
-        };
+        return fn () => $values;
     }
 }
