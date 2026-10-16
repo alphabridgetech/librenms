@@ -2,7 +2,7 @@
 
 Base URL: `http://localhost:8000/api/v0`
 
-These 96 endpoints configure AlphaBridge switches. Almost all of them run an Ansible playbook from
+These 104 endpoints configure AlphaBridge switches. Almost all of them run an Ansible playbook from
 `librenms-ansible-inventory-plugin/playbooks/` against one switch, over SSH (one endpoint uses
 Telnet). They are the same calls the device **Configuration** pages in Telequill make. Source:
 `app/Api/Controllers/KunalApiController.php`, routes in `routes/api.php`.
@@ -89,12 +89,13 @@ minute or more for changes that make the switch re-converge (STP/ring changes, r
 | [Rate limit](#14-rate-limit) | 2 |
 | [IGMP snooping](#15-igmp-snooping) | 9 |
 | [IPv6 MLD snooping](#16-ipv6-mld-snooping) | 2 |
-| [DHCP snooping](#17-dhcp-snooping) | 11 |
-| [Static ARP](#18-static-arp) | 4 |
-| [BackupLink](#19-backuplink) | 2 |
-| [Port channel (link aggregation)](#20-port-channel-link-aggregation) | 5 |
-| [Ring protection](#21-ring-protection) | 6 |
-| [Configuration backup (TFTP)](#22-configuration-backup-tftp) | 3 |
+| [Static ARP](#17-static-arp) | 4 |
+| [BackupLink](#18-backuplink) | 2 |
+| [Port channel (link aggregation)](#19-port-channel-link-aggregation) | 5 |
+| [Ring protection](#20-ring-protection) | 6 |
+| [Configuration backup (TFTP)](#21-configuration-backup-tftp) | 3 |
+| [Spanning tree (STP)](#22-spanning-tree-stp) | 8 |
+| [DHCP snooping](#23-dhcp-snooping) | 11 |
 
 In the parameter tables, **In** is `path`, `query` or `body`, and **Rules** are the checks the API
 applies before running the playbook (ranges are inclusive).
@@ -1093,7 +1094,475 @@ Response: `status`, `message`, `raw`
 
 ---
 
-## 17. DHCP snooping
+## 17. Static ARP
+
+### GET `/arp/show/{hostname}`
+
+Static ARP table.
+
+| Param | In | Required | Rules | Notes |
+|---|---|---|---|---|
+| `hostname` | path | yes | Switch IP as in `hosts/<ip>.yml` |  |
+
+Response: `status`, `arp_entries`, `cached`, `ip`
+
+<sub>cached · playbook: `arp/show_basic_arp.yml`</sub>
+
+### POST `/arp/add/{hostname}`
+
+Add a static ARP entry.
+
+| Param | In | Required | Rules | Notes |
+|---|---|---|---|---|
+| `hostname` | path | yes | Switch IP as in `hosts/<ip>.yml` |  |
+| `ip_address` | body | yes | IPv4 address |  |
+| `mac_address` | body | yes | pattern `/^([0-9A-Fa-f]{2}:){5}[0-9A-Fa-f]{2}$/` |  |
+| `interface_vlan` | body | yes | integer, 1 - 4094 |  |
+
+Response: `status`, `message`, `raw`
+
+<sub>playbook: `arp/add_basic_arp.yml`</sub>
+
+### POST `/arp/edit/{hostname}`
+
+Change a static ARP entry.
+
+| Param | In | Required | Rules | Notes |
+|---|---|---|---|---|
+| `hostname` | path | yes | Switch IP as in `hosts/<ip>.yml` |  |
+| `ip_address` | body | yes | IPv4 address |  |
+| `mac_address` | body | yes | pattern `/^([0-9A-Fa-f]{2}:){5}[0-9A-Fa-f]{2}$/` |  |
+| `interface_vlan` | body | yes | integer, 1 - 4094 |  |
+
+Response: `status`, `message`, `raw`
+
+<sub>playbook: `arp/edit_basic_arp.yml`</sub>
+
+### POST `/arp/delete/{hostname}`
+
+Delete a static ARP entry.
+
+| Param | In | Required | Rules | Notes |
+|---|---|---|---|---|
+| `hostname` | path | yes | Switch IP as in `hosts/<ip>.yml` |  |
+| `ip_address` | body | yes | IPv4 address |  |
+| `interface_vlan` | body | yes | integer, 1 - 4094 |  |
+
+Response: `status`, `message`, `raw`
+
+<sub>playbook: `arp/delete_basic_arp.yml`</sub>
+
+---
+
+## 18. BackupLink
+
+### GET `/backuplink/show/{hostname}`
+
+BackupLink groups.
+
+| Param | In | Required | Rules | Notes |
+|---|---|---|---|---|
+| `hostname` | path | yes | Switch IP as in `hosts/<ip>.yml` |  |
+
+Response: `status`, `cached`, `groups`, `ip`
+
+<sub>cached · playbook: `backup_link_configuration/getbackuplink.yml`</sub>
+
+### POST `/backuplink/set/{hostname}`
+
+Add or delete a BackupLink group.
+
+| Param | In | Required | Rules | Notes |
+|---|---|---|---|---|
+| `hostname` | path | yes | Switch IP as in `hosts/<ip>.yml` |  |
+| `operation` | body | yes | one of `add`, `delete` |  |
+| `group_id` | body | yes | integer, 1 - 8 |  |
+| `preemption_mode` | body | if `operation` = add | one of `none`, `forced`, `bandwidth` |  |
+| `preemption_delay` | body | optional | integer, 0 - ... |  |
+
+Response: `status`, `message`, `raw`
+
+<sub>playbook: `backup_link_configuration/setbackuplink.yml`</sub>
+
+---
+
+## 19. Port channel (link aggregation)
+
+### GET `/portchannel/show/{hostname}`
+
+Port channel groups and their member ports.
+
+| Param | In | Required | Rules | Notes |
+|---|---|---|---|---|
+| `hostname` | path | yes | Switch IP as in `hosts/<ip>.yml` |  |
+
+Response: `status`, `cached`, `groups`, `ip`
+
+<sub>cached · playbook: `port_channel/port_aggregate_details.yml`</sub>
+
+### POST `/portchannel/add/{hostname}`
+
+Create a port channel group with member ports.
+
+| Param | In | Required | Rules | Notes |
+|---|---|---|---|---|
+| `hostname` | path | yes | Switch IP as in `hosts/<ip>.yml` |  |
+| `aggregate_group` | body | yes | one of `P1`, `P2`, `P3`, `P4`, `P5`, `P6`, `P7`, `P8` |  |
+| `mode` | body | yes | one of `static`, `lacp active`, `lacp passive` |  |
+| `ports` | body | yes | string |  |
+
+Response: `status`, `message`, `raw`
+
+<sub>playbook: `port_channel/port_aggregate_config.yml`, `port_channel/port_aggregate_details.yml`</sub>
+
+### POST `/portchannel/edit/{hostname}`
+
+Change a port channel group's mode and add/remove member ports.
+
+| Param | In | Required | Rules | Notes |
+|---|---|---|---|---|
+| `hostname` | path | yes | Switch IP as in `hosts/<ip>.yml` |  |
+| `aggregate_group` | body | yes | one of `p1`, `p2`, `p3`, `p4`, `p5`, `p6`, `p7`, `p8` |  |
+| `mode` | body | yes | one of `static`, `lacp active`, `lacp passive` |  |
+| `add_ports` | body | optional | string |  |
+| `remove_ports` | body | optional | string |  |
+
+Response: `status`, `message`, `raw`
+
+<sub>playbook: `port_channel/port_aggregate_details.yml`, `port_channel/port_aggregate_edit.yml`</sub>
+
+### POST `/portchannel/delete/{hostname}`
+
+Delete a port channel group.
+
+| Param | In | Required | Rules | Notes |
+|---|---|---|---|---|
+| `hostname` | path | yes | Switch IP as in `hosts/<ip>.yml` |  |
+| `port_id` | body | yes | one of `p1`, `p2`, `p3`, `p4`, `p5`, `p6`, `p7`, `p8` |  |
+
+Response: `status`, `message`, `raw`
+
+<sub>playbook: `port_channel/port_aggregate_delete.yml`, `port_channel/port_aggregate_details.yml`</sub>
+
+### POST `/portchannel/loadbalance/{hostname}`
+
+Set a port channel's load-balancing mode.
+
+| Param | In | Required | Rules | Notes |
+|---|---|---|---|---|
+| `hostname` | path | yes | Switch IP as in `hosts/<ip>.yml` |  |
+| `port` | body | yes | one of `p1`, `p2`, `p3`, `p4`, `p5`, `p6`, `p7`, `p8` |  |
+| `mode` | body | yes | one of `SRC MAC`, `DST MAC`, `BOTH MAC`, `SRC IP`, `DST IP`, `BOTH IP` |  |
+
+Response: `status`, `message`, `raw`
+
+<sub>playbook: `port_channel/port_channel_load_balancing.yml`</sub>
+
+---
+
+## 20. Ring protection
+
+### GET `/erps/show/{hostname}`
+
+ERPS rings.
+
+| Param | In | Required | Rules | Notes |
+|---|---|---|---|---|
+| `hostname` | path | yes | Switch IP as in `hosts/<ip>.yml` |  |
+
+Response: `status`, `entries`
+
+<sub>cached · playbook: `ring_protection/geterps.yml`</sub>
+
+### POST `/erps/set/{hostname}`
+
+Add, edit or delete an ERPS ring. Editing never changes ports - delete and re-add the ring for that.
+
+| Param | In | Required | Rules | Notes |
+|---|---|---|---|---|
+| `hostname` | path | yes | Switch IP as in `hosts/<ip>.yml` |  |
+| `operation` | body | yes | string, one of `add`, `edit`, `delete` |  |
+| `ring_id` | body | yes | integer, 1 - 239 |  |
+| `control_vlan` | body | yes, only when `operation` ≠ `delete` | integer, 1 - 4094 |  |
+| `wtr_time` | body | yes, only when `operation` ≠ `delete` | integer, 0 - 720 |  |
+| `guard_time` | body | yes, only when `operation` ≠ `delete` | integer, 0 - 2000, multiple of 10 |  |
+| `send_time` | body | yes, only when `operation` ≠ `delete` | integer, 1 - 10 |  |
+| `port1` | body | yes, only when `operation` = `add` | string |  |
+| `port2` | body | yes, only when `operation` = `add` | string, must differ from `port1` |  |
+| `port1_role` | body | yes, only when `operation` = `add` | string, one of `ring-port`, `rpl` |  |
+| `port2_role` | body | yes, only when `operation` = `add` | string, one of `ring-port`, `rpl`, must differ from `port1_role` |  |
+
+Response: `status`, `message`, `raw`
+
+<sub>playbook: `ring_protection/geterps.yml`, `ring_protection/seterps.yml`</sub>
+
+### GET `/etherring/show/{hostname}`
+
+Ethernet rings (EAPS).
+
+| Param | In | Required | Rules | Notes |
+|---|---|---|---|---|
+| `hostname` | path | yes | Switch IP as in `hosts/<ip>.yml` |  |
+
+Response: `status`, `entries`
+
+<sub>cached · playbook: `ring_protection/getethernet.yml`</sub>
+
+### POST `/etherring/set/{hostname}`
+
+Add, edit or delete an Ethernet ring (EAPS).
+
+| Param | In | Required | Rules | Notes |
+|---|---|---|---|---|
+| `hostname` | path | yes | Switch IP as in `hosts/<ip>.yml` |  |
+| `operation` | body | yes | string, one of `add`, `edit`, `delete` |  |
+| `ring_id` | body | yes | integer, 1 - 32 |  |
+| `node_type` | body | yes, only when `operation` = `add` | string, one of `Master Node`, `Transit Node` |  |
+| `control_vlan` | body | yes, only when `operation` = `add` | integer, 1 - 4094 |  |
+| `hello_time` | body | yes, only when `operation` = `add` | integer, 1 - 10 |  |
+| `fail_time` | body | yes, only when `operation` = `add` | integer, 3 - 30 |  |
+| `pre_forward_time` | body | yes, only when `operation` = `add` | integer, 3 - 30 |  |
+| `primary_port` | body | yes, only when `operation` = `add` | string, one of `None`, `GigaEthernet0/1`, `GigaEthernet0/2`, `GigaEthernet0/3`, `GigaEthernet0/6`, `GigaEthernet0/7`, `GigaEthernet0/8`, `TenGigabitEthernet0/1`, `TenGigabitEthernet0/2`, `TenGigabitEthernet0/3`, `TenGigabitEthernet0/4`, `p1` |  |
+| `secondary_port` | body | yes, only when `operation` = `add` | string, one of `None`, `GigaEthernet0/1`, `GigaEthernet0/2`, `GigaEthernet0/3`, `GigaEthernet0/6`, `GigaEthernet0/7`, `GigaEthernet0/8`, `TenGigabitEthernet0/1`, `TenGigabitEthernet0/2`, `TenGigabitEthernet0/3`, `TenGigabitEthernet0/4`, `p1` |  |
+| `ring_description` | body | optional | string, max 64 chars |  |
+
+Response: `status`, `message`, `raw`
+
+<sub>playbook: `ring_protection/getethernet.yml`, `ring_protection/setethernet.yml`</sub>
+
+### GET `/multiplering/show/{hostname}`
+
+Multiple ring protection (MEAPS) rings.
+
+| Param | In | Required | Rules | Notes |
+|---|---|---|---|---|
+| `hostname` | path | yes | Switch IP as in `hosts/<ip>.yml` |  |
+
+Response: `status`, `entries`
+
+<sub>cached · playbook: `multiple_ring_protection/multiple_ring_protection_get.yml`</sub>
+
+### POST `/multiplering/set/{hostname}`
+
+Add, edit or delete a MEAPS ring. On `edit`, `ring_type` and `node_type` must match the existing ring - the playbook refuses to change them.
+
+| Param | In | Required | Rules | Notes |
+|---|---|---|---|---|
+| `hostname` | path | yes | Switch IP as in `hosts/<ip>.yml` |  |
+| `operation` | body | yes | string, one of `add`, `edit`, `delete` |  |
+| `domain_id` | body | yes | integer, 0 - 3 |  |
+| `ring_id` | body | yes | integer, 0 - 7 |  |
+| `ring_type` | body | yes, only when `operation` ≠ `delete` | string, one of `major ring`, `sub ring` |  |
+| `node_type` | body | yes, only when `operation` ≠ `delete` | string, one of `master node`, `transit node`, `edge node`, `assistant node` |  |
+| `control_vlan` | body | yes, only when `operation` ≠ `delete` | integer, 1 - 4094 |  |
+| `hello_time` | body | yes, only when `operation` ≠ `delete` | integer, 1 - 10 |  |
+| `fail_time` | body | yes, only when `operation` ≠ `delete` | integer, 3 - 30 |  |
+| `pre_forward_time` | body | yes, only when `operation` ≠ `delete` | integer, 3 - 30 |  |
+| `primary_port` | body | yes, only when `operation` ≠ `delete` | string, one of `none`, `g0/1`, `g0/2`, `g0/3`, `g0/4`, `g0/5`, `g0/6`, `g0/7`, `g0/8`, `g0/9`, `g0/10` |  |
+| `secondary_port` | body | yes, only when `operation` ≠ `delete` | string, one of `none`, `g0/1`, `g0/2`, `g0/3`, `g0/4`, `g0/5`, `g0/6`, `g0/7`, `g0/8`, `g0/9`, `g0/10` |  |
+
+Response: `status`, `message`, `raw`
+
+<sub>playbook: `multiple_ring_protection/multiple_ring_protection_get.yml`</sub>
+
+---
+
+## 21. Configuration backup (TFTP)
+
+### POST `/tftpupload/{hostname}`
+
+Upload a configuration file to the switch via TFTP. Send as `multipart/form-data`.
+
+| Param | In | Required | Rules | Notes |
+|---|---|---|---|---|
+| `hostname` | path | yes | Switch IP as in `hosts/<ip>.yml` |  |
+| `tftp_server` | body | yes | string |  |
+| `file` | body | yes | file | The configuration file (multipart upload). |
+| `filename` | body | yes | string |  |
+
+> **Unchecked result:** returns `200` / `success` whenever the playbook runs, even if the switch rejected the change. Check `raw`, or read the setting back afterwards.
+
+Response: `status`, `filename`, `message`, `path`, `raw`
+
+<sub>playbook: `tftp/tftpupload.yml`</sub>
+
+### POST `/tftpexport/{hostname}`
+
+Export the switch configuration to the TFTP server.
+
+| Param | In | Required | Rules | Notes |
+|---|---|---|---|---|
+| `hostname` | path | yes | Switch IP as in `hosts/<ip>.yml` |  |
+| `tftp_server` | body | yes | string |  |
+| `filename` | body | yes | string |  |
+
+Response: `status`, `download_url`, `filename`, `message`, `raw`
+
+<sub>playbook: `tftp/tftpexport.yml`</sub>
+
+### POST `/tftp/schedule`
+
+Save the automatic configuration backup schedule (stored in Telequill, no switch access).
+
+| Param | In | Required | Rules | Notes |
+|---|---|---|---|---|
+| `backup_time` | body | yes | pattern `/^\d{2}:\d{2}$/` |  |
+| `tftp_server_ip` | body | optional | string |  |
+| `backup_retention_days` | body | yes | integer, 1 - ... |  |
+
+Response: `status`, `backup_retention_days`, `backup_time`, `message`, `tftp_server_ip`
+
+---
+
+## 22. Spanning tree (STP)
+
+The device **Configuration → L2 Configuration → STP Configuration** page uses these. Show endpoints are *cached*; each set endpoint checks the playbook result and refreshes the saved result before it returns. Changing the protocol or timers can briefly stop traffic on ports while spanning tree re-converges, and can take a minute or more.
+
+### GET `/stp/global/show/{hostname}`
+
+Current spanning tree state: protocol, bridge MAC, root bridge priority / MAC / timers, BPDU terminal, loop guard and the port state table.
+
+| Param | In | Required | Rules | Notes |
+|---|---|---|---|---|
+| `hostname` | path | yes | Switch IP as in `hosts/<ip>.yml` |  |
+
+Response: `status`, `cached`, `data` - `protocol` (as the switch reports it, e.g. `RSTP(2004)`, `Rapid`), `mode` (`SSTP`, `RSTP`, `MSTP`, `PVST` or null), `bpdu_terminal`, `loop_guard`, `bridge_mac`, `root` {`priority`, `mac_address`, `hello_time`, `max_age`, `forward_delay`}, `ports` [{`interface`, `role`, `status`, `cost`, `priority`, `type`}]
+
+<sub>cached · playbook: `stp/getpvst.yml`</sub>
+
+### POST `/stp/global/set/{hostname}`
+
+Set the spanning tree protocol and its settings. Each protocol runs its own playbook, and only that protocol's fields are used.
+
+| Param | In | Required | Rules | Notes |
+|---|---|---|---|---|
+| `hostname` | path | yes | Switch IP as in `hosts/<ip>.yml` |  |
+| `protocol` | body | yes | string, one of `SSTP`, `RSTP`, `MSTP`, `PVST` |  |
+| `bpdu_terminal` | body | yes | string, one of `Enable`, `Disable` |  |
+| `loop_guard` | body | yes | string, one of `Enable`, `Disable` |  |
+| `priority` | body | yes, only when `protocol` = `SSTP` / `RSTP` | integer, 0 - 61440, multiple of 4096 | Bridge priority |
+| `hello_time` | body | yes, unless `protocol` = `PVST` | integer, 1 - 10 | Seconds |
+| `max_age` | body | yes, unless `protocol` = `PVST` | integer, 6 - 40 | Seconds |
+| `forward_delay` | body | yes, unless `protocol` = `PVST` | integer, 4 - 30 | Seconds |
+| `network_diameter` | body | yes, only when `protocol` = `MSTP` | integer, 2 - 7 |  |
+| `max_hops` | body | yes, only when `protocol` = `MSTP` | integer, 6 - 40 |  |
+| `mst_compatibility` | body | yes, only when `protocol` = `MSTP` | string, one of `Enable`, `Disable` |  |
+
+Timers must satisfy 2 × (forward_delay − 1) ≥ max_age ≥ 2 × (hello_time + 1), or the switch may reject them.
+
+```json
+{"protocol": "RSTP", "priority": 32768, "hello_time": 2, "max_age": 20, "forward_delay": 15, "bpdu_terminal": "Enable", "loop_guard": "Disable"}
+```
+
+Response: `status`, `message`
+
+<sub>playbook: `stp/setstp.yml` (SSTP), `stp/setrstp.yml` (RSTP), `stp/setmstp.yml` (MSTP), `stp/setpvst.yml` (PVST), then `stp/getpvst.yml`</sub>
+
+### GET `/stp/mst/show/{hostname}`
+
+MST region (name, revision) and the VLANs mapped to each MST instance.
+
+| Param | In | Required | Rules | Notes |
+|---|---|---|---|---|
+| `hostname` | path | yes | Switch IP as in `hosts/<ip>.yml` |  |
+
+Response: `status`, `cached`, `data` - `name`, `revision`, `instances` [{`instance_id`, `vlan_ids`}]
+
+<sub>cached · playbook: `stp/getmstinstance.yml`</sub>
+
+### POST `/stp/mst/set/{hostname}`
+
+Configure the MST region and one MST instance (VLAN mapping, bridge priority, optional per-port cost and priority). Instances only take effect when the protocol is MSTP.
+
+| Param | In | Required | Rules | Notes |
+|---|---|---|---|---|
+| `hostname` | path | yes | Switch IP as in `hosts/<ip>.yml` |  |
+| `mst_name` | body | yes | string, max 32 chars, pattern `/^[A-Za-z0-9_.-]+$/` | Region name |
+| `mst_revision` | body | yes | integer, 0 - 65535 |  |
+| `mst_instance` | body | yes | integer, 0 - 15 |  |
+| `mst_vlan` | body | yes | string, pattern `/^[0-9]+(-[0-9]+)?(,[0-9]+(-[0-9]+)?)*$/` | e.g. `10,20-30` |
+| `mst_priority` | body | yes | integer, 0 - 61440, multiple of 4096 | Bridge priority for this instance |
+| `mst_ports` | body | yes | array (may be empty) | Per-port settings - see below |
+
+Each item in `mst_ports`:
+
+| Field | Required | Rules |
+|---|---|---|
+| `interface_type` | yes | one of `GigaEthernet`, `TGigaEthernet`, `Port-aggregator` |
+| `interface_id` | yes | string, e.g. `0/1` |
+| `cost` | yes | integer, 1 - 200000000 |
+| `port_priority` | yes | integer, 0 - 240, multiple of 16 |
+
+```json
+{"mst_name": "C86BBCA0D0F4", "mst_revision": 5, "mst_instance": 2, "mst_vlan": "12", "mst_priority": 12288,
+ "mst_ports": [{"interface_type": "GigaEthernet", "interface_id": "0/1", "cost": 34, "port_priority": 32}]}
+```
+
+Response: `status`, `message`
+
+<sub>playbook: `stp/setmstinstance.yml`, then `stp/getmstinstance.yml`</sub>
+
+### GET `/stp/port/show/{hostname}`
+
+STP settings of every port.
+
+| Param | In | Required | Rules | Notes |
+|---|---|---|---|---|
+| `hostname` | path | yes | Switch IP as in `hosts/<ip>.yml` |  |
+
+Response: `status`, `cached`, `data` [{`port` (e.g. `g0/1`), `interface` (e.g. `GigaEthernet0/1`), `protocol_status`, `priority`, `path_cost` (`0` = automatic), `edge_port`, `rstp_ring`, `bpdu_filter`}]
+
+<sub>cached · playbook: `stp/getstpportconfiguration.yml`</sub>
+
+### POST `/stp/port/set/{hostname}`
+
+Change one port's STP settings (`set`, only the fields sent are applied) or remove all of them (`delete`).
+
+| Param | In | Required | Rules | Notes |
+|---|---|---|---|---|
+| `hostname` | path | yes | Switch IP as in `hosts/<ip>.yml` |  |
+| `operation` | body | yes | string, one of `set`, `delete` |  |
+| `interface` | body | yes | string | e.g. `GigaEthernet0/1`, `g0/1`, `TGigaEthernet0/1`, `Port-aggregator1` |
+| `protocol_status` | body | optional | string, one of `Enable`, `Disable` | Ignored on `delete` |
+| `priority` | body | optional | integer, 0 - 240, multiple of 16 | Ignored on `delete` |
+| `path_cost` | body | optional | integer, 1 - 65535 | Leave out to keep the current value |
+| `edge_port` | body | optional | string, one of `Enable`, `Disable` | Ignored on `delete` |
+| `rstp_ring` | body | optional | string, one of `Enable`, `Disable` | Ignored on `delete` |
+| `bpdu_filter` | body | optional | string, one of `Enable`, `Disable` | Ignored on `delete` |
+
+Response: `status`, `message`
+
+<sub>playbook: `stp/setstpportconfiguration.yml`, then `stp/getstpportconfiguration.yml`</sub>
+
+### GET `/stp/portguard/show/{hostname}`
+
+BPDU guard and loop / root guard of every port.
+
+| Param | In | Required | Rules | Notes |
+|---|---|---|---|---|
+| `hostname` | path | yes | Switch IP as in `hosts/<ip>.yml` |  |
+
+Response: `status`, `cached`, `data` [{`port`, `interface`, `bpdu_guard` (`Enable` / `Disable`), `guard` (`loop`, `root` or `none`)}]
+
+<sub>cached · playbook: `stp/getportguardconfiguration.yml`</sub>
+
+### POST `/stp/portguard/set/{hostname}`
+
+Set BPDU guard and loop / root guard on one port. GigaEthernet and TGigaEthernet ports only.
+
+| Param | In | Required | Rules | Notes |
+|---|---|---|---|---|
+| `hostname` | path | yes | Switch IP as in `hosts/<ip>.yml` |  |
+| `interface` | body | yes | string | e.g. `GigaEthernet0/1`, `g0/1`, `tg0/1` |
+| `bpdu_guard` | body | yes | string, one of `Enable`, `Disable` |  |
+| `guard` | body | yes | string, one of `loop`, `root`, `none` | Loop guard and root guard are mutually exclusive |
+
+Response: `status`, `message`
+
+<sub>playbook: `stp/setportguardconfiguration.yml`, then `stp/getportguardconfiguration.yml`</sub>
+
+---
+## 23. DHCP snooping
 
 ### GET `/dhcpsnooping/global/show/{hostname}`
 
@@ -1247,322 +1716,3 @@ Response: `status`, `data`
 
 ---
 
-## 18. Static ARP
-
-### GET `/arp/show/{hostname}`
-
-Static ARP table.
-
-| Param | In | Required | Rules | Notes |
-|---|---|---|---|---|
-| `hostname` | path | yes | Switch IP as in `hosts/<ip>.yml` |  |
-
-Response: `status`, `arp_entries`, `cached`, `ip`
-
-<sub>cached · playbook: `arp/show_basic_arp.yml`</sub>
-
-### POST `/arp/add/{hostname}`
-
-Add a static ARP entry.
-
-| Param | In | Required | Rules | Notes |
-|---|---|---|---|---|
-| `hostname` | path | yes | Switch IP as in `hosts/<ip>.yml` |  |
-| `ip_address` | body | yes | IPv4 address |  |
-| `mac_address` | body | yes | pattern `/^([0-9A-Fa-f]{2}:){5}[0-9A-Fa-f]{2}$/` |  |
-| `interface_vlan` | body | yes | integer, 1 - 4094 |  |
-
-Response: `status`, `message`, `raw`
-
-<sub>playbook: `arp/add_basic_arp.yml`</sub>
-
-### POST `/arp/edit/{hostname}`
-
-Change a static ARP entry.
-
-| Param | In | Required | Rules | Notes |
-|---|---|---|---|---|
-| `hostname` | path | yes | Switch IP as in `hosts/<ip>.yml` |  |
-| `ip_address` | body | yes | IPv4 address |  |
-| `mac_address` | body | yes | pattern `/^([0-9A-Fa-f]{2}:){5}[0-9A-Fa-f]{2}$/` |  |
-| `interface_vlan` | body | yes | integer, 1 - 4094 |  |
-
-Response: `status`, `message`, `raw`
-
-<sub>playbook: `arp/edit_basic_arp.yml`</sub>
-
-### POST `/arp/delete/{hostname}`
-
-Delete a static ARP entry.
-
-| Param | In | Required | Rules | Notes |
-|---|---|---|---|---|
-| `hostname` | path | yes | Switch IP as in `hosts/<ip>.yml` |  |
-| `ip_address` | body | yes | IPv4 address |  |
-| `interface_vlan` | body | yes | integer, 1 - 4094 |  |
-
-Response: `status`, `message`, `raw`
-
-<sub>playbook: `arp/delete_basic_arp.yml`</sub>
-
----
-
-## 19. BackupLink
-
-### GET `/backuplink/show/{hostname}`
-
-BackupLink groups.
-
-| Param | In | Required | Rules | Notes |
-|---|---|---|---|---|
-| `hostname` | path | yes | Switch IP as in `hosts/<ip>.yml` |  |
-
-Response: `status`, `cached`, `groups`, `ip`
-
-<sub>cached · playbook: `backup_link_configuration/getbackuplink.yml`</sub>
-
-### POST `/backuplink/set/{hostname}`
-
-Add or delete a BackupLink group.
-
-| Param | In | Required | Rules | Notes |
-|---|---|---|---|---|
-| `hostname` | path | yes | Switch IP as in `hosts/<ip>.yml` |  |
-| `operation` | body | yes | one of `add`, `delete` |  |
-| `group_id` | body | yes | integer, 1 - 8 |  |
-| `preemption_mode` | body | if `operation` = add | one of `none`, `forced`, `bandwidth` |  |
-| `preemption_delay` | body | optional | integer, 0 - ... |  |
-
-Response: `status`, `message`, `raw`
-
-<sub>playbook: `backup_link_configuration/setbackuplink.yml`</sub>
-
----
-
-## 20. Port channel (link aggregation)
-
-### GET `/portchannel/show/{hostname}`
-
-Port channel groups and their member ports.
-
-| Param | In | Required | Rules | Notes |
-|---|---|---|---|---|
-| `hostname` | path | yes | Switch IP as in `hosts/<ip>.yml` |  |
-
-Response: `status`, `cached`, `groups`, `ip`
-
-<sub>cached · playbook: `port_channel/port_aggregate_details.yml`</sub>
-
-### POST `/portchannel/add/{hostname}`
-
-Create a port channel group with member ports.
-
-| Param | In | Required | Rules | Notes |
-|---|---|---|---|---|
-| `hostname` | path | yes | Switch IP as in `hosts/<ip>.yml` |  |
-| `aggregate_group` | body | yes | one of `P1`, `P2`, `P3`, `P4`, `P5`, `P6`, `P7`, `P8` |  |
-| `mode` | body | yes | one of `static`, `lacp active`, `lacp passive` |  |
-| `ports` | body | yes | string |  |
-
-Response: `status`, `message`, `raw`
-
-<sub>playbook: `port_channel/port_aggregate_config.yml`, `port_channel/port_aggregate_details.yml`</sub>
-
-### POST `/portchannel/edit/{hostname}`
-
-Change a port channel group's mode and add/remove member ports.
-
-| Param | In | Required | Rules | Notes |
-|---|---|---|---|---|
-| `hostname` | path | yes | Switch IP as in `hosts/<ip>.yml` |  |
-| `aggregate_group` | body | yes | one of `p1`, `p2`, `p3`, `p4`, `p5`, `p6`, `p7`, `p8` |  |
-| `mode` | body | yes | one of `static`, `lacp active`, `lacp passive` |  |
-| `add_ports` | body | optional | string |  |
-| `remove_ports` | body | optional | string |  |
-
-Response: `status`, `message`, `raw`
-
-<sub>playbook: `port_channel/port_aggregate_details.yml`, `port_channel/port_aggregate_edit.yml`</sub>
-
-### POST `/portchannel/delete/{hostname}`
-
-Delete a port channel group.
-
-| Param | In | Required | Rules | Notes |
-|---|---|---|---|---|
-| `hostname` | path | yes | Switch IP as in `hosts/<ip>.yml` |  |
-| `port_id` | body | yes | one of `p1`, `p2`, `p3`, `p4`, `p5`, `p6`, `p7`, `p8` |  |
-
-Response: `status`, `message`, `raw`
-
-<sub>playbook: `port_channel/port_aggregate_delete.yml`, `port_channel/port_aggregate_details.yml`</sub>
-
-### POST `/portchannel/loadbalance/{hostname}`
-
-Set a port channel's load-balancing mode.
-
-| Param | In | Required | Rules | Notes |
-|---|---|---|---|---|
-| `hostname` | path | yes | Switch IP as in `hosts/<ip>.yml` |  |
-| `port` | body | yes | one of `p1`, `p2`, `p3`, `p4`, `p5`, `p6`, `p7`, `p8` |  |
-| `mode` | body | yes | one of `SRC MAC`, `DST MAC`, `BOTH MAC`, `SRC IP`, `DST IP`, `BOTH IP` |  |
-
-Response: `status`, `message`, `raw`
-
-<sub>playbook: `port_channel/port_channel_load_balancing.yml`</sub>
-
----
-
-## 21. Ring protection
-
-### GET `/erps/show/{hostname}`
-
-ERPS rings.
-
-| Param | In | Required | Rules | Notes |
-|---|---|---|---|---|
-| `hostname` | path | yes | Switch IP as in `hosts/<ip>.yml` |  |
-
-Response: `status`, `entries`
-
-<sub>cached · playbook: `ring_protection/geterps.yml`</sub>
-
-### POST `/erps/set/{hostname}`
-
-Add, edit or delete an ERPS ring. Editing never changes ports - delete and re-add the ring for that.
-
-| Param | In | Required | Rules | Notes |
-|---|---|---|---|---|
-| `hostname` | path | yes | Switch IP as in `hosts/<ip>.yml` |  |
-| `operation` | body | yes | string, one of `add`, `edit`, `delete` |  |
-| `ring_id` | body | yes | integer, 1 - 239 |  |
-| `control_vlan` | body | yes, only when `operation` ≠ `delete` | integer, 1 - 4094 |  |
-| `wtr_time` | body | yes, only when `operation` ≠ `delete` | integer, 0 - 720 |  |
-| `guard_time` | body | yes, only when `operation` ≠ `delete` | integer, 0 - 2000, multiple of 10 |  |
-| `send_time` | body | yes, only when `operation` ≠ `delete` | integer, 1 - 10 |  |
-| `port1` | body | yes, only when `operation` = `add` | string |  |
-| `port2` | body | yes, only when `operation` = `add` | string, must differ from `port1` |  |
-| `port1_role` | body | yes, only when `operation` = `add` | string, one of `ring-port`, `rpl` |  |
-| `port2_role` | body | yes, only when `operation` = `add` | string, one of `ring-port`, `rpl`, must differ from `port1_role` |  |
-
-Response: `status`, `message`, `raw`
-
-<sub>playbook: `ring_protection/geterps.yml`, `ring_protection/seterps.yml`</sub>
-
-### GET `/etherring/show/{hostname}`
-
-Ethernet rings (EAPS).
-
-| Param | In | Required | Rules | Notes |
-|---|---|---|---|---|
-| `hostname` | path | yes | Switch IP as in `hosts/<ip>.yml` |  |
-
-Response: `status`, `entries`
-
-<sub>cached · playbook: `ring_protection/getethernet.yml`</sub>
-
-### POST `/etherring/set/{hostname}`
-
-Add, edit or delete an Ethernet ring (EAPS).
-
-| Param | In | Required | Rules | Notes |
-|---|---|---|---|---|
-| `hostname` | path | yes | Switch IP as in `hosts/<ip>.yml` |  |
-| `operation` | body | yes | string, one of `add`, `edit`, `delete` |  |
-| `ring_id` | body | yes | integer, 1 - 32 |  |
-| `node_type` | body | yes, only when `operation` = `add` | string, one of `Master Node`, `Transit Node` |  |
-| `control_vlan` | body | yes, only when `operation` = `add` | integer, 1 - 4094 |  |
-| `hello_time` | body | yes, only when `operation` = `add` | integer, 1 - 10 |  |
-| `fail_time` | body | yes, only when `operation` = `add` | integer, 3 - 30 |  |
-| `pre_forward_time` | body | yes, only when `operation` = `add` | integer, 3 - 30 |  |
-| `primary_port` | body | yes, only when `operation` = `add` | string, one of `None`, `GigaEthernet0/1`, `GigaEthernet0/2`, `GigaEthernet0/3`, `GigaEthernet0/6`, `GigaEthernet0/7`, `GigaEthernet0/8`, `TenGigabitEthernet0/1`, `TenGigabitEthernet0/2`, `TenGigabitEthernet0/3`, `TenGigabitEthernet0/4`, `p1` |  |
-| `secondary_port` | body | yes, only when `operation` = `add` | string, one of `None`, `GigaEthernet0/1`, `GigaEthernet0/2`, `GigaEthernet0/3`, `GigaEthernet0/6`, `GigaEthernet0/7`, `GigaEthernet0/8`, `TenGigabitEthernet0/1`, `TenGigabitEthernet0/2`, `TenGigabitEthernet0/3`, `TenGigabitEthernet0/4`, `p1` |  |
-| `ring_description` | body | optional | string, max 64 chars |  |
-
-Response: `status`, `message`, `raw`
-
-<sub>playbook: `ring_protection/getethernet.yml`, `ring_protection/setethernet.yml`</sub>
-
-### GET `/multiplering/show/{hostname}`
-
-Multiple ring protection (MEAPS) rings.
-
-| Param | In | Required | Rules | Notes |
-|---|---|---|---|---|
-| `hostname` | path | yes | Switch IP as in `hosts/<ip>.yml` |  |
-
-Response: `status`, `entries`
-
-<sub>cached · playbook: `multiple_ring_protection/multiple_ring_protection_get.yml`</sub>
-
-### POST `/multiplering/set/{hostname}`
-
-Add, edit or delete a MEAPS ring. On `edit`, `ring_type` and `node_type` must match the existing ring - the playbook refuses to change them.
-
-| Param | In | Required | Rules | Notes |
-|---|---|---|---|---|
-| `hostname` | path | yes | Switch IP as in `hosts/<ip>.yml` |  |
-| `operation` | body | yes | string, one of `add`, `edit`, `delete` |  |
-| `domain_id` | body | yes | integer, 0 - 3 |  |
-| `ring_id` | body | yes | integer, 0 - 7 |  |
-| `ring_type` | body | yes, only when `operation` ≠ `delete` | string, one of `major ring`, `sub ring` |  |
-| `node_type` | body | yes, only when `operation` ≠ `delete` | string, one of `master node`, `transit node`, `edge node`, `assistant node` |  |
-| `control_vlan` | body | yes, only when `operation` ≠ `delete` | integer, 1 - 4094 |  |
-| `hello_time` | body | yes, only when `operation` ≠ `delete` | integer, 1 - 10 |  |
-| `fail_time` | body | yes, only when `operation` ≠ `delete` | integer, 3 - 30 |  |
-| `pre_forward_time` | body | yes, only when `operation` ≠ `delete` | integer, 3 - 30 |  |
-| `primary_port` | body | yes, only when `operation` ≠ `delete` | string, one of `none`, `g0/1`, `g0/2`, `g0/3`, `g0/4`, `g0/5`, `g0/6`, `g0/7`, `g0/8`, `g0/9`, `g0/10` |  |
-| `secondary_port` | body | yes, only when `operation` ≠ `delete` | string, one of `none`, `g0/1`, `g0/2`, `g0/3`, `g0/4`, `g0/5`, `g0/6`, `g0/7`, `g0/8`, `g0/9`, `g0/10` |  |
-
-Response: `status`, `message`, `raw`
-
-<sub>playbook: `multiple_ring_protection/multiple_ring_protection_get.yml`</sub>
-
----
-
-## 22. Configuration backup (TFTP)
-
-### POST `/tftpupload/{hostname}`
-
-Upload a configuration file to the switch via TFTP. Send as `multipart/form-data`.
-
-| Param | In | Required | Rules | Notes |
-|---|---|---|---|---|
-| `hostname` | path | yes | Switch IP as in `hosts/<ip>.yml` |  |
-| `tftp_server` | body | yes | string |  |
-| `file` | body | yes | file | The configuration file (multipart upload). |
-| `filename` | body | yes | string |  |
-
-> **Unchecked result:** returns `200` / `success` whenever the playbook runs, even if the switch rejected the change. Check `raw`, or read the setting back afterwards.
-
-Response: `status`, `filename`, `message`, `path`, `raw`
-
-<sub>playbook: `tftp/tftpupload.yml`</sub>
-
-### POST `/tftpexport/{hostname}`
-
-Export the switch configuration to the TFTP server.
-
-| Param | In | Required | Rules | Notes |
-|---|---|---|---|---|
-| `hostname` | path | yes | Switch IP as in `hosts/<ip>.yml` |  |
-| `tftp_server` | body | yes | string |  |
-| `filename` | body | yes | string |  |
-
-Response: `status`, `download_url`, `filename`, `message`, `raw`
-
-<sub>playbook: `tftp/tftpexport.yml`</sub>
-
-### POST `/tftp/schedule`
-
-Save the automatic configuration backup schedule (stored in Telequill, no switch access).
-
-| Param | In | Required | Rules | Notes |
-|---|---|---|---|---|
-| `backup_time` | body | yes | pattern `/^\d{2}:\d{2}$/` |  |
-| `tftp_server_ip` | body | optional | string |  |
-| `backup_retention_days` | body | yes | integer, 1 - ... |  |
-
-Response: `status`, `backup_retention_days`, `backup_time`, `message`, `tftp_server_ip`
-
----

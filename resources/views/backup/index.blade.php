@@ -210,16 +210,16 @@
                                                     <td><span class="badge bg-green">{{ $backup['size'] }}</span></td>
                                                     <td>{{ $backup['date'] }}</td>
                                                     <td>
-                                                        <a href="{{ route('backup.node.download', ['filename' => $backup['name']]) }}" class="btn btn-xs btn-success">
+                                                        <a href="{{ url('backup/node/download/' . rawurlencode($backup['name'])) }}" class="btn btn-xs btn-success">
                                                             <i class="fa fa-download"></i> Download
                                                         </a>
-                                                        <form action="{{ route('backup.node.restore', ['filename' => $backup['name']]) }}" method="POST" style="display:inline;" data-confirm="Initiate restore for startup-config {{ $backup['name'] }} from /tftpboot?">
+                                                        <form action="{{ url('backup/node/restore/' . rawurlencode($backup['name'])) }}" method="POST" style="display:inline;" data-confirm="Initiate restore for startup-config {{ $backup['name'] }} from /tftpboot?">
                                                             @csrf
                                                             <button type="submit" class="btn btn-xs btn-info">
                                                                 <i class="fa fa-undo"></i> Restore
                                                             </button>
                                                         </form>
-                                                        <form action="{{ route('backup.node.delete', ['filename' => $backup['name']]) }}" method="POST" style="display:inline;" data-confirm="Are you sure you want to delete {{ $backup['name'] }}?">
+                                                        <form action="{{ url('backup/node/delete/' . rawurlencode($backup['name'])) }}" method="POST" style="display:inline;" data-confirm="Are you sure you want to delete {{ $backup['name'] }}?">
                                                             @csrf
                                                             @method('DELETE')
                                                             <button type="submit" class="btn btn-xs btn-danger">
@@ -399,16 +399,16 @@
                                                     <td><span class="badge bg-blue">{{ $backup['size'] }}</span></td>
                                                     <td>{{ $backup['date'] }}</td>
                                                     <td>
-                                                        <a href="{{ route('backup.rrd.download', ['filename' => $backup['name']]) }}" class="btn btn-xs btn-success">
+                                                        <a href="{{ url('backup/rrd/download/' . rawurlencode($backup['name'])) }}" class="btn btn-xs btn-success">
                                                             <i class="fa fa-download"></i> Download
                                                         </a>
-                                                        <form action="{{ route('backup.rrd.restore', ['filename' => $backup['name']]) }}" method="POST" style="display:inline;" data-confirm="WARNING: This will extract and replace existing RRD files in rrd/ directory. Are you sure you want to restore?">
+                                                        <form action="{{ url('backup/rrd/restore/' . rawurlencode($backup['name'])) }}" method="POST" style="display:inline;" data-confirm="WARNING: This will extract and replace existing RRD files in rrd/ directory. Are you sure you want to restore?">
                                                             @csrf
                                                             <button type="submit" class="btn btn-xs btn-warning">
                                                                 <i class="fa fa-refresh"></i> Restore
                                                             </button>
                                                         </form>
-                                                        <form action="{{ route('backup.rrd.delete', ['filename' => $backup['name']]) }}" method="POST" style="display:inline;" data-confirm="Are you sure you want to delete this RRD backup?">
+                                                        <form action="{{ url('backup/rrd/delete/' . rawurlencode($backup['name'])) }}" method="POST" style="display:inline;" data-confirm="Are you sure you want to delete this RRD backup?">
                                                             @csrf
                                                             @method('DELETE')
                                                             <button type="submit" class="btn btn-xs btn-danger">
@@ -595,16 +595,16 @@
                                                     <td><span class="badge bg-green">{{ $backup['size'] }}</span></td>
                                                     <td>{{ $backup['date'] }}</td>
                                                     <td>
-                                                        <a href="{{ route('backup.download', ['filename' => $backup['filename'] ?? $backup['name']]) }}" class="btn btn-xs btn-success">
+                                                        <a href="{{ url('backup/download/' . rawurlencode($backup['filename'] ?? $backup['name'])) }}" class="btn btn-xs btn-success">
                                                             <i class="fa fa-download"></i> Download
                                                         </a>
-                                                        <form action="{{ route('backup.restore', ['filename' => $backup['name']]) }}" method="POST" style="display:inline;" data-confirm="WARNING: This will overwrite your current database. Proceed?">
+                                                        <form action="{{ url('backup/restore/' . rawurlencode($backup['name'])) }}" method="POST" style="display:inline;" data-confirm="WARNING: This will overwrite your current database. Proceed?">
                                                             @csrf
                                                             <button type="submit" class="btn btn-xs btn-warning">
                                                                 <i class="fa fa-refresh"></i> Restore
                                                             </button>
                                                         </form>
-                                                        <form action="{{ route('backup.delete', ['filename' => $backup['name']]) }}" method="POST" style="display:inline;" data-confirm="Are you sure you want to delete this backup?">
+                                                        <form action="{{ url('backup/delete/' . rawurlencode($backup['name'])) }}" method="POST" style="display:inline;" data-confirm="Are you sure you want to delete this backup?">
                                                             @csrf
                                                             @method('DELETE')
                                                             <button type="submit" class="btn btn-xs btn-danger">
