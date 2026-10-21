@@ -2786,7 +2786,7 @@ public function getvlan($hostname)
     {
         $data = $request->validate([
             'ip_address' => 'required|ipv4',
-            'interface_vlan' => 'required|integer|min:1|max:4094',
+            'interface_vlan' => 'required|min:1|max:4094',
         ]);
 
         $playbook = "{$this->pluginPath}/playbooks/arp/delete_basic_arp.yml";

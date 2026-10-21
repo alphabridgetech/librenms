@@ -57,7 +57,7 @@
       ansible.builtin.assert:
         that:
           - ip_address is defined
-          - ip_address | ansible.utils.ipv4
+          - ip_address is ansible.utils.ipv4
         fail_msg: "Invalid IPv4 address: {{ ip_address }}"
 
     # ==========================================
