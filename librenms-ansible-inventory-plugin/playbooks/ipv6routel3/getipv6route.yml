@@ -1,0 +1,544 @@
+---
+# ============================================================================
+# File        : getipv6route.yml
+# Feature     : Get IPv6 Route Configuration
+#
+# Source:
+#   show running-config
+#
+# CLI:
+#   ipv6 route max-number 77
+#   ipv6 route max-number static 10
+#   ipv6 route max-number dynamic 5
+#   ipv6 route equal-cost-paths 4
+#   ipv6 route prefixlen-unlimited
+#   ipv6 route <IPv6 Address> <Gateway Address>
+#
+# Output:
+#   /home/gayatri/ansible/output/<IP>_ipv6_route.yml
+# ============================================================================
+
+- name: Get IPv6 Route Configuration
+  hosts: alphabridge_devices
+  gather_facts: no
+
+  vars:
+    project_root: "{{ playbook_dir }}/../.."
+    output_dir: "{{ project_root }}/output"
+    tmp_dir: "{{ project_root }}/tmp"
+
+  tasks:
+
+    # ------------------------------------------------------------------------
+    # Create directories
+    # ------------------------------------------------------------------------
+    - name: Create required directories
+      ansible.builtin.file:
+        path: "{{ item }}"
+        state: directory
+        mode: "0755"
+      loop:
+        - "{{ output_dir }}"
+        - "{{ tmp_dir }}"
+      delegate_to: localhost
+
+    # ------------------------------------------------------------------------
+    # Create Paramiko GET script
+    # ------------------------------------------------------------------------
+    - name: Create IPv6 Route GET script
+      ansible.builtin.copy:
+        dest: "{{ tmp_dir }}/getipv6route.py"
+        mode: "0755"
+        content: |
+          #!/usr/bin/env python3
+
+          import paramiko
+          import time
+          import re
+          import sys
+          import yaml
+
+          host = "{{ ansible_host }}"
+          username = "{{ ansible_user }}"
+          password = "{{ ansible_password }}"
+
+          output_file = (
+              "{{ output_dir }}/"
+              "{{ ansible_host }}_ipv6_route.yml"
+          )
+
+          try:
+
+              # ============================================================
+              # SSH CONNECTION
+              # ============================================================
+
+              client = paramiko.SSHClient()
+
+              client.set_missing_host_key_policy(
+                  paramiko.AutoAddPolicy()
+              )
+
+              client.connect(
+                  hostname=host,
+                  username=username,
+                  password=password,
+                  look_for_keys=False,
+                  allow_agent=False,
+                  timeout=15
+              )
+
+              shell = client.invoke_shell()
+
+              time.sleep(2)
+
+              # ============================================================
+              # CLEAR INITIAL OUTPUT
+              # ============================================================
+
+              initial_output = ""
+
+              while shell.recv_ready():
+
+                  data = shell.recv(65535).decode(
+                      "utf-8",
+                      errors="ignore"
+                  )
+
+                  initial_output += data
+
+              # ============================================================
+              # ENABLE
+              # ============================================================
+
+              shell.send("enable\n")
+
+              time.sleep(1)
+
+              while shell.recv_ready():
+                  shell.recv(65535)
+
+              # ============================================================
+              # CONFIG
+              # ============================================================
+
+              shell.send("config\n")
+
+              time.sleep(1)
+
+              while shell.recv_ready():
+                  shell.recv(65535)
+
+              # ============================================================
+              # SHOW RUNNING CONFIG
+              # ============================================================
+
+              shell.send("show running-config\n")
+
+              output = ""
+
+              start_time = time.time()
+              last_data_time = time.time()
+
+              command_finished = False
+
+              # Maximum time allowed for complete running configuration.
+              timeout = 60
+
+              while time.time() - start_time < timeout:
+
+                  if shell.recv_ready():
+
+                      data = shell.recv(65535).decode(
+                          "utf-8",
+                          errors="ignore"
+                      )
+
+                      if data:
+
+                          output += data
+                          last_data_time = time.time()
+
+                          # ------------------------------------------------
+                          # Handle pagination.
+                          #
+                          # Some switches return:
+                          #
+                          # --More--
+                          #
+                          # Send SPACE to continue.
+                          # ------------------------------------------------
+
+                          if (
+                              "--More--" in output
+                              or
+                              "-- More --" in output
+                              or
+                              "---- More ----" in output
+                          ):
+
+                              shell.send(" ")
+
+                              # Remove pagination markers from data.
+                              output = output.replace(
+                                  "--More--",
+                                  ""
+                              )
+
+                              output = output.replace(
+                                  "-- More --",
+                                  ""
+                              )
+
+                              output = output.replace(
+                                  "---- More ----",
+                                  ""
+                              )
+
+                          # ------------------------------------------------
+                          # Check for configuration prompt.
+                          #
+                          # Only consider the prompt after some real
+                          # configuration output has been received.
+                          # ------------------------------------------------
+
+                          cleaned = output.rstrip()
+
+                          if re.search(
+                              r"Switch_config(?:_[^#]*)?#\s*$",
+                              cleaned,
+                              re.IGNORECASE
+                          ):
+
+                              command_finished = True
+                              break
+
+                  else:
+
+                      # If no data is currently available, wait briefly.
+                      time.sleep(0.2)
+
+                      # If output has stopped arriving for several seconds
+                      # and a config prompt exists, finish.
+                      if (
+                          output.strip()
+                          and
+                          time.time() - last_data_time > 5
+                      ):
+
+                          if re.search(
+                              r"Switch_config(?:_[^#]*)?#",
+                              output,
+                              re.IGNORECASE
+                          ):
+
+                              command_finished = True
+                              break
+
+              # ============================================================
+              # CLOSE CONNECTION
+              # ============================================================
+
+              client.close()
+
+              # ============================================================
+              # CLEAN OUTPUT
+              # ============================================================
+
+              output = output.replace("\r", "")
+              output = output.replace("\x08", "")
+
+              # Remove pagination artifacts.
+              output = output.replace("--More--", "")
+              output = output.replace("-- More --", "")
+              output = output.replace("---- More ----", "")
+
+              # ============================================================
+              # INITIAL VALUES
+              # ============================================================
+
+              maximum_of_equal_cost_paths = None
+              maximum_number_of_routes = None
+              maximum_static_routes = None
+              maximum_dynamic_routes = None
+
+              unlimited_the_length_of_prefix = "disable"
+
+              ipv6_routes = []
+
+              # ============================================================
+              # PARSE RUNNING CONFIGURATION
+              # ============================================================
+
+              for raw_line in output.splitlines():
+
+                  line = raw_line.strip()
+
+                  if not line:
+                      continue
+
+                  # --------------------------------------------------------
+                  # Remove escaped colon.
+                  #
+                  # Example:
+                  #
+                  # 2001\:db8:85a3:82::/64
+                  #
+                  # becomes:
+                  #
+                  # 2001:db8:85a3:82::/64
+                  # --------------------------------------------------------
+
+                  line = line.replace("\\:", ":")
+
+                  # --------------------------------------------------------
+                  # Maximum number of routes
+                  #
+                  # ipv6 route max-number 77
+                  # --------------------------------------------------------
+
+                  match = re.match(
+                      r"^ipv6\s+route\s+max-number\s+(\d+)\s*$",
+                      line,
+                      re.IGNORECASE
+                  )
+
+                  if match:
+
+                      maximum_number_of_routes = int(
+                          match.group(1)
+                      )
+
+                      continue
+
+                  # --------------------------------------------------------
+                  # Maximum static routes
+                  #
+                  # ipv6 route max-number static 10
+                  # --------------------------------------------------------
+
+                  match = re.match(
+                      r"^ipv6\s+route\s+max-number\s+static\s+(\d+)\s*$",
+                      line,
+                      re.IGNORECASE
+                  )
+
+                  if match:
+
+                      maximum_static_routes = int(
+                          match.group(1)
+                      )
+
+                      continue
+
+                  # --------------------------------------------------------
+                  # Maximum dynamic routes
+                  #
+                  # ipv6 route max-number dynamic 5
+                  # --------------------------------------------------------
+
+                  match = re.match(
+                      r"^ipv6\s+route\s+max-number\s+dynamic\s+(\d+)\s*$",
+                      line,
+                      re.IGNORECASE
+                  )
+
+                  if match:
+
+                      maximum_dynamic_routes = int(
+                          match.group(1)
+                      )
+
+                      continue
+
+                  # --------------------------------------------------------
+                  # Maximum equal-cost paths
+                  #
+                  # ipv6 route equal-cost-paths 4
+                  # --------------------------------------------------------
+
+                  match = re.match(
+                      r"^ipv6\s+route\s+equal-cost-paths\s+(\d+)\s*$",
+                      line,
+                      re.IGNORECASE
+                  )
+
+                  if match:
+
+                      maximum_of_equal_cost_paths = int(
+                          match.group(1)
+                      )
+
+                      continue
+
+                  # --------------------------------------------------------
+                  # Unlimited prefix length
+                  #
+                  # ipv6 route prefixlen-unlimited
+                  # --------------------------------------------------------
+
+                  if re.match(
+                      r"^ipv6\s+route\s+prefixlen-unlimited\s*$",
+                      line,
+                      re.IGNORECASE
+                  ):
+
+                      unlimited_the_length_of_prefix = "enable"
+
+                      continue
+
+                  # --------------------------------------------------------
+                  # IPv6 static route
+                  #
+                  # Example:
+                  #
+                  # ipv6 route 2001:db8:85a3:82::/64
+                  #             2001:db8:85a3:82::fe
+                  #
+                  # --------------------------------------------------------
+
+                  match = re.match(
+                      r"^ipv6\s+route\s+"
+                      r"([0-9a-fA-F:]+/\d+)\s+"
+                      r"([0-9a-fA-F:]+)\s*$",
+                      line,
+                      re.IGNORECASE
+                  )
+
+                  if match:
+
+                      ipv6_address = match.group(1)
+                      gateway_address = match.group(2)
+
+                      ipv6_routes.append(
+                          {
+                              "ipv6_address": ipv6_address,
+                              "gateway_address": gateway_address
+                          }
+                      )
+
+                      continue
+
+              # ============================================================
+              # REMOVE DUPLICATE ROUTES
+              # ============================================================
+
+              unique_routes = []
+
+              seen = set()
+
+              for route in ipv6_routes:
+
+                  key = (
+                      route["ipv6_address"],
+                      route["gateway_address"]
+                  )
+
+                  if key not in seen:
+
+                      seen.add(key)
+                      unique_routes.append(route)
+
+              ipv6_routes = unique_routes
+
+              # ============================================================
+              # CREATE RESULT
+              # ============================================================
+
+              result = {
+                  "status": "SUCCESS",
+                  "device_ip": host,
+                  "ipv6_route_configuration": {
+                      "maximum_of_equal_cost_paths":
+                          maximum_of_equal_cost_paths,
+
+                      "maximum_number_of_routes":
+                          maximum_number_of_routes,
+
+                      "maximum_static_routes":
+                          maximum_static_routes,
+
+                      "maximum_dynamic_routes":
+                          maximum_dynamic_routes,
+
+                      "unlimited_the_length_of_prefix":
+                          unlimited_the_length_of_prefix
+                  },
+                  "ipv6_route_configuration_list_info":
+                      ipv6_routes
+              }
+
+              # ============================================================
+              # WRITE OUTPUT FILE
+              # ============================================================
+
+              with open(output_file, "w") as f:
+
+                  yaml.dump(
+                      result,
+                      f,
+                      default_flow_style=False,
+                      sort_keys=False
+                  )
+
+              print("GET SUCCESS")
+              print(
+                  "OUTPUT FILE:",
+                  output_file
+              )
+
+          except Exception as e:
+
+              print("ERROR:", str(e))
+
+              try:
+
+                  with open(output_file, "w") as f:
+
+                      yaml.dump(
+                          {
+                              "status": "ERROR",
+                              "device_ip": host,
+                              "ipv6_route_configuration": {},
+                              "ipv6_route_configuration_list_info": []
+                          },
+                          f,
+                          default_flow_style=False,
+                          sort_keys=False
+                      )
+
+              except Exception:
+                  pass
+
+              sys.exit(1)
+
+    # ------------------------------------------------------------------------
+    # Execute GET script
+    # ------------------------------------------------------------------------
+    - name: Get IPv6 Route configuration
+      ansible.builtin.command:
+        cmd: "python3 {{ tmp_dir }}/getipv6route.py"
+      delegate_to: localhost
+      register: ipv6_route_result
+      changed_when: false
+
+    # ------------------------------------------------------------------------
+    # Display script result
+    # ------------------------------------------------------------------------
+    - name: Show GET result
+      ansible.builtin.debug:
+        var: ipv6_route_result.stdout
+
+    # ------------------------------------------------------------------------
+    # Display generated YAML
+    # ------------------------------------------------------------------------
+    - name: Show IPv6 Route configuration
+      ansible.builtin.debug:
+        msg: "{{ lookup('file', output_dir + '/' + ansible_host + '_ipv6_route.yml') }}"
+
+    # ------------------------------------------------------------------------
+    # Display output file path
+    # ------------------------------------------------------------------------
+    - name: Show output file path
+      ansible.builtin.debug:
+        msg: "IPv6 Route output generated at: {{ output_dir }}/{{ ansible_host }}_ipv6_route.yml"

@@ -2,10 +2,14 @@
 
 Base URL: `http://localhost:8000/api/v0`
 
-These 104 endpoints configure AlphaBridge switches. Almost all of them run an Ansible playbook from
+Part 1 (sections 1-23): 104 automation endpoints that configure AlphaBridge switches. Almost all of them run an Ansible playbook from
 `librenms-ansible-inventory-plugin/playbooks/` against one switch, over SSH (one endpoint uses
 Telnet). They are the same calls the device **Configuration** pages in Telequill make. Source:
 `app/Api/Controllers/KunalApiController.php`, routes in `routes/api.php`.
+
+Part 2 ([section 24](#24-monitoring-api-librenms-core)): 132 monitoring endpoints (devices, ports,
+alerts, logs, graphs, inventory ...) from LibreNMS core. They use a different response format and
+access rules, described at the start of that section.
 
 ---
 
@@ -96,6 +100,7 @@ minute or more for changes that make the switch re-converge (STP/ring changes, r
 | [Configuration backup (TFTP)](#21-configuration-backup-tftp) | 3 |
 | [Spanning tree (STP)](#22-spanning-tree-stp) | 8 |
 | [DHCP snooping](#23-dhcp-snooping) | 11 |
+| [Monitoring API (LibreNMS core)](#24-monitoring-api-librenms-core) | 132 |
 
 In the parameter tables, **In** is `path`, `query` or `body`, and **Rules** are the checks the API
 applies before running the playbook (ranges are inclusive).
@@ -1715,4 +1720,2009 @@ Response: `status`, `data`
 <sub>playbook: `dhcp_snooping/dhcp_binding_port_applied_list_get.yml`</sub>
 
 ---
+## 24. Monitoring API (LibreNMS core)
 
+These 132 endpoints read and manage the monitoring data in Telequill: devices, ports, graphs, alerts,
+logs, routing tables, bills and so on. Most of them come from upstream LibreNMS; a few are custom to
+Telequill (port SFP details, port descriptions, transceivers, template push, chatbot). They do not run
+playbooks; they read and write the Telequill database (graphs are rendered from RRD files). Source:
+`app/Api/Controllers/LegacyApiController.php` (which hands every call to the function of the same
+name in `includes/html/api_functions.inc.php`), `app/Api/Controllers/TemplatePushApiController.php`
+and `app/Http/Controllers/ChatBotController.php`, routes in `routes/api.php`.
+
+**Base URL and auth.** Same as the automation API: `http://localhost:8000/api/v0`, with the token in
+`X-Auth-Token: <token>` (or `Authorization: Bearer <token>`). Unlike the automation API, the token
+does not have to belong to an admin. What it needs depends on the route group:
+
+| Access | Who can call it | Routes |
+|---|---|---|
+| `global-read` | A user with global read access (admin or global-read role). Others get `403`. | `can:global-read` group |
+| `admin` | An admin user. Others get `403`. | `can:admin` group |
+| `per-device` / `per-port` / `per-bill` | Any valid token. The controller checks the device, port or bill: global-read users see everything; other users only what is assigned to them. A single object they can't see returns `403` (`Insufficient permissions to access this device`); lists are filtered. | Routes with no middleware |
+| `any token` | Any valid token, no further check. | `/system`, `/`, and a few routes flagged below |
+
+A missing or wrong token gets `401`.
+
+**`{hostname}`** in these paths is the device's hostname as added to Telequill, or its numeric
+`device_id` (all digits are read as an ID). `{portid}` is the numeric `port_id`.
+
+**Request bodies** are JSON (`Content-Type: application/json`). Most of these endpoints read the raw
+JSON body, so form data is ignored.
+
+**Success** - HTTP `200` (some create calls return `201`), `status` is `ok`, not `success` as in the
+automation API. The data comes under a key named for the endpoint (`devices`, `ports`, `alerts` ...),
+and `count` is added when that data is an array:
+
+```json
+{"status": "ok", "message": "...", "count": 2, "devices": [{...}, {...}]}
+```
+
+`message` only appears when the endpoint sets one. Calls that change something without returning
+data send just `{"status": "ok", "message": "..."}`.
+
+**Errors** - `{"status": "error", "message": "..."}` with a `4xx` code (`400` bad input, `403` no
+permission, `404` not found, `422` validation). Some legacy endpoints use `500` for bad input too
+(noted where it matters). Unknown paths under `/api/v0` return `404` with
+`This API route doesn't exist.`
+
+A few endpoints don't use the envelope (`/`, `/oxidized`, raw graph images, `/chatbot/message`);
+each one says so below.
+
+---
+
+## 24.1 System
+
+### GET `/system`
+
+Telequill / LibreNMS version information.
+
+No parameters.
+
+Response: `status`, `count`, `system` (one object: `local_ver`, `local_sha`, `local_date`, `local_branch`, `db_schema`, `php_ver`, `python_ver`, `database_ver`, `rrdtool_ver`, `netsnmp_ver`)
+
+<sub>access: any token · `server_info`</sub>
+
+### GET `/`
+
+Every named API route with its full URL.
+
+No parameters.
+
+Response: a plain JSON object (no envelope), `{"<route name>": "<url>", ...}`, sorted by name.
+
+<sub>access: any token · (unnamed route)</sub>
+
+---
+
+## 24.2 Devices
+
+### GET `/devices`
+
+List devices, optionally filtered.
+
+| Param | In | Required | Rules | Notes |
+|---|---|---|---|---|
+| `type` | query | optional | one of `all`, `active`, `ignored`, `up`, `down`, `disabled`, `device_id`, `hostname`, `sysName`, `display`, `os`, `type`, `location`, `location_id`, `mac`, `ipv4`, `ipv6`, `serial`, `version`, `hardware`, `features` | Default `all`. An unknown value lists all. |
+| `query` | query | with search types | string | Value to search for. `hostname`, `location`, `display`, `serial`, `version`, `hardware`, `features` match with LIKE; the rest are exact. |
+| `order` | query | optional | `<column>` or `<column> asc\|desc`, letters and `_` only | Default `hostname ASC`. |
+
+Response: `status`, `count`, `devices` (device rows plus `dependency_parent_id`, `dependency_parent_hostname`, `location`, `lat`, `lng`, and `parent_id` for VMs; the `mac`/`ipv4`/`ipv6` searches add the matching port's columns)
+
+<sub>access: per-device (filtered) · `list_devices`</sub>
+
+### GET `/devices/{hostname}`
+
+One device.
+
+| Param | In | Required | Rules | Notes |
+|---|---|---|---|---|
+| `hostname` | path | yes | hostname or device_id |  |
+
+Response: `status`, `count`, `devices` (array with one device row, plus `parent_id` for a VM)
+
+<sub>access: per-device · `get_device`</sub>
+
+### POST `/devices`
+
+Add a device. Without SNMP credentials, each configured credential is tried in turn.
+
+| Param | In | Required | Rules | Notes |
+|---|---|---|---|---|
+| `hostname` | body | yes | string | Hostname or IP. |
+| `display` | body | optional | string | Display name; may use `{{ $hostname }}`, `{{ $sysName }}`, `{{ $sysName_fallback }}`, `{{ $ip }}`. |
+| `overwrite_ip` | body | optional | IP | IP used to reach the device instead of resolving `hostname`. |
+| `snmpver` (or `version`) | body | optional | `v1`, `v2c`, `v3` |  |
+| `port` | body | optional | integer | SNMP port. |
+| `transport` | body | optional | `udp`, `tcp`, `udp6`, `tcp6` |  |
+| `community` | body | optional | string | SNMP v1/v2c. |
+| `authlevel`, `authname`, `authpass`, `authalgo`, `cryptopass`, `cryptoalgo` | body | optional | string | SNMP v3. `authlevel`: `noAuthNoPriv`, `authNoPriv`, `authPriv`. |
+| `port_association_mode` | body | optional | `ifIndex`, `ifName`, `ifDescr`, `ifAlias` |  |
+| `poller_group` | body | optional | integer | Default `0`. |
+| `location` / `location_id` | body | optional | string / integer | `location` is created if it doesn't exist. |
+| `override_sysLocation` | body | optional | boolean |  |
+| `force_add` | body | optional | boolean | Skip reachability and duplicate checks (SNMP credentials then required). |
+| `ping_fallback` | body | optional | boolean | Add as ping-only if SNMP fails. |
+| `snmp_disable` | body | optional | boolean | ICMP-only device. |
+| `os`, `sysName`, `hardware` | body | optional | string | Only with `snmp_disable`. `os` defaults to `ping`. |
+
+```json
+{"hostname": "192.168.2.245", "snmpver": "v2c", "community": "public", "location": "Lab"}
+```
+
+Response: `status`, `message`, `count`, `devices` (the new device). Failures return `500` with the reason.
+
+<sub>access: admin · `add_device`</sub>
+
+### DELETE `/devices/{hostname}`
+
+Delete a device and its data.
+
+| Param | In | Required | Rules | Notes |
+|---|---|---|---|---|
+| `hostname` | path | yes | hostname or device_id |  |
+
+Response: `status`, `message`, `count`, `devices` (the deleted device's details)
+
+<sub>access: admin · `del_device`</sub>
+
+### PATCH `/devices/{hostname}`
+
+Update one or more columns of the device row.
+
+| Param | In | Required | Rules | Notes |
+|---|---|---|---|---|
+| `hostname` | path | yes | hostname or device_id |  |
+| `field` | body | yes | string or array of strings | Column name(s). `device_id` and `hostname` are refused; `location` is turned into `location_id`. |
+| `data` | body | yes | value or array | New value(s), same count and order as `field`. |
+
+```json
+{"field": ["notes", "purpose"], "data": ["Core switch", "Uplink"]}
+```
+
+Response: `status`, `message`
+
+<sub>access: admin · `update_device_field`</sub>
+
+### PATCH `/devices/{hostname}/rename/{new_hostname}`
+
+Rename a device. No body.
+
+| Param | In | Required | Rules | Notes |
+|---|---|---|---|---|
+| `hostname` | path | yes | hostname or device_id |  |
+| `new_hostname` | path | yes | string | Must not already exist (`500` otherwise). |
+
+Response: `status`, `message`
+
+<sub>access: admin · `rename_device`</sub>
+
+### GET `/devices/{hostname}/discover`
+
+Queue the device for rediscovery on the next discovery run.
+
+| Param | In | Required | Rules | Notes |
+|---|---|---|---|---|
+| `hostname` | path | yes | hostname or device_id |  |
+
+> **Not permission-checked:** any valid token can trigger it for any device.
+
+Response: `status`, `count`, `result` (`status`, `message`)
+
+<sub>access: any token · `trigger_device_discovery`</sub>
+
+### GET `/devices/{hostname}/availability`
+
+Availability percentages per period.
+
+| Param | In | Required | Rules | Notes |
+|---|---|---|---|---|
+| `hostname` | path | yes | hostname or device_id |  |
+
+Response: `status`, `count`, `availability` (`duration` in seconds, `availability_perc`)
+
+<sub>access: per-device · `device_availability`</sub>
+
+### GET `/devices/{hostname}/outages`
+
+Outage history, newest first.
+
+| Param | In | Required | Rules | Notes |
+|---|---|---|---|---|
+| `hostname` | path | yes | hostname or device_id |  |
+
+Response: `status`, `count`, `outages` (`going_down`, `up_again`, Unix timestamps)
+
+<sub>access: per-device · `device_outages`</sub>
+
+### GET `/devices/{hostname}/maintenance`
+
+Whether the device is in an active maintenance window.
+
+| Param | In | Required | Rules | Notes |
+|---|---|---|---|---|
+| `hostname` | path | yes | hostname or device_id |  |
+
+Response: `status`, `is_under_maintenance` (boolean)
+
+<sub>access: per-device · `device_under_maintenance`</sub>
+
+### POST `/devices/{hostname}/maintenance`
+
+Put the device into a one-off maintenance window.
+
+| Param | In | Required | Rules | Notes |
+|---|---|---|---|---|
+| `hostname` | path | yes | hostname or device_id |  |
+| `duration` | body | yes | `H:i`, e.g. `2:00` | A value without `:` creates the schedule with no end time. |
+| `start` | body | optional | `Y-m-d H:i:s` | Default now. |
+| `title` | body | optional | string | Default the device display name. |
+| `notes` | body | optional | string | Also appended to the device notes if the user has that preference set. |
+| `behavior` | body | optional | integer: `1` skip alerts, `2` mute alerts, `3` run alerts | Default from `alert.scheduled_maintenance_default_behavior`. |
+
+```json
+{"title": "Firmware upgrade", "start": "2026-10-23 22:00:00", "duration": "2:00", "behavior": 1}
+```
+
+Response: `201`, `status`, `message`
+
+<sub>access: admin · `maintenance_device`</sub>
+
+### POST `/devices/{id}/parents`
+
+Set the device's parent devices (dependencies). Replaces the existing parents.
+
+| Param | In | Required | Rules | Notes |
+|---|---|---|---|---|
+| `id` | path | yes | hostname or device_id |  |
+| `parent_ids` | body | yes | string, comma-separated IDs or hostnames | A device can't be its own parent. |
+
+```json
+{"parent_ids": "12,core-sw1"}
+```
+
+Response: `201`, `status`, `message`
+
+<sub>access: admin · `add_parents_to_host`</sub>
+
+### DELETE `/devices/{id}/parents`
+
+Remove parent devices.
+
+| Param | In | Required | Rules | Notes |
+|---|---|---|---|---|
+| `id` | path | yes | hostname or device_id |  |
+| `parent_ids` | body | optional | string, comma-separated IDs or hostnames | Omit to remove all parents. |
+
+Response: `201`, `status`, `message`
+
+<sub>access: admin · `del_parents_from_host`</sub>
+
+### GET `/devices/{hostname}/components`
+
+Components of a device. Every query parameter is applied as an exact-match filter on the component.
+
+| Param | In | Required | Rules | Notes |
+|---|---|---|---|---|
+| `hostname` | path | yes | hostname or device_id |  |
+| `type`, `id`, `status`, `disabled`, `ignore` | query | optional |  | Exact match. |
+| `label` | query | optional |  | Matched with LIKE. |
+
+Response: `status`, `count`, `components` (object keyed by component ID)
+
+<sub>access: per-device · `get_components`</sub>
+
+### POST `/devices/{hostname}/components/{type}`
+
+Create an empty component of the given type. No body.
+
+| Param | In | Required | Rules | Notes |
+|---|---|---|---|---|
+| `hostname` | path | yes | hostname or device_id |  |
+| `type` | path | yes | string | Component type. |
+
+Response: `status`, `count`, `components` (the new component keyed by its ID)
+
+<sub>access: admin · `add_components`</sub>
+
+### PUT `/devices/{hostname}/components`
+
+Save component settings. The body is the components object as returned by the GET, keyed by ID.
+
+| Param | In | Required | Rules | Notes |
+|---|---|---|---|---|
+| `hostname` | path | yes | hostname or device_id |  |
+| `<component_id>` | body | yes | object | Component fields to store. |
+
+```json
+{"4": {"type": "TESTING", "label": "Comp4", "status": 0, "ignore": 0, "disabled": 0, "error": ""}}
+```
+
+Response: `status`
+
+<sub>access: admin · `edit_components`</sub>
+
+### DELETE `/devices/{hostname}/components/{component}`
+
+Delete a component.
+
+| Param | In | Required | Rules | Notes |
+|---|---|---|---|---|
+| `hostname` | path | yes | hostname or device_id | Not used; the component ID alone identifies it. |
+| `component` | path | yes | integer | Component ID. |
+
+Response: `status`
+
+<sub>access: admin · `delete_components`</sub>
+
+---
+
+## 24.3 Device graphs and health
+
+Graph endpoints return the image itself (`Content-Type: image/png` or `image/svg+xml`) unless
+`output=base64`. All graph endpoints in this section and in 24.4, 24.5, 24.12 and 24.13 accept these
+query parameters:
+
+| Param | In | Required | Rules | Notes |
+|---|---|---|---|---|
+| `from`, `to` | query | optional | RRDtool time (Unix timestamp or e.g. `-1d`) | Graph start and end. |
+| `width`, `height` | query | optional | integer | Default `1075` x `300`. |
+| `output` | query | optional | `base64` | Return `{"status":"ok","image":{"image":"<base64>","content-type":"..."}}` instead of the raw image. |
+| `legend`, `title`, `graph_title`, `absolute`, `font`, `bg`, `bbg`, `nototal`, `nodetails`, `noagg`, `inverse`, `previous`, `duration` | query | optional |  | Passed to the graph renderer. |
+
+A graph that fails to render returns `500` with the RRDtool error.
+
+### GET `/devices/{hostname}/graphs`
+
+Graph types available for a device.
+
+| Param | In | Required | Rules | Notes |
+|---|---|---|---|---|
+| `hostname` | path | yes | hostname or device_id |  |
+
+Response: `status`, `count`, `graphs` (`desc`, `name`; use `name` as `{type}` below)
+
+<sub>access: per-device · `get_graphs`</sub>
+
+### GET `/devices/{hostname}/{type}`
+
+A device graph, e.g. `device_uptime`, `device_poller_perf`, `device_icmp_perf`, `device_processor`.
+Graph query parameters above apply.
+
+| Param | In | Required | Rules | Notes |
+|---|---|---|---|---|
+| `hostname` | path | yes | hostname or device_id |  |
+| `type` | path | yes | graph name from `/devices/{hostname}/graphs` |  |
+
+Response: image (or base64 envelope)
+
+<sub>access: per-device · `get_graph_generic_by_hostname`</sub>
+
+### GET `/devices/{hostname}/health/{type?}/{sensor_id?}`
+
+Health sensors of a device. With no `type`: the health graph types available. With `type`: the
+sensors of that class. With `type` and `sensor_id`: that sensor's full row.
+
+| Param | In | Required | Rules | Notes |
+|---|---|---|---|---|
+| `hostname` | path | yes | hostname or device_id |  |
+| `type` | path | optional | sensor class, e.g. `device_temperature` or `temperature` | `device_` prefix is stripped. |
+| `sensor_id` | path | optional | integer |  |
+
+Response: `status`, `count`, `graphs` (`desc`, `name` / `sensor_id`, `desc` / sensor rows)
+
+<sub>access: per-device · `list_available_health_graphs`</sub>
+
+### GET `/devices/{hostname}/wireless/{type?}/{sensor_id?}`
+
+Same as the health listing, for wireless sensors.
+
+| Param | In | Required | Rules | Notes |
+|---|---|---|---|---|
+| `hostname` | path | yes | hostname or device_id |  |
+| `type` | path | optional | `device_wireless_<class>`, e.g. `device_wireless_clients` | The class is the third `_`-separated part. |
+| `sensor_id` | path | optional | integer |  |
+
+Response: `status`, `count`, `graphs`
+
+<sub>access: per-device · `list_available_wireless_graphs`</sub>
+
+### GET `/devices/{hostname}/graphs/health/{type}/{sensor_id?}`
+
+A health graph. Without `sensor_id`, all sensors of the class in one graph. Graph query parameters
+apply.
+
+| Param | In | Required | Rules | Notes |
+|---|---|---|---|---|
+| `hostname` | path | yes | hostname or device_id |  |
+| `type` | path | yes | `name` from the health listing, e.g. `device_temperature` |  |
+| `sensor_id` | path | optional | integer | One sensor only. |
+
+Response: image (or base64 envelope)
+
+<sub>access: per-device · `get_health_graph`</sub>
+
+### GET `/devices/{hostname}/graphs/wireless/{type}/{sensor_id?}`
+
+A wireless sensor graph. Graph query parameters apply.
+
+| Param | In | Required | Rules | Notes |
+|---|---|---|---|---|
+| `hostname` | path | yes | hostname or device_id |  |
+| `type` | path | yes | `name` from the wireless listing, e.g. `device_wireless_clients` |  |
+| `sensor_id` | path | optional | integer | One sensor only. |
+
+Response: image (or base64 envelope)
+
+<sub>access: per-device · `get_wireless_graph`</sub>
+
+---
+
+## 24.4 Ports
+
+### GET `/ports`
+
+All ports the user can see.
+
+| Param | In | Required | Rules | Notes |
+|---|---|---|---|---|
+| `columns` | query | optional | comma-separated `ports` columns | Default `port_id,ifName`. Unknown columns are an error. `hostname` is always added. |
+
+Response: `status`, `count`, `ports`
+
+<sub>access: per-port (filtered) · `get_all_ports`</sub>
+
+### GET `/ports/{portid}`
+
+One port with its device and, when an SFP is fitted, the SFP readings. Telequill-specific: pass `all`
+as `portid` to get every port in the same format.
+
+| Param | In | Required | Rules | Notes |
+|---|---|---|---|---|
+| `portid` | path | yes | integer, or `all` |  |
+| `with` | query | optional | `vlans` or `device` | Also load that relation. |
+
+> **`all` is not permission-checked:** it returns every port to any valid token.
+
+Response: `status`, `port` (or `count`, `ports` for `all`): `hostname`, `device`, all port columns, and
+`sfp` (`connected`, `vendor`, `part-number`, `serial`, `wavelength`, `rx_power`, `tx_power`,
+`temperature`, `voltage`, `current`, `los_status`) when transceiver sensors exist for the port's
+`ifIndex`
+
+<sub>access: per-port · `get_port_info`</sub>
+
+### GET `/ports/{portid}/fdb`
+
+MAC addresses learned on a port.
+
+| Param | In | Required | Rules | Notes |
+|---|---|---|---|---|
+| `portid` | path | yes | integer |  |
+
+Response: `status`, `count`, `macs` (`ports_fdb` rows). `404` when empty.
+
+<sub>access: per-port · `get_port_fdb`</sub>
+
+### GET `/ports/{portid}/ip`
+
+IPv4 and IPv6 addresses on a port.
+
+| Param | In | Required | Rules | Notes |
+|---|---|---|---|---|
+| `portid` | path | yes | integer |  |
+
+Response: `status`, `count`, `addresses`. `404` when none.
+
+<sub>access: per-port · `get_port_ip_info`</sub>
+
+### GET `/ports/{portid}/description`
+
+The port's description (`ifAlias`).
+
+| Param | In | Required | Rules | Notes |
+|---|---|---|---|---|
+| `portid` | path | yes | integer | A port you can't see returns `400 Invalid port ID.` |
+
+Response: `status`, `port_description`
+
+<sub>access: per-port · `get_port_description`</sub>
+
+### PATCH `/ports/{portid}/description`
+
+Set the port's description in Telequill and stop the poller overwriting it. An empty description
+clears it and lets the poller set it again. This changes the database only, not the switch.
+
+| Param | In | Required | Rules | Notes |
+|---|---|---|---|---|
+| `portid` | path | yes | integer | A port you can't see returns `400 Invalid port ID.` |
+| `description` | body | yes | string | Empty to clear. |
+
+```json
+{"description": "Uplink to core"}
+```
+
+> **Not admin-only:** any user who can see the port can change its description.
+
+Response: `status`, `message`
+
+<sub>access: per-port · `update_port_description`</sub>
+
+### GET `/ports/search/{field}/{search?}`
+
+Search ports by text. With only one path segment (`/ports/search/{search}`), it searches
+`ifAlias`, `ifDescr` and `ifName`.
+
+| Param | In | Required | Rules | Notes |
+|---|---|---|---|---|
+| `field` | path | yes | comma-separated `ports` columns | Columns to search. |
+| `search` | path | optional | string, may contain `/` | Matched with LIKE `%search%`. |
+| `columns` | query | optional | comma-separated `ports` columns | Default `device_id,port_id,ifIndex,ifName,ifAlias`. |
+
+Response: `status`, `count`, `ports`. `404` when none.
+
+<sub>access: per-port (filtered) · `search_ports`</sub>
+
+### GET `/ports/mac/{search}`
+
+Ports where a MAC address was learned (FDB), the port with the fewest FDB entries first (most likely
+the access port).
+
+| Param | In | Required | Rules | Notes |
+|---|---|---|---|---|
+| `search` | path | yes | MAC in any common format | `422` if not a valid MAC. |
+| `filter` | query | optional | `first` | Return only the most likely port. |
+
+> **Not permission-checked:** results are not filtered by the user's port access.
+
+Response: `status`, `count`, `ports` (with `fdb_entries_count`). `404` when not found.
+
+<sub>access: any token · `search_mac`</sub>
+
+### GET `/devices/{hostname}/ports`
+
+A device's ports, by `ifIndex`.
+
+| Param | In | Required | Rules | Notes |
+|---|---|---|---|---|
+| `hostname` | path | yes | hostname or device_id |  |
+| `columns` | query | optional | comma-separated `ports` columns | Default `port_id,ifName`. |
+
+Response: `status`, `count`, `ports`. `404` when none.
+
+<sub>access: per-port (filtered) · `get_port_graphs`</sub>
+
+### GET `/devices/{hostname}/ports/{ifname}`
+
+Current stats of one port, by `ifName`. URL-encode names with `/` (e.g. `GigaEthernet0%2F1`).
+
+| Param | In | Required | Rules | Notes |
+|---|---|---|---|---|
+| `hostname` | path | yes | hostname or device_id |  |
+| `ifname` | path | yes | `ifName` |  |
+| `columns` | query | optional | comma-separated | Only return these keys. |
+
+Response: `status`, `count`, `port` (port row plus `in_rate`, `out_rate`, `in_perc`, `out_perc`, `in_pps`, `out_pps`)
+
+<sub>access: per-port · `get_port_stats_by_port_hostname`</sub>
+
+### GET `/devices/{hostname}/ports/{ifname}/{type}`
+
+A port graph, e.g. `port_bits`, `port_upkts`, `port_errors`. Graph query parameters apply.
+
+| Param | In | Required | Rules | Notes |
+|---|---|---|---|---|
+| `hostname` | path | yes | hostname or device_id |  |
+| `ifname` | path | yes | `ifName` (URL-encoded) |  |
+| `type` | path | yes | port graph type |  |
+| `ifDescr` | query | optional | boolean | Look the port up by `ifDescr` instead of `ifName`. |
+
+Response: image (or base64 envelope)
+
+<sub>access: per-port · `get_graph_by_port_hostname`</sub>
+
+### GET `/devices/{hostname}/port_stack`
+
+Port stack mappings (e.g. physical members of a port-channel).
+
+| Param | In | Required | Rules | Notes |
+|---|---|---|---|---|
+| `hostname` | path | yes | hostname or device_id | The upstream `valid_mappings` filter is not implemented here. |
+
+Response: `status`, `count`, `mappings`
+
+<sub>access: per-device · `get_port_stack`</sub>
+
+### PATCH `/devices/{hostname}/port/{portid}`
+
+Set the notes of a port.
+
+| Param | In | Required | Rules | Notes |
+|---|---|---|---|---|
+| `hostname` | path | yes | hostname or device_id |  |
+| `portid` | path | yes | integer |  |
+| `notes` | body | yes | string |  |
+
+```json
+{"notes": "Patch panel A-12"}
+```
+
+Response: `status`, `message`
+
+<sub>access: admin · `update_device_port_notes`</sub>
+
+---
+
+## 24.5 Port groups
+
+### GET `/port_groups`
+
+All port groups.
+
+No parameters.
+
+Response: `status`, `message`, `count`, `groups` (`id`, `name`, `desc`). `404` when none.
+
+<sub>access: global-read · `get_port_groups`</sub>
+
+### GET `/port_groups/{name}`
+
+Ports in a port group.
+
+| Param | In | Required | Rules | Notes |
+|---|---|---|---|---|
+| `name` | path | yes | group name or ID |  |
+| `full` | query | optional | any value | Return full port rows instead of only `port_id`. |
+
+Response: `status`, `count`, `ports`. `404` when the group or its ports don't exist.
+
+<sub>access: global-read · `get_ports_by_group`</sub>
+
+### POST `/port_groups`
+
+Create a port group.
+
+| Param | In | Required | Rules | Notes |
+|---|---|---|---|---|
+| `name` | body | yes | string, unique |  |
+| `desc` | body | optional | string |  |
+
+```json
+{"name": "Uplinks", "desc": "Core uplink ports"}
+```
+
+Response: `201`, `status`, `message`, `id`
+
+<sub>access: admin · `add_port_group`</sub>
+
+### POST `/port_groups/{port_group_id}/assign`
+
+Add ports to a port group.
+
+| Param | In | Required | Rules | Notes |
+|---|---|---|---|---|
+| `port_group_id` | path | yes | integer |  |
+| `port_ids` | body | yes | array of port IDs |  |
+
+```json
+{"port_ids": [101, 102]}
+```
+
+Response: `status` and a single key whose name is the message (`"Port Ids 101, 102 have been added to Port Group Id 3": 200`)
+
+<sub>access: admin · `assign_port_group`</sub>
+
+### POST `/port_groups/{port_group_id}/remove`
+
+Remove ports from a port group.
+
+| Param | In | Required | Rules | Notes |
+|---|---|---|---|---|
+| `port_group_id` | path | yes | integer |  |
+| `port_ids` | body | yes | array of port IDs |  |
+
+```json
+{"port_ids": [101]}
+```
+
+Response: as for assign, with `have been removed from`.
+
+<sub>access: admin · `remove_port_group`</sub>
+
+### GET `/portgroups/{group}`
+
+Combined traffic graph of all ports with the given port description type (e.g. `transit`,
+`peering`; comma-separate several). Graph query parameters apply.
+
+| Param | In | Required | Rules | Notes |
+|---|---|---|---|---|
+| `group` | path | yes | comma-separated port types | Port types from the description parser, not port group names. |
+
+Response: image (or base64 envelope)
+
+<sub>access: global-read · `get_graph_by_portgroup`</sub>
+
+### GET `/portgroups/multiport/bits/{id}`
+
+Combined traffic graph of a list of ports. Graph query parameters apply.
+
+| Param | In | Required | Rules | Notes |
+|---|---|---|---|---|
+| `id` | path | yes | comma-separated port IDs |  |
+
+Response: image (or base64 envelope)
+
+<sub>access: global-read · `get_graph_by_portgroup_multiport_bits`</sub>
+
+---
+
+## 24.6 Device groups
+
+### GET `/devicegroups`
+
+All device groups.
+
+No parameters.
+
+Response: `status`, `message`, `count`, `groups`. `404` when none.
+
+<sub>access: global-read · `get_device_groups`</sub>
+
+### GET `/devicegroups/{name}`
+
+Devices in a device group.
+
+| Param | In | Required | Rules | Notes |
+|---|---|---|---|---|
+| `name` | path | yes | group name or ID |  |
+| `full` | query | optional | any value | Return full device rows instead of only `device_id`. |
+
+Response: `status`, `count`, `devices`. `404` when the group or its devices don't exist.
+
+<sub>access: global-read · `get_devices_by_group`</sub>
+
+### GET `/devices/{hostname}/groups`
+
+Device groups a device belongs to.
+
+| Param | In | Required | Rules | Notes |
+|---|---|---|---|---|
+| `hostname` | path | yes | hostname or device_id |  |
+
+Response: `status`, `message`, `count`, `groups`. `404` when none.
+
+<sub>access: per-device (filtered) · `get_device_groups_device`</sub>
+
+### POST `/devicegroups`
+
+Create a device group.
+
+| Param | In | Required | Rules | Notes |
+|---|---|---|---|---|
+| `name` | body | yes | string, unique |  |
+| `type` | body | yes | `static` or `dynamic` |  |
+| `desc` | body | optional | string |  |
+| `devices` | body | yes, if `static` | array of device IDs (integers) |  |
+| `rules` | body | yes, if `dynamic` | JSON **string** in the query-builder format | `500` if it can't be parsed. |
+
+```json
+{"name": "Lab switches", "type": "static", "desc": "Bench", "devices": [1, 2, 3]}
+```
+
+Response: `201`, `status`, `message`, `id`. Validation errors are `422`.
+
+<sub>access: admin · `add_device_group`</sub>
+
+### PATCH `/devicegroups/{name}`
+
+Update a device group. Send only the fields to change.
+
+| Param | In | Required | Rules | Notes |
+|---|---|---|---|---|
+| `name` | path | yes | group name or ID |  |
+| `name` | body | optional | string, unique | New name. |
+| `desc` | body | optional | string |  |
+| `type` | body | optional | `static` or `dynamic` |  |
+| `devices` | body | yes, if `type` = `static` | array of device IDs | Replaces the members. |
+| `rules` | body | yes, if `type` = `dynamic` | JSON string |  |
+
+Response: `status`, `message`
+
+<sub>access: admin · `update_device_group`</sub>
+
+### DELETE `/devicegroups/{name}`
+
+Delete a device group.
+
+| Param | In | Required | Rules | Notes |
+|---|---|---|---|---|
+| `name` | path | yes | group name or ID |  |
+
+Response: `status`, `message`
+
+<sub>access: admin · `delete_device_group`</sub>
+
+### POST `/devicegroups/{name}/devices`
+
+Add devices to a static device group.
+
+| Param | In | Required | Rules | Notes |
+|---|---|---|---|---|
+| `name` | path | yes | group name or ID | `422` for a dynamic group. |
+| `devices` | body | yes | array of device IDs (integers) |  |
+
+```json
+{"devices": [4, 5]}
+```
+
+Response: `status`, `message`
+
+<sub>access: admin · `update_device_group_add_devices`</sub>
+
+### DELETE `/devicegroups/{name}/devices`
+
+Remove devices from a static device group.
+
+| Param | In | Required | Rules | Notes |
+|---|---|---|---|---|
+| `name` | path | yes | group name or ID | `422` for a dynamic group. |
+| `devices` | body | yes | array of device IDs (integers) |  |
+
+Response: `status`, `message`
+
+<sub>access: admin · `update_device_group_remove_devices`</sub>
+
+### POST `/devicegroups/{name}/maintenance`
+
+Put every device of the group into a one-off maintenance window.
+
+| Param | In | Required | Rules | Notes |
+|---|---|---|---|---|
+| `name` | path | yes | group name or ID |  |
+| `duration` | body | yes | `H:i`, e.g. `2:00` | A value without `:` creates the schedule with no end time. |
+| `start` | body | optional | `Y-m-d H:i:s` | Default now. |
+| `title` | body | optional | string | Default the group name. |
+| `notes` | body | optional | string |  |
+| `behavior` | body | optional | integer: `1` skip alerts, `2` mute alerts, `3` run alerts |  |
+
+```json
+{"title": "Ring maintenance", "duration": "1:30"}
+```
+
+Response: `201`, `status`, `message`
+
+<sub>access: admin · `maintenance_devicegroup`</sub>
+
+---
+
+## 24.7 Alerts and alert rules
+
+### GET `/alerts`
+
+Current alerts, newest first.
+
+| Param | In | Required | Rules | Notes |
+|---|---|---|---|---|
+| `state` | query | optional | comma-separated: `0` ok, `1` alert, `2` acknowledged | Default `1`. |
+| `severity` | query | optional | `ok`, `warning`, `critical` |  |
+| `alert_rule` | query | optional | integer | Rule ID. |
+| `order` | query | optional | `<alerts column> asc\|desc` (lowercase) | Default `timestamp desc`. |
+
+Response: `status`, `count`, `alerts` (alert row plus `hostname`, `severity`, `name`, `proc`, `notes` of the rule)
+
+<sub>access: global-read · `list_alerts`</sub>
+
+### GET `/alerts/{id}`
+
+One alert. Takes the same query parameters; note the default `state` filter still applies, so pass
+`state=0,1,2` to find an alert in any state.
+
+| Param | In | Required | Rules | Notes |
+|---|---|---|---|---|
+| `id` | path | yes | integer |  |
+
+Response: `status`, `count`, `alerts`
+
+<sub>access: global-read · `get_alert`</sub>
+
+### PUT `/alerts/{id}`
+
+Acknowledge an alert.
+
+| Param | In | Required | Rules | Notes |
+|---|---|---|---|---|
+| `id` | path | yes | integer |  |
+| `note` | body | optional | string | Appended to the alert's notes. |
+| `until_clear` | body | optional | boolean | `false`: re-alert if the alert worsens or improves. |
+
+```json
+{"note": "Working on it", "until_clear": false}
+```
+
+Response: `status`, `message` (`No Alert by that ID` is also `200`)
+
+<sub>access: admin · `ack_alert`</sub>
+
+### PUT `/alerts/unmute/{id}`
+
+Unacknowledge (unmute) an alert.
+
+| Param | In | Required | Rules | Notes |
+|---|---|---|---|---|
+| `id` | path | yes | integer |  |
+| `note` | body | optional | string | Appended to the alert's notes. |
+
+Response: `status`, `message`
+
+<sub>access: admin · `unmute_alert`</sub>
+
+### GET `/rules`
+
+All alert rules.
+
+No parameters.
+
+Response: `status`, `count`, `rules` (rule row plus `devices`, `groups`, `locations` as ID arrays)
+
+<sub>access: global-read · `list_alert_rules`</sub>
+
+### GET `/rules/{id}`
+
+One alert rule.
+
+| Param | In | Required | Rules | Notes |
+|---|---|---|---|---|
+| `id` | path | yes | integer |  |
+
+Response: `status`, `count`, `rules`
+
+<sub>access: global-read · `get_alert_rule`</sub>
+
+### POST `/rules`
+
+Create an alert rule.
+
+| Param | In | Required | Rules | Notes |
+|---|---|---|---|---|
+| `name` | body | yes | string, unique |  |
+| `devices` | body | yes | array of device IDs/hostnames, or `[-1]` for all devices |  |
+| `builder` | body | yes (or `rule`) | query-builder JSON, object or string | The rule condition. |
+| `severity` | body | yes | `ok`, `warning`, `critical` |  |
+| `groups` | body | optional | array of device group IDs |  |
+| `locations` | body | optional | array of location IDs |  |
+| `disabled` | body | optional | `0` or `1` | Default `0`. |
+| `count` | body | optional | integer | Max notifications. |
+| `delay` | body | optional | seconds, or `5 m` / `5 h` / `5 d` | Wait before alerting. |
+| `interval` | body | optional | same as `delay` | Re-notify interval, `0` = once. |
+| `mute` | body | optional | `1` to mute | Show in the UI but don't notify. |
+| `override_query` | body | optional | `on` or `true` | Use `adv_query` instead of `builder`. |
+| `adv_query` | body | optional | SQL | Only with `override_query`. |
+| `notes` | body | optional | string |  |
+
+```json
+{"name": "Device down", "devices": [-1], "severity": "critical", "delay": "5 m", "interval": "1 h",
+ "builder": {"condition": "AND", "rules": [{"id": "devices.status", "field": "devices.status", "type": "boolean", "input": "radio", "operator": "equal", "value": "0"}], "valid": true}}
+```
+
+Response: `status`. A duplicate name or unparsable rule returns `500`.
+
+<sub>access: admin · `add_rule`</sub>
+
+### PUT `/rules`
+
+Update an alert rule. Same body as POST plus `rule_id`; `devices` may then be empty. Every field is
+rewritten, so send the full rule.
+
+| Param | In | Required | Rules | Notes |
+|---|---|---|---|---|
+| `rule_id` | body | yes | integer |  |
+| (POST fields) | body |  |  | As for POST `/rules`. |
+
+Response: `status`
+
+<sub>access: admin · `edit_rule`</sub>
+
+### DELETE `/rules/{id}`
+
+Delete an alert rule.
+
+| Param | In | Required | Rules | Notes |
+|---|---|---|---|---|
+| `id` | path | yes | integer |  |
+
+Response: `status`, `message` (`No alert rule by that ID` is also `200`)
+
+<sub>access: admin · `delete_rule`</sub>
+
+---
+
+## 24.8 Logs
+
+All four log endpoints take the same query parameters:
+
+| Param | In | Required | Rules | Notes |
+|---|---|---|---|---|
+| `start` | query | optional | integer | Offset, default `0`. |
+| `limit` | query | optional | integer | Default `50`. |
+| `from`, `to` | query | optional | log ID (number) or datetime `Y-m-d H:i:s` | Numbers filter on the log ID, anything else on the timestamp. |
+| `sortorder` | query | optional | `ASC` or `DESC` | Default `ASC` (oldest first). |
+
+Response: `status`, `count`, `total` (all matching rows), `logs` (each row includes `hostname` and
+`sysName` except for the auth log)
+
+### GET `/logs/eventlog/{hostname?}`
+
+Event log, optionally for one device.
+
+| Param | In | Required | Rules | Notes |
+|---|---|---|---|---|
+| `hostname` | path | optional | hostname or device_id |  |
+
+<sub>access: global-read · `list_eventlog`</sub>
+
+### GET `/logs/syslog/{hostname?}`
+
+Syslog messages, optionally for one device.
+
+| Param | In | Required | Rules | Notes |
+|---|---|---|---|---|
+| `hostname` | path | optional | hostname or device_id |  |
+
+<sub>access: global-read · `list_syslog`</sub>
+
+### GET `/logs/alertlog/{hostname?}`
+
+Alert log, optionally for one device. `details` is returned decoded.
+
+| Param | In | Required | Rules | Notes |
+|---|---|---|---|---|
+| `hostname` | path | optional | hostname or device_id |  |
+
+<sub>access: global-read · `list_alertlog`</sub>
+
+### GET `/logs/authlog`
+
+Web login log.
+
+No path parameters.
+
+<sub>access: global-read · `list_authlog`</sub>
+
+---
+
+## 24.9 Inventory and transceivers
+
+### GET `/inventory/{hostname}`
+
+Physical inventory (ENTITY-MIB) entries of a device, top level by default.
+
+| Param | In | Required | Rules | Notes |
+|---|---|---|---|---|
+| `hostname` | path | yes | hostname or device_id |  |
+| `entPhysicalClass` | query | optional | e.g. `chassis`, `port`, `module` |  |
+| `entPhysicalContainedIn` | query | optional | integer | Parent index; default `0` (top level). |
+
+Response: `status`, `count`, `inventory` (`entPhysical` rows)
+
+<sub>access: per-device · `get_inventory`</sub>
+
+### GET `/inventory/{hostname}/all`
+
+All inventory entries of a device, unfiltered.
+
+| Param | In | Required | Rules | Notes |
+|---|---|---|---|---|
+| `hostname` | path | yes | hostname or device_id |  |
+
+Response: `status`, `count`, `inventory`
+
+<sub>access: per-device · `get_inventory_for_device`</sub>
+
+### GET `/devices/{hostname}/transceivers`
+
+Transceivers of a device.
+
+| Param | In | Required | Rules | Notes |
+|---|---|---|---|---|
+| `hostname` | path | yes | hostname or device_id | An unknown device returns an empty list, not `404`. |
+
+Response: `status`, `count`, `transceivers` (`id`, `device_id`, `port_id`, `index`, `type`, `vendor`, `oui`, `model`, `revision`, `serial`, `date`, `ddm`, `encoding`, `cable`, `distance`, `wavelength`, `connector`, `channels`, timestamps)
+
+<sub>access: per-port (filtered) · `get_transceivers`</sub>
+
+### GET `/ports/{portid}/transceiver`
+
+Transceiver of one port.
+
+| Param | In | Required | Rules | Notes |
+|---|---|---|---|---|
+| `portid` | path | yes | integer |  |
+
+Response: `status`, `count`, `transceivers` (same fields as above)
+
+<sub>access: per-port · `get_port_transceiver`</sub>
+
+### PATCH `/ports/transceiver/metric/{metric}`
+
+Meant to update the thresholds of a transceiver metric.
+
+| Param | In | Required | Rules | Notes |
+|---|---|---|---|---|
+| `metric` | path | yes |  |  |
+
+> **Not implemented:** the route exists, but there is no `update_transceiver_metric_thresholds` function in `api_functions.inc.php`, so this endpoint returns a server error.
+
+<sub>access: per-port · `update_transceiver_metric_thresholds`</sub>
+
+---
+
+## 24.10 Resources (ARP, IP, FDB, NAC, links, VLANs, sensors, locations)
+
+### GET `/resources/ip/arp/{query}/{cidr?}`
+
+ARP table lookup.
+
+| Param | In | Required | Rules | Notes |
+|---|---|---|---|---|
+| `query` | path | yes | IPv4, MAC, network address, or `all` |  |
+| `cidr` | path | optional | prefix length, e.g. `24` | With `query` as the network address. |
+| `device` | query | optional | hostname or device_id | Only with `query` = `all`: that device's ARP table. |
+
+Response: `status`, `count`, `arp` (`ipv4_mac` rows)
+
+<sub>access: global-read · `list_arp`</sub>
+
+### GET `/resources/ip/addresses/{address_family?}`
+
+All IP addresses.
+
+| Param | In | Required | Rules | Notes |
+|---|---|---|---|---|
+| `address_family` | path | optional | `ipv4` or `ipv6` | Default both. Any other value returns nothing. |
+
+Response: `status`, `count`, `ip_addresses`. `404` when none.
+
+<sub>access: global-read · `list_ip_addresses`</sub>
+
+### GET `/resources/ip/networks/{address_family?}`
+
+All IP networks.
+
+| Param | In | Required | Rules | Notes |
+|---|---|---|---|---|
+| `address_family` | path | optional | `ipv4` or `ipv6` | Default both. |
+
+Response: `status`, `count`, `ip_networks`. `404` when none.
+
+<sub>access: global-read · `list_ip_networks`</sub>
+
+### GET `/resources/ip/networks/{id}/ip`
+
+IP addresses in one network.
+
+| Param | In | Required | Rules | Notes |
+|---|---|---|---|---|
+| `id` | path | yes | network ID | Matches IPv4 and IPv6 network IDs. |
+
+Response: `status`, `count`, `addresses`. `404` when empty.
+
+<sub>access: global-read · `get_network_ip_addresses`</sub>
+
+### GET `/devices/{hostname}/ip`
+
+IPv4 and IPv6 addresses on a device's ports.
+
+| Param | In | Required | Rules | Notes |
+|---|---|---|---|---|
+| `hostname` | path | yes | hostname or device_id |  |
+
+Response: `status`, `count`, `addresses`. `404` when none.
+
+<sub>access: per-device · `get_ip_addresses`</sub>
+
+### GET `/resources/fdb`
+
+The whole forwarding database (MAC table).
+
+No parameters.
+
+Response: `status`, `count`, `ports_fdb`. `404` when empty.
+
+<sub>access: per-device (filtered) · `list_fdb`</sub>
+
+### GET `/resources/fdb/{mac}`
+
+FDB entries for one MAC.
+
+| Param | In | Required | Rules | Notes |
+|---|---|---|---|---|
+| `mac` | path | yes | 12 hex digits, no separators, lowercase | Compared as stored. |
+
+Response: `status`, `count`, `ports_fdb`. `404` when not found.
+
+<sub>access: per-device (filtered) · `list_fdb_mac`</sub>
+
+### GET `/resources/fdb/{mac}/detail`
+
+Where a MAC was seen, with device and port names, newest first (max 1000).
+
+| Param | In | Required | Rules | Notes |
+|---|---|---|---|---|
+| `mac` | path | yes | MAC in any common format | `422` if invalid. |
+
+Response: `status`, `count`, `mac`, `mac_oui` (vendor), `ports_fdb` (`hostname`, `sysName`, `ifName`, `ifAlias`, `ifDescr`, `updated_at`, `last_seen`)
+
+<sub>access: per-device (filtered) · `list_fdb_detail`</sub>
+
+### GET `/devices/{hostname}/fdb`
+
+A device's FDB entries.
+
+| Param | In | Required | Rules | Notes |
+|---|---|---|---|---|
+| `hostname` | path | yes | hostname or device_id |  |
+
+Response: `status`, `count`, `ports_fdb`
+
+<sub>access: per-device · `get_fdb`</sub>
+
+### GET `/resources/nac`
+
+All NAC (802.1X / MAB) sessions.
+
+No parameters.
+
+Response: `status`, `count`, `ports_nac`. `404` when none.
+
+<sub>access: per-device (filtered) · `list_nac`</sub>
+
+### GET `/resources/nac/{mac}`
+
+NAC sessions for one MAC.
+
+| Param | In | Required | Rules | Notes |
+|---|---|---|---|---|
+| `mac` | path | yes | MAC as stored (12 hex digits) |  |
+
+Response: `status`, `count`, `ports_nac`. `404` when not found.
+
+<sub>access: per-device (filtered) · `list_nac_mac`</sub>
+
+### GET `/devices/{hostname}/nac`
+
+A device's NAC sessions.
+
+| Param | In | Required | Rules | Notes |
+|---|---|---|---|---|
+| `hostname` | path | yes | hostname or device_id |  |
+
+> **Permission bug:** the function checks permission on an undefined device ID, so users without global read get `403` even for their own devices.
+
+Response: `status`, `count`, `ports_nac`
+
+<sub>access: per-device · `get_nac`</sub>
+
+### GET `/resources/links`
+
+All discovered neighbour links (LLDP/CDP etc.).
+
+No parameters.
+
+Response: `status`, `count`, `links`. `404` when none.
+
+<sub>access: per-device (filtered) · `list_links`</sub>
+
+### GET `/resources/links/{id}`
+
+One link.
+
+| Param | In | Required | Rules | Notes |
+|---|---|---|---|---|
+| `id` | path | yes | integer |  |
+
+Response: `status`, `count`, `link`
+
+<sub>access: global-read · `get_link`</sub>
+
+### GET `/devices/{hostname}/links`
+
+Links whose local side is this device.
+
+| Param | In | Required | Rules | Notes |
+|---|---|---|---|---|
+| `hostname` | path | yes | hostname or device_id |  |
+
+Response: `status`, `count`, `links`. `404` when none.
+
+<sub>access: per-device · `list_links_device`</sub>
+
+### GET `/resources/vlans`
+
+All VLANs known to Telequill.
+
+| Param | In | Required | Rules | Notes |
+|---|---|---|---|---|
+| `hostname` | query | optional | hostname or device_id | One device only. |
+
+Response: `status`, `count`, `vlans`. `404` when none.
+
+<sub>access: per-device (filtered) · `list_vlans`</sub>
+
+### GET `/devices/{hostname}/vlans`
+
+A device's VLANs.
+
+| Param | In | Required | Rules | Notes |
+|---|---|---|---|---|
+| `hostname` | path | yes | hostname or device_id |  |
+
+Response: `status`, `count`, `vlans` (`vlan_vlan`, `vlan_domain`, `vlan_name`, `vlan_type`, `vlan_state`)
+
+<sub>access: per-device · `get_vlans`</sub>
+
+### GET `/resources/sensors`
+
+All health sensors.
+
+No parameters.
+
+Response: `status`, `count`, `sensors`. `404` when none.
+
+<sub>access: per-device (filtered) · `list_sensors`</sub>
+
+### GET `/resources/locations`
+
+All locations.
+
+No parameters.
+
+Response: `status`, `count`, `locations`. `404` when none.
+
+<sub>access: global-read · `list_locations`</sub>
+
+### POST `/locations`
+
+Create a location.
+
+| Param | In | Required | Rules | Notes |
+|---|---|---|---|---|
+| `location` | body | yes | string | Name. |
+| `lat` | body | yes | number |  |
+| `lng` | body | yes | number |  |
+| `fixed_coordinates` | body | optional | `0` or `1` | `1` = don't update from devices. Default `1` if the coordinates are valid. |
+
+```json
+{"location": "Pune DC", "lat": 18.52, "lng": 73.85}
+```
+
+Response: `201`, `status`, `message` (with the new ID)
+
+<sub>access: admin · `add_location`</sub>
+
+### GET `/location/{location_id_or_name}`
+
+One location. Note the singular `location` in the path.
+
+| Param | In | Required | Rules | Notes |
+|---|---|---|---|---|
+| `location_id_or_name` | path | yes | ID or name |  |
+
+Response: `status`, `get_location` (the location object)
+
+<sub>access: admin · `get_location`</sub>
+
+### PATCH `/locations/{location_id_or_name}`
+
+Update a location. The body is written straight to the `locations` row.
+
+| Param | In | Required | Rules | Notes |
+|---|---|---|---|---|
+| `location_id_or_name` | path | yes | ID or name |  |
+| `location`, `lat`, `lng`, `fixed_coordinates` | body | optional | `locations` columns | Unknown columns fail with `500`. |
+
+```json
+{"lat": 18.53, "lng": 73.86}
+```
+
+Response: `201`, `status`, `message`
+
+<sub>access: admin · `edit_location`</sub>
+
+### DELETE `/locations/{location}`
+
+Delete a location. Its devices are left with no location.
+
+| Param | In | Required | Rules | Notes |
+|---|---|---|---|---|
+| `location` | path | yes | ID or name |  |
+
+Response: `201`, `status`, `message`
+
+<sub>access: admin · `del_location`</sub>
+
+---
+
+## 24.11 Routing (BGP, OSPF, VRF, IPsec, MPLS)
+
+### GET `/bgp`
+
+BGP sessions.
+
+| Param | In | Required | Rules | Notes |
+|---|---|---|---|---|
+| `hostname` | query | optional | hostname or device_id |  |
+| `asn` | query | optional | integer | Local AS. |
+| `remote_asn` | query | optional | integer |  |
+| `local_address`, `remote_address` | query | optional | IP | `400` if invalid. |
+| `bgp_descr` | query | optional | string | LIKE match. |
+| `bgp_state` | query | optional | e.g. `established`, `idle` |  |
+| `bgp_adminstate` | query | optional | e.g. `start`, `stop`, `running` |  |
+| `bgp_family` | query | optional | `4` or `6` |  |
+
+Response: `status`, `count`, `bgp_sessions`
+
+<sub>access: global-read · `list_bgp`</sub>
+
+### GET `/bgp/{id}`
+
+One BGP session.
+
+| Param | In | Required | Rules | Notes |
+|---|---|---|---|---|
+| `id` | path | yes | integer | `bgpPeer_id`. |
+
+Response: `status`, `count`, `bgp_session` (array with one row)
+
+<sub>access: global-read · `get_bgp`</sub>
+
+### POST `/bgp/{id}`
+
+Set the description of a BGP session.
+
+| Param | In | Required | Rules | Notes |
+|---|---|---|---|---|
+| `id` | path | yes | integer | `bgpPeer_id`. |
+| `bgp_descr` | body | yes | string | `500` if missing. |
+
+```json
+{"bgp_descr": "Transit - ISP A"}
+```
+
+Response: `status`, `message`
+
+<sub>access: admin · `edit_bgp_descr`</sub>
+
+### GET `/routing/bgp/cbgp`
+
+BGP per-address-family counters (Cisco cBGP).
+
+| Param | In | Required | Rules | Notes |
+|---|---|---|---|---|
+| `hostname` | query | optional | hostname or device_id |  |
+
+Response: `status`, `count`, `bgp_counters`. `404` when none.
+
+<sub>access: per-device (filtered) · `list_cbgp`</sub>
+
+### GET `/ospf`
+
+OSPF neighbours.
+
+| Param | In | Required | Rules | Notes |
+|---|---|---|---|---|
+| `hostname` | query | optional | hostname or device_id |  |
+
+Response: `status`, `count`, `ospf_neighbours`
+
+<sub>access: global-read · `list_ospf`</sub>
+
+### GET `/ospf_ports`
+
+OSPF interfaces.
+
+No parameters.
+
+Response: `status`, `count`, `ospf_ports`. `404` when none.
+
+<sub>access: global-read · `list_ospf_ports`</sub>
+
+### GET `/ospfv3`
+
+OSPFv3 neighbours.
+
+| Param | In | Required | Rules | Notes |
+|---|---|---|---|---|
+| `hostname` | query | optional | hostname or device_id |  |
+
+Response: `status`, `count`, `ospfv3_neighbours`. Returns `500` (not `404`) when there are none.
+
+<sub>access: global-read · `list_ospfv3`</sub>
+
+### GET `/ospfv3_ports`
+
+OSPFv3 interfaces.
+
+| Param | In | Required | Rules | Notes |
+|---|---|---|---|---|
+| `hostname` | query | optional | hostname or device_id |  |
+
+Response: `status`, `count`, `ospfv3_ports`. `404` when none.
+
+<sub>access: global-read · `list_ospfv3_ports`</sub>
+
+### GET `/routing/vrf`
+
+VRFs.
+
+| Param | In | Required | Rules | Notes |
+|---|---|---|---|---|
+| `hostname` | query | optional | hostname or device_id |  |
+| `vrfname` | query | optional | string | Replaces the `hostname` filter if both are given. |
+
+Response: `status`, `count`, `vrfs`. `404` when none.
+
+<sub>access: per-device (filtered) · `list_vrf`</sub>
+
+### GET `/routing/vrf/{id}`
+
+One VRF.
+
+| Param | In | Required | Rules | Notes |
+|---|---|---|---|---|
+| `id` | path | yes | integer | `vrf_id`. |
+
+Response: `status`, `count`, `vrf`
+
+<sub>access: global-read · `get_vrf`</sub>
+
+### GET `/routing/ipsec/data/{hostname}`
+
+IPsec tunnels of a device.
+
+| Param | In | Required | Rules | Notes |
+|---|---|---|---|---|
+| `hostname` | path | yes | hostname or device_id |  |
+
+Response: `status`, `count`, `ipsec` (tunnel rows plus `hostname`)
+
+<sub>access: global-read · `list_ipsec`</sub>
+
+### GET `/routing/mpls/services`
+
+MPLS services.
+
+| Param | In | Required | Rules | Notes |
+|---|---|---|---|---|
+| `hostname` | query | optional | hostname or device_id |  |
+
+Response: `status`, `count`, `mpls_services`. `404` when none.
+
+<sub>access: per-device (filtered) · `list_mpls_services`</sub>
+
+### GET `/routing/mpls/saps`
+
+MPLS service access points.
+
+| Param | In | Required | Rules | Notes |
+|---|---|---|---|---|
+| `hostname` | query | optional | hostname or device_id |  |
+
+Response: `status`, `count`, `saps`. `404` when none.
+
+<sub>access: per-device (filtered) · `list_mpls_saps`</sub>
+
+---
+
+## 24.12 Services
+
+### GET `/services`
+
+All service checks.
+
+| Param | In | Required | Rules | Notes |
+|---|---|---|---|---|
+| `state` | query | optional | `0` ok, `1` warning, `2` critical | Also excludes disabled and ignored services. |
+| `type` | query | optional | string | LIKE match, e.g. `http`. |
+
+Response: `status`, `count` (always `1`), `services` (an array containing one array of service rows, kept for backwards compatibility)
+
+<sub>access: global-read · `list_services`</sub>
+
+### GET `/services/{hostname}`
+
+Service checks of one device. Same query parameters and response as `/services`.
+
+| Param | In | Required | Rules | Notes |
+|---|---|---|---|---|
+| `hostname` | path | yes | hostname or device_id |  |
+
+<sub>access: global-read · `list_services_device`</sub>
+
+### POST `/services/{hostname}`
+
+Add a service check to a device.
+
+| Param | In | Required | Rules | Notes |
+|---|---|---|---|---|
+| `hostname` | path | yes | hostname or device_id |  |
+| `type` | body | yes | an installed check, e.g. `http`, `icmp`, `ssh` | The error lists the available types. |
+| `ip` | body | optional | string | Target address. |
+| `name` | body | optional | string |  |
+| `desc` | body | optional | string |  |
+| `param` | body | optional | string | Check arguments. |
+| `ignore` | body | optional | boolean | Default `false`. |
+| `disable` | body | optional | boolean | Default `false`. |
+
+```json
+{"type": "http", "ip": "192.168.2.245", "name": "Switch web UI", "param": "-p 80"}
+```
+
+Response: `201`, `status`, `message` (with the new service ID)
+
+<sub>access: admin · `add_service_for_host`</sub>
+
+### PATCH `/services/{id}`
+
+Update a service. The body is written straight to the `services` row.
+
+| Param | In | Required | Rules | Notes |
+|---|---|---|---|---|
+| `id` | path | yes | integer | `service_id`. |
+| `service_name`, `service_ip`, `service_type`, `service_desc`, `service_param`, `service_ignore`, `service_disabled` | body | optional | `services` columns |  |
+
+```json
+{"service_disabled": 1}
+```
+
+Response: `201`, `status`, `message`. Returns `500` when nothing changed.
+
+<sub>access: admin · `edit_service_for_host`</sub>
+
+### DELETE `/services/{id}`
+
+Delete a service.
+
+| Param | In | Required | Rules | Notes |
+|---|---|---|---|---|
+| `id` | path | yes | integer | `service_id`. |
+
+Response: `201`, `status`, `message`
+
+<sub>access: admin · `del_service_from_host`</sub>
+
+### GET `/devices/{hostname}/services/{id}/graphs/{datasource}`
+
+Graph of one data source of a service check. Graph query parameters apply.
+
+| Param | In | Required | Rules | Notes |
+|---|---|---|---|---|
+| `hostname` | path | yes | hostname or device_id |  |
+| `id` | path | yes | integer | `service_id`. |
+| `datasource` | path | yes | string | Data source name of the check, e.g. `time`. |
+
+Response: image (or base64 envelope)
+
+<sub>access: per-device · `get_graph_by_service`</sub>
+
+---
+
+## 24.13 Bills
+
+### GET `/bills`
+
+All bills.
+
+| Param | In | Required | Rules | Notes |
+|---|---|---|---|---|
+| `custid` | query | optional | string | Filter by customer ID. |
+| `ref` | query | optional | string | Filter by reference (ignored if `custid` is set). |
+| `period` | query | optional | `previous` | Figures of the last completed period instead of the current one. |
+
+Response: `status`, `count`, `bills` (bill row plus `allowed`, `used`, `percent`, `overuse`, `ports`)
+
+<sub>access: per-bill (filtered) · `list_bills`</sub>
+
+### GET `/bills/{bill_id}`
+
+One bill. Same query parameters and response as `/bills`.
+
+| Param | In | Required | Rules | Notes |
+|---|---|---|---|---|
+| `bill_id` | path | yes | integer |  |
+
+<sub>access: per-bill (filtered) · `get_bill`</sub>
+
+### GET `/bills/{bill_id}/graphs/{graph_type}`
+
+Bill graph for the current period. Graph query parameters apply.
+
+| Param | In | Required | Rules | Notes |
+|---|---|---|---|---|
+| `bill_id` | path | yes | integer |  |
+| `graph_type` | path | yes | `bits` or `monthly` |  |
+
+Response: image (or base64 envelope)
+
+<sub>access: per-bill · `get_bill_graph`</sub>
+
+### GET `/bills/{bill_id}/graphdata/{graph_type}`
+
+Raw data behind a bill graph.
+
+| Param | In | Required | Rules | Notes |
+|---|---|---|---|---|
+| `bill_id` | path | yes | integer |  |
+| `graph_type` | path | yes | `bits` or `monthly` | Other values return `400`. |
+| `from`, `to` | query | optional | Unix timestamp | `bits` only. Default the last 24 hours. |
+| `reducefactor` | query | optional | integer | `bits` only. |
+
+Response: `status`, `graph_data`
+
+<sub>access: per-bill · `get_bill_graphdata`</sub>
+
+### GET `/bills/{bill_id}/history`
+
+The last 24 billing periods.
+
+| Param | In | Required | Rules | Notes |
+|---|---|---|---|---|
+| `bill_id` | path | yes | integer |  |
+
+Response: `status`, `count`, `bill_history`
+
+<sub>access: per-bill · `get_bill_history`</sub>
+
+### GET `/bills/{bill_id}/history/{bill_hist_id}/graphs/{graph_type}`
+
+Graph of a past billing period. Graph query parameters apply.
+
+| Param | In | Required | Rules | Notes |
+|---|---|---|---|---|
+| `bill_id` | path | yes | integer |  |
+| `bill_hist_id` | path | yes | integer | From `/history`. |
+| `graph_type` | path | yes | `bits`, `day` or `hour` | Other values return `400`. |
+| `reducefactor` | query | optional | integer | `bits` only. |
+
+Response: image (or base64 envelope)
+
+<sub>access: per-bill · `get_bill_history_graph`</sub>
+
+### GET `/bills/{bill_id}/history/{bill_hist_id}/graphdata/{graph_type}`
+
+Raw data behind a past period's graph.
+
+| Param | In | Required | Rules | Notes |
+|---|---|---|---|---|
+| `bill_id` | path | yes | integer |  |
+| `bill_hist_id` | path | yes | integer |  |
+| `graph_type` | path | yes | `bits`, `day` or `hour` |  |
+| `reducefactor` | query | optional | integer | `bits` only. |
+
+Response: `status`, `graph_data`
+
+<sub>access: per-bill · `get_bill_history_graphdata`</sub>
+
+### POST `/bills`
+
+Create a bill, or update one when `bill_id` is an existing bill. On update, `ports` (if sent)
+replaces the bill's ports, so send the full list.
+
+| Param | In | Required | Rules | Notes |
+|---|---|---|---|---|
+| `bill_id` | body | update only | integer | Not allowed on create. |
+| `bill_name` | body | yes on create | string |  |
+| `bill_type` | body | yes on create | `quota` or `cdr` |  |
+| `bill_cdr` | body | yes for `cdr` | number, bits/s | Set to `0` for `quota`. |
+| `bill_quota` | body | yes for `quota` | number, bytes | Set to `0` for `cdr`. |
+| `bill_day` | body | yes on create | integer, 1 - 31 | Billing day of the month. |
+| `bill_custid`, `bill_ref`, `bill_notes` | body | yes on create | string | May be empty. |
+| `dir_95th` | body | yes on create | e.g. `in`, `out`, `agg` |  |
+| `ports` | body | optional | array of port IDs | `500` if a port doesn't exist. |
+
+```json
+{"bill_name": "Customer A", "bill_type": "cdr", "bill_cdr": 100000000, "bill_day": 1,
+ "bill_custid": "CUST-A", "bill_ref": "", "bill_notes": "", "dir_95th": "in", "ports": [101, 102]}
+```
+
+Response: `status`, `bill_id`. Missing fields return `500` with `Missing parameters: ...`; invalid values `400`.
+
+<sub>access: admin · `create_bill`</sub>
+
+### DELETE `/bills/{bill_id}`
+
+Delete a bill and its ports, data, history and permissions.
+
+| Param | In | Required | Rules | Notes |
+|---|---|---|---|---|
+| `bill_id` | path | yes | integer, >= 1 |  |
+
+Response: `status`, `message`
+
+<sub>access: admin · `delete_bill`</sub>
+
+---
+
+## 24.14 Oxidized
+
+### GET `/oxidized/{hostname?}`
+
+Device list in the format Oxidized reads as its source: enabled devices not excluded by the Oxidized
+settings, with group/model mapping applied.
+
+| Param | In | Required | Rules | Notes |
+|---|---|---|---|---|
+| `hostname` | path | optional | hostname | One device only. |
+
+Response: a plain JSON array (no envelope) of `hostname`, `os`, `ip`, and `ssh_port`, `telnet_port`, `group` and other mapped fields when set
+
+<sub>access: global-read · `list_oxidized`</sub>
+
+### GET `/oxidized/config/search/{searchstring}`
+
+Search the configs stored in Oxidized.
+
+| Param | In | Required | Rules | Notes |
+|---|---|---|---|---|
+| `searchstring` | path | yes | string |  |
+
+Response: `status`, `count`, `nodes` (`node`, `full_name`, `dev_id`). `404` when Oxidized returns nothing.
+
+<sub>access: admin · `search_oxidized`</sub>
+
+### GET `/oxidized/config/{device_name}`
+
+The current config of a device from Oxidized.
+
+| Param | In | Required | Rules | Notes |
+|---|---|---|---|---|
+| `device_name` | path | yes | hostname or IP as known to Oxidized |  |
+
+Response: `status`, `config` (the config text). `404` when Oxidized returns nothing.
+
+<sub>access: admin · `get_oxidized_config`</sub>
+
+---
+
+## 24.15 Poller groups and syslog sink
+
+### GET `/poller_group/{poller_group_id_or_name?}`
+
+Poller groups. Without a parameter, all of them.
+
+| Param | In | Required | Rules | Notes |
+|---|---|---|---|---|
+| `poller_group_id_or_name` | path | optional | ID or `group_name` |  |
+
+Response: `status`, `get_poller_group` (a list, or one object: `id`, `group_name`, `descr`). `404` when not found.
+
+<sub>access: admin · `get_poller_group`</sub>
+
+### POST `/syslogsink`
+
+Receive syslog messages as JSON (for example from a log shipper) and store them like syslog
+received by the server.
+
+| Param | In | Required | Rules | Notes |
+|---|---|---|---|---|
+| (body) | body | yes | one message object, or an array of them | Fields stored: `host`, `facility`, `priority`, `level`, `tag`, `timestamp`, `msg`, `program`. Only messages whose `host` is a known device are stored; `syslog_filter` matches are dropped. |
+
+```json
+[{"host": "192.168.2.245", "facility": "local7", "priority": "189", "level": "notice", "tag": "bd", "timestamp": "2026-10-22 10:00:00", "msg": "Interface g0/1 up", "program": "LINK"}]
+```
+
+Response: `status`, `message` (`Syslog received: N`)
+
+<sub>access: admin · `post_syslogsink`</sub>
+
+---
+
+## 24.16 Templates (push)
+
+The API behind the Template Push page (`/addhost/template`). Templates are the JSON files under
+`resources/templates/` (one sub-folder level allowed). Pushing runs a playbook on each switch, like
+the automation API.
+
+### GET `/templates`
+
+All templates, optionally only those that fit a device's hardware.
+
+| Param | In | Required | Rules | Notes |
+|---|---|---|---|---|
+| `device` | query | optional | device_id, hostname, `overwrite_ip` or sysName | `404` if not found. Templates with no `hardware_models` always match. |
+
+Response: `status`, `count`, `templates` (`name`, `folder`, `type`, `hardware_models`)
+
+<sub>access: admin · `templates.list`</sub>
+
+### GET `/templates/{name}`
+
+One template, with what it needs as input.
+
+| Param | In | Required | Rules | Notes |
+|---|---|---|---|---|
+| `name` | path | yes | template name or its slug |  |
+| `folder` | query | optional | folder name | Pick the template from this folder when names repeat. |
+
+Response: `status`, `template` (`name`, `folder`, `type`, `hardware_models`, and `fields` for `form` templates (`label`, `type`, `required`, `command`, `options` / `value` / `divisor`) or `pvid` and `commands` for the others). `404` if not found.
+
+<sub>access: admin · `templates.show`</sub>
+
+### POST `/templates/push`
+
+Build the CLI commands from a template (or take raw commands) and push them to one or more switches.
+
+| Param | In | Required | Rules | Notes |
+|---|---|---|---|---|
+| `device` | body | yes, unless `devices` | device_id, hostname, `overwrite_ip` or sysName |  |
+| `devices` | body | optional | array of the same | Push to several switches. |
+| `template` | body | yes, unless `commands` | string | Template name or slug. Must match each device's hardware (`422`). |
+| `folder` | body | optional | string |  |
+| `commands` | body | yes, unless `template` | array of strings | Raw CLI commands; with a `custom` template, replaces its commands. |
+| `interfaces` | body | yes for `access`/`trunk` | array, e.g. `["GigaEthernet0/1"]` | Interface blocks are repeated for each one. |
+| `values` | body | for `form` templates | object, field label => value | Dropdown: option name; checkbox: boolean; dynamic list: array of row objects. |
+| `port_mode` | body | optional | `access`, `trunk`, `custom` | Overrides the template type. |
+| `pvid` | body | optional | integer, 1 - 4094 | For `access`/`trunk`. |
+| `dry_run` | body | optional | boolean | Return the commands without pushing. |
+| `ansible_user`, `ansible_password`, `snmp_community` | body | optional | string | Used only when the device has no stored SSH user/password/community. Default `admin`/`admin`/`public`. |
+
+```json
+{"device": "192.168.200.239", "template": "Access port", "interfaces": ["GigaEthernet0/1"], "pvid": 20, "dry_run": true}
+```
+
+Response (dry run): `status`, `dry_run`, `devices` (IPs), `commands`
+
+Response: `status` (`ok` / `error`), `success`, `message`, `results` (per switch: `ip`, `hostname`, `status`, `ansible_output` or `error`), `summary` (`total`, `success`, `failed`), `commands`. Input errors are `404` (device/template) or `422`.
+
+<sub>access: admin · `templates.push` · playbook: `push/pushconfigtempuploadip.yml`</sub>
+
+---
+
+## 24.17 Chatbot
+
+### POST `/chatbot/message`
+
+Ask the NMS assistant a question. Telequill collects devices, ports, services, alerts, graphs and
+sensors through this API (as the calling user), sends them with the message to the configured LLM
+(`services.chatbot.endpoint` / `services.chatbot.key`), and returns its answer. If the LLM replies
+with an action, it is carried out: adding a device (`POST /devices`) or deleting one
+(`DELETE /devices/{id}`).
+
+| Param | In | Required | Rules | Notes |
+|---|---|---|---|---|
+| `message` | body | yes | string, max 5000 chars |  |
+| `mode` | body | yes | `bubble` or `terminal` | Not otherwise used. |
+
+```json
+{"message": "Which devices are down?", "mode": "bubble"}
+```
+
+Response: no envelope, always `200`: `reply` (text), `type` (`llm`, `action` or `error`). `error` means the user has no API token. Validation errors are `422`.
+
+> The internal calls use the user's stored `token_hash` as `X-Auth-Token`, and the base URL from `services.librenms.url`. Each message fetches all devices several times plus one call per device, so it is slow on large networks.
+
+<sub>access: admin · (unnamed route)</sub>
+
+---
+
+## 24.18 Index
+
+| Section | Endpoints |
+|---|---|
+| [System](#241-system) | 2 |
+| [Devices](#242-devices) | 17 |
+| [Device graphs and health](#243-device-graphs-and-health) | 6 |
+| [Ports](#244-ports) | 13 |
+| [Port groups](#245-port-groups) | 7 |
+| [Device groups](#246-device-groups) | 9 |
+| [Alerts and alert rules](#247-alerts-and-alert-rules) | 9 |
+| [Logs](#248-logs) | 4 |
+| [Inventory and transceivers](#249-inventory-and-transceivers) | 5 |
+| [Resources (ARP, IP, FDB, NAC, links, VLANs, sensors, locations)](#2410-resources-arp-ip-fdb-nac-links-vlans-sensors-locations) | 23 |
+| [Routing (BGP, OSPF, VRF, IPsec, MPLS)](#2411-routing-bgp-ospf-vrf-ipsec-mpls) | 13 |
+| [Services](#2412-services) | 6 |
+| [Bills](#2413-bills) | 9 |
+| [Oxidized](#2414-oxidized) | 3 |
+| [Poller groups and syslog sink](#2415-poller-groups-and-syslog-sink) | 2 |
+| [Templates (push)](#2416-templates-push) | 3 |
+| [Chatbot](#2417-chatbot) | 1 |
+| **Total** | **132** |
+
+---

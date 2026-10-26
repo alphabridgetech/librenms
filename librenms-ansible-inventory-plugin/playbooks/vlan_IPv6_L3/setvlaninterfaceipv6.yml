@@ -1,0 +1,526 @@
+---
+#ansible-playbook -i inventory/192.168.10.1.yml playbooks/l3/vlan_IPv6/setvlaninterfaceipv6.yml -e "operation=set" -e "vlan_id=82" -e "ip_attribute=Enable" -e "ipv6_enable=Enable" -e "ipv6_address=2004:DB8:85A3:82::1/64"
+#
+#ansible-playbook -i inventory/192.168.10.1.yml playbooks/l3/vlan_IPv6/setvlaninterfaceipv6.yml -e "operation=delete" -e "vlan_id=82" -e "ip_attribute=Enable" -e "ipv6_enable=Enable" -e "ipv6_address=2004:DB8:85A3:82::1/64"
+#
+# ============================================================
+# VLAN INTERFACE IPv6 CONFIGURATION - SET / DELETE
+# ============================================================
+
+- name: Set VLAN Interface IPv6 Configuration
+  hosts: alphabridge_devices
+  gather_facts: no
+
+  vars:
+    project_root: "{{ playbook_dir }}/../.."
+    output_dir: "{{ project_root }}/output"
+    tmp_dir: "{{ project_root }}/tmp"
+
+  tasks:
+
+    # ==========================================================
+    # VALIDATE OPERATION
+    # ==========================================================
+
+    - name: Validate operation
+      ansible.builtin.assert:
+        that:
+          - operation is defined
+          - operation | lower in ['set', 'delete']
+        fail_msg: "operation must be set or delete."
+
+    # ==========================================================
+    # VALIDATE VLAN ID
+    # ==========================================================
+
+    - name: Validate VLAN ID
+      ansible.builtin.assert:
+        that:
+          - vlan_id is defined
+          - vlan_id | string | length > 0
+          - vlan_id | int >= 1
+          - vlan_id | int <= 4094
+        fail_msg: "Valid vlan_id between 1 and 4094 is required."
+
+    # ==========================================================
+    # VALIDATE IPv6 ATTRIBUTE
+    #
+    # Enable  -> ipv6 address autoconfig
+    # Disable -> no ipv6 address autoconfig
+    # ==========================================================
+
+    - name: Validate IPv6 attribute
+      ansible.builtin.assert:
+        that:
+          - ip_attribute is defined
+          - ip_attribute | lower in ['enable', 'disable']
+        fail_msg: "ip_attribute must be Enable or Disable."
+      when: operation | lower == 'set'
+
+    # ==========================================================
+    # VALIDATE IPv6 ENABLE STATE
+    #
+    # Enable  -> ipv6 enable
+    # Disable -> no ipv6 enable
+    # ==========================================================
+
+    - name: Validate IPv6 enable state
+      ansible.builtin.assert:
+        that:
+          - ipv6_enable is defined
+          - ipv6_enable | lower in ['enable', 'disable']
+        fail_msg: "ipv6_enable must be Enable or Disable."
+      when: operation | lower == 'set'
+
+    # ==========================================================
+    # VALIDATE IPv6 ADDRESS
+    # ==========================================================
+
+    - name: Validate IPv6 address
+      ansible.builtin.assert:
+        that:
+          - ipv6_address is defined
+          - ipv6_address | string | length > 0
+          - ipv6_address is match('^[0-9A-Fa-f:]+/[0-9]{1,3}$')
+        fail_msg: >-
+          ipv6_address must be in IPv6/prefix format,
+          for example 2004:DB8:85A3:82::1/64.
+      when:
+        - operation | lower == 'set'
+        - ipv6_address is defined
+        - ipv6_address | string | length > 0
+
+    # ==========================================================
+    # CREATE DIRECTORIES
+    # ==========================================================
+
+    - name: Create required directories
+      ansible.builtin.file:
+        path: "{{ item }}"
+        state: directory
+        mode: "0755"
+      loop:
+        - "{{ output_dir }}"
+        - "{{ tmp_dir }}"
+      delegate_to: localhost
+
+    # ==========================================================
+    # CREATE PARAMIKO SCRIPT
+    # ==========================================================
+
+    - name: Create VLAN Interface IPv6 SET script
+      ansible.builtin.copy:
+        dest: "{{ tmp_dir }}/setvlaninterfaceipv6.py"
+        mode: "0755"
+        content: |
+          #!/usr/bin/env python3
+
+          import paramiko
+          import time
+          import sys
+          import yaml
+          import re
+
+          HOST = "{{ ansible_host }}"
+          USER = "{{ ansible_user }}"
+          PASSWORD = "{{ ansible_password }}"
+
+          OPERATION = "{{ operation | default('') }}"
+          VLAN_ID = "{{ vlan_id | default('') }}"
+          IP_ATTRIBUTE = "{{ ip_attribute | default('') }}"
+          IPV6_ENABLE = "{{ ipv6_enable | default('') }}"
+          IPV6_ADDRESS = "{{ ipv6_address | default('') }}"
+
+          OUTPUT_FILE = (
+              "{{ output_dir }}/"
+              "{{ ansible_host }}_vlan_interface_ipv6_set.yml"
+          )
+
+          # ======================================================
+          # READ DEVICE OUTPUT
+          # ======================================================
+
+          def read_output(shell, wait_time=1.5):
+
+              time.sleep(wait_time)
+
+              output = ""
+
+              end_time = time.time() + 3
+
+              while time.time() < end_time:
+
+                  if shell.recv_ready():
+
+                      data = shell.recv(65535).decode(
+                          "utf-8",
+                          errors="ignore"
+                      )
+
+                      output += data
+
+                      end_time = time.time() + 1
+
+                  else:
+
+                      time.sleep(0.2)
+
+              return output.replace("\r", "")
+
+          # ======================================================
+          # SEND COMMAND
+          # ======================================================
+
+          def send_command(shell, command, wait_time=1.5):
+
+              shell.send(command + "\n")
+
+              return read_output(
+                  shell,
+                  wait_time
+              )
+
+          # ======================================================
+          # CHECK CLI ERROR
+          # ======================================================
+
+          def has_error(output):
+
+              patterns = [
+                  r"%.*error",
+                  r"%.*invalid",
+                  r"%.*fail",
+                  r"%.*unknown",
+                  r"too many parameters",
+                  r"bad command",
+                  r"invalid input",
+                  r"command rejected",
+                  r"incomplete command",
+                  r"overlap with",
+                  r"can not be configured",
+                  r"cannot be configured"
+              ]
+
+              for pattern in patterns:
+
+                  if re.search(
+                      pattern,
+                      output,
+                      re.IGNORECASE
+                  ):
+                      return True
+
+              return False
+
+          # ======================================================
+          # MAIN
+          # ======================================================
+
+          try:
+
+              client = paramiko.SSHClient()
+
+              client.set_missing_host_key_policy(
+                  paramiko.AutoAddPolicy()
+              )
+
+              # --------------------------------------------------
+              # Legacy switch SSH compatibility
+              # --------------------------------------------------
+              #
+              # The switch may offer ssh-rsa / ssh-dss host keys.
+              # Paramiko must therefore allow the legacy algorithms.
+              # --------------------------------------------------
+
+              client.connect(
+                  hostname=HOST,
+                  username=USER,
+                  password=PASSWORD,
+                  look_for_keys=False,
+                  allow_agent=False,
+                  timeout=15,
+                  banner_timeout=15,
+                  auth_timeout=15
+              )
+
+              shell = client.invoke_shell()
+
+              time.sleep(1)
+
+              # ==================================================
+              # INITIAL DEVICE COMMANDS
+              # ==================================================
+
+              output = send_command(
+                  shell,
+                  "enable",
+                  0.5
+              )
+
+              output = send_command(
+                  shell,
+                  "config",
+                  0.5
+              )
+
+              output = send_command(
+                  shell,
+                  "terminal length 0",
+                  0.5
+              )
+
+              # ==================================================
+              # SET OPERATION
+              # ==================================================
+
+              if OPERATION.lower() == "set":
+
+                  # ----------------------------------------------
+                  # ENTER VLAN INTERFACE
+                  # ----------------------------------------------
+
+                  output = send_command(
+                      shell,
+                      "interface vlan " + VLAN_ID,
+                      0.7
+                  )
+
+                  if has_error(output):
+
+                      raise Exception(
+                          "Failed to enter VLAN interface: "
+                          + output
+                      )
+
+                  # ----------------------------------------------
+                  # IPv6 ATTRIBUTE
+                  #
+                  # Enable:
+                  #   ipv6 address autoconfig
+                  #
+                  # Disable:
+                  #   no ipv6 address autoconfig
+                  # ----------------------------------------------
+
+                  if IP_ATTRIBUTE.lower() == "enable":
+
+                      output = send_command(
+                          shell,
+                          "ipv6 address autoconfig",
+                          1
+                      )
+
+                      if has_error(output):
+
+                          raise Exception(
+                              "Failed to enable IPv6 "
+                              "auto configuration: "
+                              + output
+                          )
+
+                  elif IP_ATTRIBUTE.lower() == "disable":
+
+                      output = send_command(
+                          shell,
+                          "no ipv6 address autoconfig",
+                          1
+                      )
+
+                      if has_error(output):
+
+                          raise Exception(
+                              "Failed to disable IPv6 "
+                              "auto configuration: "
+                              + output
+                          )
+
+                  # ----------------------------------------------
+                  # MANUAL IPv6 ADDRESS
+                  # ----------------------------------------------
+
+                  if IPV6_ADDRESS.strip():
+
+                      output = send_command(
+                          shell,
+                          "ipv6 address " + IPV6_ADDRESS,
+                          1
+                      )
+
+                      if has_error(output):
+
+                          raise Exception(
+                              "Failed to configure manual IPv6 "
+                              "address: "
+                              + output
+                          )
+
+                  # ----------------------------------------------
+                  # IPv6 ENABLE / DISABLE
+                  # ----------------------------------------------
+
+                  if IPV6_ENABLE.lower() == "enable":
+
+                      output = send_command(
+                          shell,
+                          "ipv6 enable",
+                          1
+                      )
+
+                  elif IPV6_ENABLE.lower() == "disable":
+
+                      output = send_command(
+                          shell,
+                          "no ipv6 enable",
+                          1
+                      )
+
+                  else:
+
+                      raise Exception(
+                          "ipv6_enable must be Enable or Disable"
+                      )
+
+                  if has_error(output):
+
+                      raise Exception(
+                          "Failed to configure IPv6 enable state: "
+                          + output
+                      )
+
+                  # ----------------------------------------------
+                  # EXIT VLAN INTERFACE
+                  # ----------------------------------------------
+
+                  send_command(
+                      shell,
+                      "exit",
+                      0.5
+                  )
+
+                  # ----------------------------------------------
+                  # SUCCESS OUTPUT
+                  # ----------------------------------------------
+
+                  result = {
+                      "status": "SUCCESS",
+                      "vlan_id": int(VLAN_ID),
+                      "ipv6_enable": IPV6_ENABLE,
+                      "ip_attribute": IP_ATTRIBUTE
+                  }
+
+                  if IPV6_ADDRESS.strip():
+
+                      result["ipv6_address"] = IPV6_ADDRESS
+
+                  elif IP_ATTRIBUTE.lower() == "enable":
+
+                      result["ipv6_address"] = "autoconfig"
+
+                  else:
+
+                      result["ipv6_address"] = ""
+
+              # ==================================================
+              # DELETE OPERATION
+              # ==================================================
+
+              elif OPERATION.lower() == "delete":
+
+                  output = send_command(
+                      shell,
+                      "no interface vlan " + VLAN_ID,
+                      1
+                  )
+
+                  if has_error(output):
+
+                      raise Exception(
+                          "Failed to delete VLAN interface: "
+                          + output
+                      )
+
+                  result = {
+                      "status": "SUCCESS",
+                      "vlan_id": int(VLAN_ID)
+                  }
+
+              else:
+
+                  raise Exception(
+                      "operation must be set or delete"
+                  )
+
+              # ==================================================
+              # CLOSE SSH
+              # ==================================================
+
+              client.close()
+
+              # ==================================================
+              # WRITE RESULT
+              # ==================================================
+
+              with open(
+                  OUTPUT_FILE,
+                  "w"
+              ) as f:
+
+                  yaml.dump(
+                      result,
+                      f,
+                      default_flow_style=False,
+                      sort_keys=False
+                  )
+
+              print("SUCCESS")
+
+          except Exception as e:
+
+              print(
+                  "ERROR:",
+                  str(e)
+              )
+
+              with open(
+                  OUTPUT_FILE,
+                  "w"
+              ) as f:
+
+                  yaml.dump(
+                      {
+                          "status": "FAILED",
+                          "error": str(e)
+                      },
+                      f,
+                      default_flow_style=False,
+                      sort_keys=False
+                  )
+
+              sys.exit(1)
+
+    # ==========================================================
+    # EXECUTE CONFIGURATION
+    # ==========================================================
+
+    - name: Execute VLAN Interface IPv6 configuration
+      ansible.builtin.command:
+        cmd: "python3 {{ tmp_dir }}/setvlaninterfaceipv6.py"
+      delegate_to: localhost
+      register: vlan_ipv6_set_result
+      changed_when: true
+
+    # ==========================================================
+    # SHOW RESULT
+    # ==========================================================
+
+    - name: Show VLAN Interface IPv6 result
+      ansible.builtin.debug:
+        msg: >-
+          {{
+            lookup(
+              'file',
+              output_dir + '/' +
+              ansible_host +
+              '_vlan_interface_ipv6_set.yml'
+            )
+          }}

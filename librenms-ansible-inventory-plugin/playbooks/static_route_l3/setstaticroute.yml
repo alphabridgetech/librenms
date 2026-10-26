@@ -1,0 +1,928 @@
+---
+# ============================================================================
+# File : setstaticroute.yml
+# Feature : Static Route Configuration - SET / DELETE
+#
+# Operations:
+#   set
+#   delete
+#
+# SET command format:
+#
+# Null0:
+#   ip route <dest_ip> <dest_mask> Null0 <forwarding_address>
+#   <distance> tag <tag> description <description>
+#
+# Interface VLAN:
+#   ip route <dest_ip> <dest_mask> vlan<vlan_id> <forwarding_address>
+#   <distance> tag <tag> description <description>
+#
+# Gateway IP Address:
+#   ip route <dest_ip> <dest_mask> <gateway_ip>
+#   <distance> tag <tag> description <description>
+#
+# DELETE command format:
+#
+# Delete does NOT contain route description.
+#
+# Null0:
+#   no ip route <dest_ip> <dest_mask> Null0 <forwarding_address>
+#   <distance> tag <tag>
+#
+# Interface VLAN:
+#   no ip route <dest_ip> <dest_mask> vlan<vlan_id> <forwarding_address>
+#   <distance> tag <tag>
+#
+# Gateway IP Address:
+#   no ip route <dest_ip> <dest_mask> <gateway_ip>
+#   <distance> tag <tag>
+#
+# Confirmed switch command:
+#
+# no ip route 192.0.0.0 255.0.0.0 Null0 192.168.14.1 5 tag 7
+#
+# commands -:
+# set
+#  ansible-playbook -i inventory/192.168.10.1.yml playbooks/l3/staticroute/setstaticroute.yml -e "operation=set dest_ip=10.10.1.0 dest_mask=255.255.0.0 interface_type='Interface VLAN' interface_vlan=82 forwarding_routing_address=192.168.8.1 distance_metric=5 routing_tag=5 route_description=vlan_route"
+#delete
+#ansible-playbook -i inventory/192.168.10.1.yml playbooks/l3/staticroute/setstaticroute.yml -e "operation=delete dest_ip=10.10.1.0 dest_mask=255.255.0.0 interface_type='Interface VLAN' interface_vlan=82 forwarding_routing_address=192.168.8.1 distance_metric=5 routing_tag=5 route_description=vlan_route"
+#set
+#ansible-playbook -i inventory/192.168.10.1.yml playbooks/l3/staticroute/setstaticroute.yml -e "operation=set dest_ip=192.0.0.0 dest_mask=255.0.0.0 interface_type=Null0 forwarding_routing_address=192.168.14.1 distance_metric=5 routing_tag=7 route_description=test_static_route"
+#set 
+#ansible-playbook -i inventory/192.168.10.1.yml playbooks/l3/staticroute/setstaticroute.yml -e "operation=set dest_ip=172.16.10.0 dest_mask=255.255.255.0 interface_type='Gateway IP Address' gateway_ip=192.168.14.1 distance_metric=5 routing_tag=20 route_description=gateway_route"
+# ============================================================================
+
+- name: Static Route Configuration - SET / DELETE
+  hosts: alphabridge_devices
+  gather_facts: false
+
+  vars:
+
+    # ========================================================================
+    # Local directories
+    # ========================================================================
+
+    project_root: "{{ playbook_dir }}/../.."
+    output_dir: "{{ project_root }}/output"
+    tmp_dir: "{{ project_root }}/tmp"
+
+  tasks:
+
+    # ========================================================================
+    # Validate destination IP
+    # ========================================================================
+
+    - name: Validate destination IP
+      ansible.builtin.assert:
+        that:
+          - dest_ip is defined
+          - dest_ip | length > 0
+        fail_msg: "dest_ip is required."
+
+    # ========================================================================
+    # Validate destination mask
+    # ========================================================================
+
+    - name: Validate destination mask
+      ansible.builtin.assert:
+        that:
+          - dest_mask is defined
+          - dest_mask | length > 0
+        fail_msg: "dest_mask is required."
+
+    # ========================================================================
+    # Validate operation
+    # ========================================================================
+
+    - name: Validate operation
+      ansible.builtin.assert:
+        that:
+          - operation is defined
+          - operation in ["set", "delete"]
+        fail_msg: "operation must be either 'set' or 'delete'."
+
+    # ========================================================================
+    # Validate interface type
+    #
+    # Supported UI values:
+    #   Null0
+    #   Interface Null0
+    #   Interface VLAN
+    #   Gateway IP Address
+    #   Gateway's IP Address
+    # ========================================================================
+
+    - name: Validate interface type
+      ansible.builtin.assert:
+        that:
+          - interface_type is defined
+          - interface_type in
+            [
+              "Null0",
+              "Interface Null0",
+              "Interface VLAN",
+              "Gateway IP Address",
+              "Gateway's IP Address"
+            ]
+        fail_msg: >
+          interface_type must be 'Null0',
+          'Interface Null0', 'Interface VLAN',
+          or 'Gateway IP Address'.
+
+    # ========================================================================
+    # Validate Null0 parameters
+    # ========================================================================
+
+    - name: Validate Null0 parameters
+      ansible.builtin.assert:
+        that:
+          - forwarding_routing_address is defined
+          - forwarding_routing_address | length > 0
+        fail_msg: >
+          forwarding_routing_address is required when
+          interface_type is Null0.
+      when:
+        - interface_type == "Null0" or
+          interface_type == "Interface Null0"
+
+    # ========================================================================
+    # Validate Interface VLAN parameters
+    # ========================================================================
+
+    - name: Validate Interface VLAN parameters
+      ansible.builtin.assert:
+        that:
+          - interface_vlan is defined
+          - interface_vlan | length > 0
+          - forwarding_routing_address is defined
+          - forwarding_routing_address | length > 0
+        fail_msg: >
+          interface_vlan and forwarding_routing_address are required
+          when interface_type is Interface VLAN.
+      when:
+        - interface_type == "Interface VLAN"
+
+    # ========================================================================
+    # Validate Gateway IP parameters
+    # ========================================================================
+
+    - name: Validate Gateway parameters
+      ansible.builtin.assert:
+        that:
+          - gateway_ip is defined
+          - gateway_ip | length > 0
+        fail_msg: >
+          gateway_ip is required when interface_type is
+          Gateway IP Address.
+      when:
+        - interface_type == "Gateway IP Address" or
+          interface_type == "Gateway's IP Address"
+
+    # ========================================================================
+    # Validate distance metric
+    # ========================================================================
+
+    - name: Validate distance metric
+      ansible.builtin.assert:
+        that:
+          - distance_metric is defined
+          - distance_metric | length > 0
+        fail_msg: "distance_metric is required."
+
+    # ========================================================================
+    # Validate routing tag
+    # ========================================================================
+
+    - name: Validate routing tag
+      ansible.builtin.assert:
+        that:
+          - routing_tag is defined
+          - routing_tag | length > 0
+        fail_msg: "routing_tag is required."
+
+    # ========================================================================
+    # Validate route description for SET
+    #
+    # Description is required for SET.
+    # DELETE does not send description to the switch.
+    # ========================================================================
+
+    - name: Validate route description for SET
+      ansible.builtin.assert:
+        that:
+          - route_description is defined
+          - route_description | length > 0
+        fail_msg: "route_description is required for SET."
+      when:
+        - operation == "set"
+
+    # ========================================================================
+    # Create required directories
+    # ========================================================================
+
+    - name: Create required directories
+      ansible.builtin.file:
+        path: "{{ item }}"
+        state: directory
+        mode: "0755"
+      loop:
+        - "{{ output_dir }}"
+        - "{{ tmp_dir }}"
+      delegate_to: localhost
+
+    # ========================================================================
+    # Create Static Route Python script
+    # ========================================================================
+
+    - name: Create Static Route Python script
+      ansible.builtin.copy:
+        dest: "{{ tmp_dir }}/setstaticroute.py"
+        mode: "0755"
+        content: |
+          #!/usr/bin/env python3
+
+          import paramiko
+          import time
+          import ipaddress
+          import sys
+          import yaml
+
+          # ==================================================================
+          # Device information
+          # ==================================================================
+
+          HOST = "{{ ansible_host }}"
+          USER = "{{ ansible_user }}"
+          PASSWORD = "{{ ansible_password }}"
+
+          # ==================================================================
+          # Input parameters
+          # ==================================================================
+
+          OPERATION = "{{ operation }}"
+
+          DEST_IP = "{{ dest_ip }}"
+          DEST_MASK = "{{ dest_mask }}"
+
+          INTERFACE_TYPE = "{{ interface_type }}"
+
+          INTERFACE_VLAN = "{{ interface_vlan | default('') }}"
+
+          GATEWAY_IP = "{{ gateway_ip | default('') }}"
+
+          FORWARDING_ADDRESS = "{{ forwarding_routing_address | default('') }}"
+
+          DISTANCE = "{{ distance_metric }}"
+
+          ROUTING_TAG = "{{ routing_tag }}"
+
+          DESCRIPTION = "{{ route_description | default('') }}"
+
+          # ==================================================================
+          # Output file
+          # ==================================================================
+
+          OUTPUT_FILE = (
+              "{{ output_dir }}/"
+              "{{ ansible_host }}_staticroute.yml"
+          )
+
+          # ==================================================================
+          # Validate IPv4 address
+          # ==================================================================
+
+          def validate_ip(ip_value, field_name):
+
+              try:
+                  address = ipaddress.ip_address(ip_value)
+
+                  if address.version != 4:
+                      raise ValueError
+
+              except ValueError:
+                  raise ValueError(
+                      field_name
+                      + " is not a valid IPv4 address: "
+                      + ip_value
+                  )
+
+          # ==================================================================
+          # Validate IPv4 destination mask
+          # ==================================================================
+
+          def validate_mask(mask_value):
+
+              try:
+                  network = ipaddress.ip_network(
+                      "0.0.0.0/" + mask_value,
+                      strict=False
+                  )
+
+                  if network.version != 4:
+                      raise ValueError
+
+                  return str(network.netmask)
+
+              except ValueError:
+                  raise ValueError(
+                      "Invalid destination mask: "
+                      + mask_value
+                  )
+
+          # ==================================================================
+          # Normalize VLAN ID
+          # ==================================================================
+
+          def normalize_vlan(vlan_value):
+
+              vlan = str(vlan_value).strip()
+
+              if vlan.lower().startswith("vlan"):
+                  vlan = vlan[4:]
+
+              try:
+                  vlan_id = int(vlan)
+
+              except ValueError:
+                  raise ValueError(
+                      "Invalid VLAN ID: "
+                      + str(vlan_value)
+                  )
+
+              if vlan_id < 1 or vlan_id > 4094:
+                  raise ValueError(
+                      "VLAN ID must be between 1 and 4094."
+                  )
+
+              return str(vlan_id)
+
+          # ==================================================================
+          # Read device response
+          # ==================================================================
+
+          def read_response(shell, wait_time=1.5):
+
+              output = ""
+
+              end_time = time.time() + wait_time
+
+              while time.time() < end_time:
+
+                  if shell.recv_ready():
+
+                      data = shell.recv(
+                          65535
+                      ).decode(
+                          "utf-8",
+                          errors="ignore"
+                      )
+
+                      output += data
+
+                  else:
+                      time.sleep(0.2)
+
+              return output.replace("\r", "")
+
+          # ==================================================================
+          # Send command
+          # ==================================================================
+
+          def send_command(shell, command, wait_time=1.5):
+
+              shell.send(command + "\n")
+
+              return read_response(
+                  shell,
+                  wait_time
+              )
+
+          # ==================================================================
+          # Check command failure
+          # ==================================================================
+
+          def command_failed(output):
+
+              error_strings = [
+                  "Unknown command",
+                  "Invalid command",
+                  "Invalid input",
+                  "Too many parameters",
+                  "fail with ret",
+                  "% Invalid",
+                  "% Error",
+                  "% Bad",
+                  "Bad mask",
+                  "Bad netmask",
+                  "Incomplete command",
+                  "Ambiguous command",
+                  "Error:"
+              ]
+
+              output_lower = output.lower()
+
+              for error in error_strings:
+
+                  if error.lower() in output_lower:
+                      return True
+
+              return False
+
+          # ==================================================================
+          # Build SET command
+          # ==================================================================
+
+          def build_set_command():
+
+              # --------------------------------------------------------------
+              # Null0
+              # --------------------------------------------------------------
+
+              if (
+                  INTERFACE_TYPE == "Null0"
+                  or
+                  INTERFACE_TYPE == "Interface Null0"
+              ):
+
+                  validate_ip(
+                      FORWARDING_ADDRESS,
+                      "forwarding_routing_address"
+                  )
+
+                  return (
+                      "ip route "
+                      + DEST_IP
+                      + " "
+                      + DEST_MASK
+                      + " Null0 "
+                      + FORWARDING_ADDRESS
+                      + " "
+                      + DISTANCE
+                      + " tag "
+                      + ROUTING_TAG
+                      + " description "
+                      + DESCRIPTION
+                  )
+
+              # --------------------------------------------------------------
+              # Interface VLAN
+              # --------------------------------------------------------------
+
+              if INTERFACE_TYPE == "Interface VLAN":
+
+                  vlan_id = normalize_vlan(
+                      INTERFACE_VLAN
+                  )
+
+                  validate_ip(
+                      FORWARDING_ADDRESS,
+                      "forwarding_routing_address"
+                  )
+
+                  return (
+                      "ip route "
+                      + DEST_IP
+                      + " "
+                      + DEST_MASK
+                      + " vlan"
+                      + vlan_id
+                      + " "
+                      + FORWARDING_ADDRESS
+                      + " "
+                      + DISTANCE
+                      + " tag "
+                      + ROUTING_TAG
+                      + " description "
+                      + DESCRIPTION
+                  )
+
+              # --------------------------------------------------------------
+              # Gateway IP Address
+              # --------------------------------------------------------------
+
+              if (
+                  INTERFACE_TYPE == "Gateway IP Address"
+                  or
+                  INTERFACE_TYPE == "Gateway's IP Address"
+              ):
+
+                  validate_ip(
+                      GATEWAY_IP,
+                      "gateway_ip"
+                  )
+
+                  return (
+                      "ip route "
+                      + DEST_IP
+                      + " "
+                      + DEST_MASK
+                      + " "
+                      + GATEWAY_IP
+                      + " "
+                      + DISTANCE
+                      + " tag "
+                      + ROUTING_TAG
+                      + " description "
+                      + DESCRIPTION
+                  )
+
+              raise ValueError(
+                  "Unsupported interface type: "
+                  + INTERFACE_TYPE
+              )
+
+          # ==================================================================
+          # Build DELETE command
+          #
+          # DELETE does not contain description.
+          # ==================================================================
+
+          def build_delete_command():
+
+              # --------------------------------------------------------------
+              # Null0
+              # --------------------------------------------------------------
+
+              if (
+                  INTERFACE_TYPE == "Null0"
+                  or
+                  INTERFACE_TYPE == "Interface Null0"
+              ):
+
+                  validate_ip(
+                      FORWARDING_ADDRESS,
+                      "forwarding_routing_address"
+                  )
+
+                  return (
+                      "no ip route "
+                      + DEST_IP
+                      + " "
+                      + DEST_MASK
+                      + " Null0 "
+                      + FORWARDING_ADDRESS
+                      + " "
+                      + DISTANCE
+                      + " tag "
+                      + ROUTING_TAG
+                  )
+
+              # --------------------------------------------------------------
+              # Interface VLAN
+              # --------------------------------------------------------------
+
+              if INTERFACE_TYPE == "Interface VLAN":
+
+                  vlan_id = normalize_vlan(
+                      INTERFACE_VLAN
+                  )
+
+                  validate_ip(
+                      FORWARDING_ADDRESS,
+                      "forwarding_routing_address"
+                  )
+
+                  return (
+                      "no ip route "
+                      + DEST_IP
+                      + " "
+                      + DEST_MASK
+                      + " vlan"
+                      + vlan_id
+                      + " "
+                      + FORWARDING_ADDRESS
+                      + " "
+                      + DISTANCE
+                      + " tag "
+                      + ROUTING_TAG
+                  )
+
+              # --------------------------------------------------------------
+              # Gateway IP Address
+              # --------------------------------------------------------------
+
+              if (
+                  INTERFACE_TYPE == "Gateway IP Address"
+                  or
+                  INTERFACE_TYPE == "Gateway's IP Address"
+              ):
+
+                  validate_ip(
+                      GATEWAY_IP,
+                      "gateway_ip"
+                  )
+
+                  return (
+                      "no ip route "
+                      + DEST_IP
+                      + " "
+                      + DEST_MASK
+                      + " "
+                      + GATEWAY_IP
+                      + " "
+                      + DISTANCE
+                      + " tag "
+                      + ROUTING_TAG
+                  )
+
+              raise ValueError(
+                  "Unsupported interface type: "
+                  + INTERFACE_TYPE
+              )
+
+          # ==================================================================
+          # Main
+          # ==================================================================
+
+          client = None
+
+          try:
+
+              # --------------------------------------------------------------
+              # Validate destination IP
+              # --------------------------------------------------------------
+
+              validate_ip(
+                  DEST_IP,
+                  "dest_ip"
+              )
+
+              # --------------------------------------------------------------
+              # Validate destination mask
+              # --------------------------------------------------------------
+
+              DEST_MASK = validate_mask(
+                  DEST_MASK
+              )
+
+              # --------------------------------------------------------------
+              # Build required command
+              # --------------------------------------------------------------
+
+              if OPERATION == "set":
+
+                  route_command = build_set_command()
+
+              elif OPERATION == "delete":
+
+                  route_command = build_delete_command()
+
+              else:
+
+                  raise ValueError(
+                      "Unsupported operation: "
+                      + OPERATION
+                  )
+
+              # --------------------------------------------------------------
+              # Connect to switch
+              # --------------------------------------------------------------
+
+              client = paramiko.SSHClient()
+
+              client.set_missing_host_key_policy(
+                  paramiko.AutoAddPolicy()
+              )
+
+              client.connect(
+                  hostname=HOST,
+                  username=USER,
+                  password=PASSWORD,
+                  look_for_keys=False,
+                  allow_agent=False,
+                  timeout=15,
+                  banner_timeout=15,
+                  auth_timeout=15
+              )
+
+              # --------------------------------------------------------------
+              # Open interactive shell
+              # --------------------------------------------------------------
+
+              shell = client.invoke_shell()
+
+              time.sleep(1)
+
+              if shell.recv_ready():
+                  shell.recv(65535)
+
+              # --------------------------------------------------------------
+              # Enable mode
+              # --------------------------------------------------------------
+
+              enable_output = send_command(
+                  shell,
+                  "enable",
+                  0.8
+              )
+
+              if command_failed(enable_output):
+
+                  raise RuntimeError(
+                      "Enable command failed: "
+                      + enable_output
+                  )
+
+              # --------------------------------------------------------------
+              # Configuration mode
+              # --------------------------------------------------------------
+
+              config_output = send_command(
+                  shell,
+                  "config",
+                  0.8
+              )
+
+              if command_failed(config_output):
+
+                  raise RuntimeError(
+                      "Config command failed: "
+                      + config_output
+                  )
+
+              # --------------------------------------------------------------
+              # Execute SET or DELETE command
+              # --------------------------------------------------------------
+
+              command_output = send_command(
+                  shell,
+                  route_command,
+                  2
+              )
+
+              if command_failed(command_output):
+
+                  raise RuntimeError(
+                      "Static route command failed: "
+                      + command_output
+                  )
+
+              # --------------------------------------------------------------
+              # Exit configuration mode
+              # --------------------------------------------------------------
+
+              send_command(
+                  shell,
+                  "exit",
+                  0.8
+              )
+
+              # --------------------------------------------------------------
+              # Save configuration
+              # --------------------------------------------------------------
+
+              save_output = send_command(
+                  shell,
+                  "write",
+                  2
+              )
+
+              if command_failed(save_output):
+
+                  raise RuntimeError(
+                      "Configuration save failed: "
+                      + save_output
+                  )
+
+              # --------------------------------------------------------------
+              # Verify running configuration
+              # --------------------------------------------------------------
+
+              verify_output = send_command(
+                  shell,
+                  "show running non-interface",
+                  3
+              )
+
+              if command_failed(verify_output):
+
+                  raise RuntimeError(
+                      "Static route verification failed: "
+                      + verify_output
+                  )
+
+              # --------------------------------------------------------------
+              # Close connection
+              # --------------------------------------------------------------
+
+              client.close()
+              client = None
+
+              # --------------------------------------------------------------
+              # Create successful result
+              # --------------------------------------------------------------
+
+              result = {
+
+                  "status": "SUCCESS",
+
+                  "device_ip": HOST,
+
+                  "operation": OPERATION,
+
+                  "static_route": {
+
+                      "destination_ip": DEST_IP,
+
+                      "destination_mask": DEST_MASK,
+
+                      "interface_type": INTERFACE_TYPE,
+
+                      "interface_vlan": INTERFACE_VLAN,
+
+                      "gateway_ip": GATEWAY_IP,
+
+                      "forwarding_routing_address":
+                          FORWARDING_ADDRESS,
+
+                      "distance_metric": DISTANCE,
+
+                      "routing_tag": ROUTING_TAG,
+
+                      "description": DESCRIPTION
+                  },
+
+                  "command": route_command
+              }
+
+              # --------------------------------------------------------------
+              # Write output YAML
+              # --------------------------------------------------------------
+
+              with open(
+                  OUTPUT_FILE,
+                  "w"
+              ) as f:
+
+                  yaml.dump(
+                      result,
+                      f,
+                      default_flow_style=False,
+                      sort_keys=False
+                  )
+
+              print("SUCCESS")
+              print("COMMAND: " + route_command)
+
+          except Exception as e:
+
+              if client:
+
+                  try:
+                      client.close()
+                  except Exception:
+                      pass
+
+              result = {
+
+                  "status": "FAILED",
+
+                  "device_ip": HOST,
+
+                  "operation": OPERATION,
+
+                  "error": str(e)
+              }
+
+              with open(
+                  OUTPUT_FILE,
+                  "w"
+              ) as f:
+
+                  yaml.dump(
+                      result,
+                      f,
+                      default_flow_style=False,
+                      sort_keys=False
+                  )
+
+              print("FAILED: " + str(e))
+
+              sys.exit(1)
+
+    # ========================================================================
+    # Execute Static Route Python script
+    # ========================================================================
+
+    - name: Execute Static Route configuration
+      ansible.builtin.command:
+        cmd: "python3 {{ tmp_dir }}/setstaticroute.py"
+      delegate_to: localhost
+      register: static_route_result
+      changed_when: false
+
+    # ========================================================================
+    # Show Static Route result
+    # ========================================================================
+
+    - name: Show Static Route result
+      ansible.builtin.debug:
+        msg: >-
+          {{
+            lookup(
+              'file',
+              output_dir + '/' +
+              ansible_host +
+              '_staticroute.yml'
+            )
+          }}

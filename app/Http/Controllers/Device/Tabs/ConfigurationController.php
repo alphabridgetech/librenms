@@ -127,6 +127,7 @@ class ConfigurationController implements DeviceTab
                 $this->getTabs($device),
                 'Basic Configuration'  => $this->getbasicconfigTabs($device),
                 'L2 Configuration'  => $this->getl2configTabs($device),
+                'L3 Configuration'  => $this->getl3configTabs($device),
                 'Port Configuration'  => $this->getportconfigTabs($device),
                 'System Management'  => $this->getsysmanageconfigTabs($device),
             ],
@@ -342,6 +343,22 @@ class ConfigurationController implements DeviceTab
             $tabs[] = ['name' => __('STP Configuration'), 'url' => 'stpconfig'];
             $tabs[] = ['name' => __('Ring Protection'), 'url' => 'ringprotection'];
             $tabs[] = ['name' => __('Multiple Ring Protection'), 'url' => 'multipleringprotection'];
+        }
+
+        return $tabs;
+    }
+
+    public function getl3configTabs(Device $device): array
+    {
+        $tabs = [
+            ['name' => __('VLAN Interfaces and IP Addresses'), 'url' => 'vlansinterfaceandipadress'],
+            ['name' => __('VLAN Interface IPv6'), 'url' => 'vlaninterfaceipv6config'],
+            ['name' => __('Static Route'), 'url' => 'staticrouteconfig'],
+            ['name' => __('IPv6 Route'), 'url' => 'ipv6routeconfig'],
+        ];
+
+        if ($device->macs()->exists()) {
+            
         }
 
         return $tabs;

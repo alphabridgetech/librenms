@@ -1,0 +1,660 @@
+---
+# ============================================================================
+# File    : setipv6route.yml
+# Feature : IPv6 Route Configuration - SET / DELETE
+# ansible-playbook -i inventory/192.168.10.1.yml playbooks/l3/ipv6_route/setipv6route.yml -e "operation=set ipv6_address=2008:DB8:85A3:82::/64 ipv6_gateway=2008:DB8:85A3:82::1 equal_cost_paths=4 max_number_routes=633000 max_static_routes=3000 max_dynamic_routes=12800 prefixlen_unlimited=enable"
+# ansible-playbook -i inventory/192.168.10.1.yml playbooks/l3/ipv6_route/setipv6route.yml -e "operation=delete ipv6_address=2008:DB8:85A3:82::/64 ipv6_gateway=2008:DB8:85A3:82::1"
+# ============================================================================
+
+- name: IPv6 Route Configuration - SET / DELETE
+  hosts: alphabridge_devices
+  gather_facts: false
+
+  vars:
+
+    project_root: "{{ playbook_dir }}/../.."
+    output_dir: "{{ project_root }}/output"
+    tmp_dir: "{{ project_root }}/tmp"
+
+  tasks:
+
+    # ========================================================================
+    # Validate operation
+    # ========================================================================
+
+    - name: Validate operation
+      ansible.builtin.assert:
+        that:
+          - operation is defined
+          - operation in ['set', 'delete']
+        fail_msg: "operation must be either set or delete"
+
+    # ========================================================================
+    # Validate SET parameters
+    # ========================================================================
+
+    - name: Validate SET parameters
+      ansible.builtin.assert:
+        that:
+          - ipv6_address is defined
+          - ipv6_gateway is defined
+          - equal_cost_paths is defined
+          - max_number_routes is defined
+          - max_static_routes is defined
+          - max_dynamic_routes is defined
+          - prefixlen_unlimited is defined
+        fail_msg: >-
+          For operation=set, all IPv6 route parameters are required:
+          ipv6_address, ipv6_gateway, equal_cost_paths,
+          max_number_routes, max_static_routes, max_dynamic_routes,
+          prefixlen_unlimited
+      when: operation == 'set'
+
+    # ========================================================================
+    # Validate DELETE parameters
+    #
+    # DELETE requires ONLY:
+    #   ipv6_address
+    #   ipv6_gateway
+    #
+    # No global IPv6 route configuration is deleted.
+    # ========================================================================
+
+    - name: Validate DELETE parameters
+      ansible.builtin.assert:
+        that:
+          - ipv6_address is defined
+          - ipv6_gateway is defined
+          - ipv6_address | length > 0
+          - ipv6_gateway | length > 0
+        fail_msg: >-
+          For operation=delete, only ipv6_address and ipv6_gateway
+          are required.
+      when: operation == 'delete'
+
+    # ========================================================================
+    # Validate IPv6 route address
+    # ========================================================================
+
+    - name: Validate IPv6 route address
+      ansible.builtin.assert:
+        that:
+          - ipv6_address is match('^[0-9A-Fa-f:]+/[0-9]{1,3}$')
+        fail_msg: "Invalid IPv6 route prefix. Use format X:X:X:X::X/<0-128>"
+      when: operation in ['set', 'delete']
+
+    # ========================================================================
+    # Validate IPv6 gateway
+    # ========================================================================
+
+    - name: Validate IPv6 gateway
+      ansible.builtin.assert:
+        that:
+          - ipv6_gateway is match('^[0-9A-Fa-f:]+$')
+        fail_msg: "Invalid IPv6 gateway address"
+      when: operation in ['set', 'delete']
+
+    # ========================================================================
+    # Validate numeric ranges
+    # ========================================================================
+
+    - name: Validate equal cost paths
+      ansible.builtin.assert:
+        that:
+          - equal_cost_paths | int >= 1
+          - equal_cost_paths | int <= 8
+        fail_msg: "equal_cost_paths must be between 1 and 8"
+      when: operation == 'set'
+
+    - name: Validate maximum number of routes
+      ansible.builtin.assert:
+        that:
+          - max_number_routes | int >= 64
+          - max_number_routes | int <= 640000
+        fail_msg: "max_number_routes must be between 64 and 640000"
+      when: operation == 'set'
+
+    - name: Validate maximum static routes
+      ansible.builtin.assert:
+        that:
+          - max_static_routes | int >= 1
+          - max_static_routes | int <= 32000
+        fail_msg: "max_static_routes must be between 1 and 32000"
+      when: operation == 'set'
+
+    - name: Validate maximum dynamic routes
+      ansible.builtin.assert:
+        that:
+          - max_dynamic_routes | int >= 1
+          - max_dynamic_routes | int <= 128000
+        fail_msg: "max_dynamic_routes must be between 1 and 128000"
+      when: operation == 'set'
+
+    - name: Validate prefix length option
+      ansible.builtin.assert:
+        that:
+          - prefixlen_unlimited | lower in ['enable', 'disable']
+        fail_msg: "prefixlen_unlimited must be enable or disable"
+      when: operation == 'set'
+
+    # ========================================================================
+    # Create directories
+    # ========================================================================
+
+    - name: Create required directories
+      ansible.builtin.file:
+        path: "{{ item }}"
+        state: directory
+        mode: "0755"
+      loop:
+        - "{{ output_dir }}"
+        - "{{ tmp_dir }}"
+      delegate_to: localhost
+
+    # ========================================================================
+    # Create Python helper
+    # ========================================================================
+
+    - name: Create IPv6 Route SET DELETE Python script
+      ansible.builtin.copy:
+        dest: "{{ tmp_dir }}/setipv6route.py"
+        mode: "0755"
+        content: |
+          #!/usr/bin/env python3
+
+          import ipaddress
+          import paramiko
+          import sys
+          import time
+          import yaml
+
+          HOST = {{ ansible_host | to_json }}
+          USER = {{ ansible_user | to_json }}
+          PASSWORD = {{ ansible_password | to_json }}
+
+          OPERATION = {{ operation | to_json }}
+
+          IPV6_ADDRESS = {{ (ipv6_address | default('')) | to_json }}
+          IPV6_GATEWAY = {{ (ipv6_gateway | default('')) | to_json }}
+
+          EQUAL_COST_PATHS = {{ (equal_cost_paths | default('')) | to_json }}
+          MAX_NUMBER_ROUTES = {{ (max_number_routes | default('')) | to_json }}
+          MAX_STATIC_ROUTES = {{ (max_static_routes | default('')) | to_json }}
+          MAX_DYNAMIC_ROUTES = {{ (max_dynamic_routes | default('')) | to_json }}
+
+          PREFIXLEN_UNLIMITED = {{ (prefixlen_unlimited | default('')) | to_json }}
+
+          OUTPUT_FILE = (
+              "{{ output_dir }}/"
+              + HOST
+              + "_ipv6route.yml"
+          )
+
+          # ==================================================================
+          # SSH helpers
+          # ==================================================================
+
+          def read_response(shell, wait_time=2):
+
+              output = ""
+
+              end_time = time.time() + wait_time
+
+              while time.time() < end_time:
+
+                  if shell.recv_ready():
+
+                      data = shell.recv(65535).decode(
+                          "utf-8",
+                          errors="ignore"
+                      )
+
+                      output += data
+
+                  else:
+
+                      time.sleep(0.2)
+
+              return output.replace("\r", "")
+
+
+          def send_command(shell, command, wait_time=2):
+
+              shell.send(command + "\n")
+
+              return read_response(
+                  shell,
+                  wait_time
+              )
+
+
+          def command_failed(output):
+
+              error_strings = [
+
+                  "Unknown command",
+                  "Invalid command",
+                  "Invalid input",
+                  "Too many parameters",
+                  "Incomplete command",
+                  "Ambiguous command",
+                  "fail with ret",
+                  "% Invalid",
+                  "% Error",
+                  "% Bad",
+                  "Error:",
+                  "ERROR"
+
+              ]
+
+              output_lower = output.lower()
+
+              for error in error_strings:
+
+                  if error.lower() in output_lower:
+
+                      return True
+
+              return False
+
+
+          # ==================================================================
+          # IPv6 validation
+          # ==================================================================
+
+          def validate_ipv6_prefix(value):
+
+              try:
+
+                  network = ipaddress.ip_network(
+                      value,
+                      strict=False
+                  )
+
+                  if network.version != 6:
+
+                      raise ValueError(
+                          "IPv6 route address is not IPv6"
+                      )
+
+              except ValueError as exc:
+
+                  raise ValueError(
+                      "Invalid IPv6 route prefix: "
+                      + str(exc)
+                  )
+
+
+          def validate_ipv6_address(value):
+
+              try:
+
+                  address = ipaddress.ip_address(value)
+
+                  if address.version != 6:
+
+                      raise ValueError(
+                          "Gateway is not an IPv6 address"
+                      )
+
+              except ValueError as exc:
+
+                  raise ValueError(
+                      "Invalid IPv6 gateway: "
+                      + str(exc)
+                  )
+
+
+          # ==================================================================
+          # Build commands
+          # ==================================================================
+
+          def build_commands():
+
+              commands = []
+
+              # --------------------------------------------------------------
+              # SET
+              # --------------------------------------------------------------
+
+              if OPERATION == "set":
+
+                  validate_ipv6_prefix(
+                      IPV6_ADDRESS
+                  )
+
+                  validate_ipv6_address(
+                      IPV6_GATEWAY
+                  )
+
+                  # IPv6 static route
+                  commands.append(
+                      "ipv6 route "
+                      + IPV6_ADDRESS
+                      + " "
+                      + IPV6_GATEWAY
+                  )
+
+                  # Maximum equal-cost paths
+                  commands.append(
+                      "ipv6 route equal-cost-paths "
+                      + str(EQUAL_COST_PATHS)
+                  )
+
+                  # Maximum number of routes
+                  commands.append(
+                      "ipv6 route max-number "
+                      + str(MAX_NUMBER_ROUTES)
+                  )
+
+                  # Maximum static routes
+                  commands.append(
+                      "ipv6 route max-number static "
+                      + str(MAX_STATIC_ROUTES)
+                  )
+
+                  # Maximum dynamic routes
+                  commands.append(
+                      "ipv6 route max-number dynamic "
+                      + str(MAX_DYNAMIC_ROUTES)
+                  )
+
+                  # Unlimited prefix length
+                  if str(
+                      PREFIXLEN_UNLIMITED
+                  ).lower() == "enable":
+
+                      commands.append(
+                          "ipv6 route prefixlen-unlimited"
+                      )
+
+                  else:
+
+                      commands.append(
+                          "no ipv6 route prefixlen-unlimited"
+                      )
+
+              # --------------------------------------------------------------
+              # DELETE
+              #
+              # IMPORTANT:
+              # Only the specified IPv6 route is deleted.
+              #
+              # Example:
+              # no ipv6 route 2006:DB8:85A3:82::/64 2004:DB8:85A3:82::1
+              #
+              # No equal-cost-paths, max-number, static, dynamic or
+              # prefixlen-unlimited configuration is touched.
+              # --------------------------------------------------------------
+
+              elif OPERATION == "delete":
+
+                  validate_ipv6_prefix(
+                      IPV6_ADDRESS
+                  )
+
+                  validate_ipv6_address(
+                      IPV6_GATEWAY
+                  )
+
+                  commands.append(
+                      "no ipv6 route "
+                      + IPV6_ADDRESS
+                      + " "
+                      + IPV6_GATEWAY
+                  )
+
+              return commands
+
+
+          # ==================================================================
+          # Main
+          # ==================================================================
+
+          client = None
+
+          try:
+
+              # --------------------------------------------------------------
+              # Connect
+              # --------------------------------------------------------------
+
+              client = paramiko.SSHClient()
+
+              client.set_missing_host_key_policy(
+                  paramiko.AutoAddPolicy()
+              )
+
+              client.connect(
+                  hostname=HOST,
+                  username=USER,
+                  password=PASSWORD,
+                  look_for_keys=False,
+                  allow_agent=False,
+                  timeout=15,
+                  banner_timeout=15,
+                  auth_timeout=15
+              )
+
+              # --------------------------------------------------------------
+              # Open shell
+              # --------------------------------------------------------------
+
+              shell = client.invoke_shell()
+
+              time.sleep(1)
+
+              if shell.recv_ready():
+
+                  shell.recv(65535)
+
+              # --------------------------------------------------------------
+              # Enable mode
+              # --------------------------------------------------------------
+
+              output = send_command(
+                  shell,
+                  "enable",
+                  1
+              )
+
+              if command_failed(output):
+
+                  raise RuntimeError(
+                      "enable command failed: "
+                      + output.strip()
+                  )
+
+              # --------------------------------------------------------------
+              # Configuration mode
+              # --------------------------------------------------------------
+
+              output = send_command(
+                  shell,
+                  "config",
+                  1
+              )
+
+              if command_failed(output):
+
+                  raise RuntimeError(
+                      "config command failed: "
+                      + output.strip()
+                  )
+
+              # --------------------------------------------------------------
+              # Build commands
+              # --------------------------------------------------------------
+
+              commands = build_commands()
+
+              # --------------------------------------------------------------
+              # Execute commands
+              # --------------------------------------------------------------
+
+              for command in commands:
+
+                  output = send_command(
+                      shell,
+                      command,
+                      2
+                  )
+
+                  if command_failed(output):
+
+                      raise RuntimeError(
+                          "Command failed: "
+                          + command
+                          + "\n"
+                          + output.strip()
+                      )
+
+              # --------------------------------------------------------------
+              # Exit configuration mode
+              # --------------------------------------------------------------
+
+              output = send_command(
+                  shell,
+                  "exit",
+                  1
+              )
+
+              if command_failed(output):
+
+                  raise RuntimeError(
+                      "exit command failed: "
+                      + output.strip()
+                  )
+
+              # --------------------------------------------------------------
+              # Save configuration
+              # --------------------------------------------------------------
+
+              output = send_command(
+                  shell,
+                  "write",
+                  3
+              )
+
+              if command_failed(output):
+
+                  raise RuntimeError(
+                      "write command failed: "
+                      + output.strip()
+                  )
+
+              # --------------------------------------------------------------
+              # Close SSH
+              # --------------------------------------------------------------
+
+              client.close()
+
+              client = None
+
+              # --------------------------------------------------------------
+              # SUCCESS output file
+              # --------------------------------------------------------------
+
+              result = {
+                  "status": "SUCCESS",
+                  "device_ip": HOST
+              }
+
+              with open(
+                  OUTPUT_FILE,
+                  "w"
+              ) as f:
+
+                  yaml.safe_dump(
+                      result,
+                      f,
+                      default_flow_style=False,
+                      sort_keys=False
+                  )
+
+              print(
+                  "status: SUCCESS"
+              )
+
+              print(
+                  "device_ip: "
+                  + HOST
+              )
+
+              print(
+                  "output_file: "
+                  + OUTPUT_FILE
+              )
+
+          except Exception as e:
+
+              if client:
+
+                  try:
+
+                      client.close()
+
+                  except Exception:
+
+                      pass
+
+              # --------------------------------------------------------------
+              # FAILED output file
+              # --------------------------------------------------------------
+
+              result = {
+                  "status": "FAILED",
+                  "device_ip": HOST
+              }
+
+              with open(
+                  OUTPUT_FILE,
+                  "w"
+              ) as f:
+
+                  yaml.safe_dump(
+                      result,
+                      f,
+                      default_flow_style=False,
+                      sort_keys=False
+                  )
+
+              print(
+                  "status: FAILED"
+              )
+
+              print(
+                  "device_ip: "
+                  + HOST
+              )
+
+              print(
+                  "output_file: "
+                  + OUTPUT_FILE
+              )
+
+              print(
+                  "reason: "
+                  + str(e)
+              )
+
+              sys.exit(1)
+
+    # ========================================================================
+    # Execute SET / DELETE
+    # ========================================================================
+
+    - name: Execute IPv6 Route SET DELETE
+      ansible.builtin.command:
+        cmd: "python3 {{ tmp_dir }}/setipv6route.py"
+      delegate_to: localhost
+      register: ipv6_route_result
+      changed_when: false
+
+    # ========================================================================
+    # Show result
+    # ========================================================================
+
+    - name: Show IPv6 Route result
+      ansible.builtin.debug:
+        msg: "{{ ipv6_route_result.stdout }}"

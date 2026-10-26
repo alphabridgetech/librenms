@@ -1,0 +1,672 @@
+---
+# ============================================================================
+# File        : setvlaninterfaceip.yml
+# Feature     : VLAN Interface IPv4 Configuration - SET / DELETE
+#
+# Operations:
+#   set
+#   delete
+#
+# SET supports:
+#   - Manual configuration
+#   - DHCP Auto configuration
+#   - Primary IP
+#   - Secondary IP 1
+#   - Secondary IP 2
+#
+# Successful output:
+#
+# Manual:
+#   status: SUCCESS
+#   ip_address: 192.168.0.1
+#
+# DHCP:
+#   status: SUCCESS
+#   ip_address: ''
+#
+# Delete:
+#   status: SUCCESS
+#
+#Command: 
+#ansible-playbook -i inventory/192.168.10.1.yml playbooks/l3/vlan_IP/setvlaninterfaceip.yml -e "operation=delete vlan_id=10"
+#
+#ansible-playbook   -i inventory/192.168.10.1.yml   playbooks/l3/vlan_IP/setvlaninterfaceip.yml   -e "operation=set vlan_id=1 ip_attribute='DHCP Auto configuration'"
+#
+#ansible-playbook   -i inventory/192.168.10.1.yml   playbooks/l3/vlan_IP/setvlaninterfaceip.yml   -e "operation=set vlan_id=1 ip_attribute='Manual configuration' ip_address=192.168.0.1 ip_mask=255.255.255.0 secondary_ip_address_1=192.168.45.2 secondary_ip_mask_1=255.255.255.0 secondary_ip_address_2=192.168.9.2 secondary_ip_mask_2=255.255.255.0"
+
+#
+# ============================================================================
+
+- name: VLAN Interface IPv4 Configuration - SET / DELETE
+  hosts: alphabridge_devices
+  gather_facts: false
+
+  vars:
+    project_root: "{{ playbook_dir }}/../.."
+    output_dir: "{{ project_root }}/output"
+    tmp_dir: "{{ project_root }}/tmp"
+
+  tasks:
+
+    # ========================================================================
+    # Validate VLAN ID
+    # ========================================================================
+
+    - name: Validate VLAN ID
+      ansible.builtin.assert:
+        that:
+          - vlan_id is defined
+          - vlan_id | int >= 1
+          - vlan_id | int <= 4094
+        fail_msg: "vlan_id must be between 1 and 4094."
+
+    # ========================================================================
+    # Operation is mandatory
+    # ========================================================================
+
+    - name: Validate operation
+      ansible.builtin.assert:
+        that:
+          - operation is defined
+          - operation in ["set", "delete"]
+        fail_msg: "operation must be either 'set' or 'delete'."
+
+    # ========================================================================
+    # Validate IP attribute for SET
+    # ========================================================================
+
+    - name: Validate IP attribute
+      ansible.builtin.assert:
+        that:
+          - ip_attribute is defined
+          - ip_attribute in
+            [
+              "Manual configuration",
+              "DHCP Auto configuration"
+            ]
+        fail_msg: >
+          ip_attribute must be 'Manual configuration'
+          or 'DHCP Auto configuration'.
+      when: operation == "set"
+
+    # ========================================================================
+    # Primary IP is mandatory for Manual configuration
+    # ========================================================================
+
+    - name: Validate primary IP
+      ansible.builtin.assert:
+        that:
+          - ip_address is defined
+          - ip_address | length > 0
+        fail_msg: >
+          ip_address is mandatory for Manual configuration.
+      when:
+        - operation == "set"
+        - ip_attribute == "Manual configuration"
+
+    # ========================================================================
+    # Create directories
+    # ========================================================================
+
+    - name: Create required directories
+      ansible.builtin.file:
+        path: "{{ item }}"
+        state: directory
+        mode: "0755"
+      loop:
+        - "{{ output_dir }}"
+        - "{{ tmp_dir }}"
+      delegate_to: localhost
+
+    # ========================================================================
+    # Create Python script
+    # ========================================================================
+
+    - name: Create VLAN Interface IPv4 script
+      ansible.builtin.copy:
+        dest: "{{ tmp_dir }}/setvlaninterfaceip.py"
+        mode: "0755"
+        content: |
+          #!/usr/bin/env python3
+
+          import paramiko
+          import time
+          import ipaddress
+          import sys
+          import yaml
+
+          HOST = "{{ ansible_host }}"
+          USER = "{{ ansible_user }}"
+          PASSWORD = "{{ ansible_password }}"
+
+          VLAN_ID = "{{ vlan_id }}"
+          OPERATION = "{{ operation }}"
+
+          IP_ATTRIBUTE = "{{ ip_attribute | default('') }}"
+
+          PRIMARY_IP = "{{ ip_address | default('') }}"
+          PRIMARY_MASK = "{{ ip_mask | default('') }}"
+
+          SECONDARY_IP_1 = "{{ secondary_ip_address_1 | default('') }}"
+          SECONDARY_MASK_1 = "{{ secondary_ip_mask_1 | default('') }}"
+
+          SECONDARY_IP_2 = "{{ secondary_ip_address_2 | default('') }}"
+          SECONDARY_MASK_2 = "{{ secondary_ip_mask_2 | default('') }}"
+
+          OUTPUT_FILE = (
+              "{{ output_dir }}/"
+              "{{ ansible_host }}_vlan_interface_ip_attribute.yml"
+          )
+
+          # ==================================================================
+          # Convert IP address and mask
+          # ==================================================================
+
+          def get_ip_and_mask(ip_value, mask_value):
+
+              if not ip_value:
+                  raise ValueError("IP address is required.")
+
+              # CIDR format:
+              # 192.168.0.1/24
+              if "/" in ip_value:
+
+                  interface = ipaddress.ip_interface(ip_value)
+
+                  return (
+                      str(interface.ip),
+                      str(interface.network.netmask)
+                  )
+
+              # Validate plain IP
+              ipaddress.ip_address(ip_value)
+
+              # Explicit mask
+              if mask_value:
+
+                  if "/" in mask_value:
+
+                      prefix = mask_value.split("/")[-1]
+
+                      network = ipaddress.ip_network(
+                          "0.0.0.0/" + prefix
+                      )
+
+                      return (
+                          ip_value,
+                          str(network.netmask)
+                      )
+
+                  ipaddress.ip_address(mask_value)
+
+                  return (
+                      ip_value,
+                      mask_value
+                  )
+
+              # Default /24
+              return (
+                  ip_value,
+                  "255.255.255.0"
+              )
+
+          # ==================================================================
+          # Read device response
+          # ==================================================================
+
+          def read_response(shell, wait_time=1.5):
+
+              output = ""
+
+              end_time = time.time() + wait_time
+
+              while time.time() < end_time:
+
+                  if shell.recv_ready():
+
+                      data = shell.recv(65535).decode(
+                          "utf-8",
+                          errors="ignore"
+                      )
+
+                      output += data
+
+                  else:
+                      time.sleep(0.2)
+
+              return output.replace("\r", "")
+
+          # ==================================================================
+          # Send command
+          # ==================================================================
+
+          def send_command(shell, command, wait_time=1.5):
+
+              shell.send(command + "\n")
+
+              return read_response(
+                  shell,
+                  wait_time
+              )
+
+          # ==================================================================
+          # Check command failure
+          #
+          # NOTE:
+          # "no ip address" is intentionally handled separately because
+          # the switch can return:
+          #
+          #   %err: No such IP address.
+          #
+          # when there is no existing primary IP.
+          #
+          # This must NOT make the SET operation fail.
+          # ==================================================================
+
+          def command_failed(output):
+
+              error_strings = [
+                  "Unknown command",
+                  "Invalid command",
+                  "Invalid input",
+                  "Too many parameters",
+                  "fail with ret",
+                  "% Invalid",
+                  "% Error",
+                  "% Bad",
+                  "Bad netmask"
+              ]
+
+              output_lower = output.lower()
+
+              for error in error_strings:
+
+                  if error.lower() in output_lower:
+                      return True
+
+              return False
+
+          # ==================================================================
+          # Main
+          # ==================================================================
+
+          client = None
+
+          try:
+
+              # --------------------------------------------------------------
+              # Prepare secondary IP addresses
+              # --------------------------------------------------------------
+
+              secondary_ips = []
+
+              if SECONDARY_IP_1:
+
+                  secondary_ip_1, secondary_mask_1 = get_ip_and_mask(
+                      SECONDARY_IP_1,
+                      SECONDARY_MASK_1
+                  )
+
+                  secondary_ips.append(
+                      (
+                          secondary_ip_1,
+                          secondary_mask_1
+                      )
+                  )
+
+              if SECONDARY_IP_2:
+
+                  secondary_ip_2, secondary_mask_2 = get_ip_and_mask(
+                      SECONDARY_IP_2,
+                      SECONDARY_MASK_2
+                  )
+
+                  secondary_ips.append(
+                      (
+                          secondary_ip_2,
+                          secondary_mask_2
+                      )
+                  )
+
+              # --------------------------------------------------------------
+              # Connect to switch
+              # --------------------------------------------------------------
+
+              client = paramiko.SSHClient()
+
+              client.set_missing_host_key_policy(
+                  paramiko.AutoAddPolicy()
+              )
+
+              client.connect(
+                  hostname=HOST,
+                  username=USER,
+                  password=PASSWORD,
+                  look_for_keys=False,
+                  allow_agent=False,
+                  timeout=15,
+                  banner_timeout=15,
+                  auth_timeout=15
+              )
+
+              shell = client.invoke_shell()
+
+              time.sleep(1)
+
+              # Clear initial output
+              if shell.recv_ready():
+                  shell.recv(65535)
+
+              # --------------------------------------------------------------
+              # Enable mode
+              # --------------------------------------------------------------
+
+              send_command(
+                  shell,
+                  "enable",
+                  0.8
+              )
+
+              # --------------------------------------------------------------
+              # Configuration mode
+              # --------------------------------------------------------------
+
+              send_command(
+                  shell,
+                  "config",
+                  0.8
+              )
+
+              # ==============================================================
+              # DELETE
+              # ==============================================================
+
+              if OPERATION == "delete":
+
+                  command = (
+                      "no interface vlan "
+                      + str(VLAN_ID)
+                  )
+
+                  output = send_command(
+                      shell,
+                      command,
+                      2
+                  )
+
+                  if command_failed(output):
+
+                      raise RuntimeError(
+                          "Delete command failed: " + output
+                      )
+
+                  # ----------------------------------------------------------
+                  # DELETE output
+                  # ----------------------------------------------------------
+
+                  result = {
+                      "status": "SUCCESS"
+                  }
+
+              # ==============================================================
+              # SET
+              # ==============================================================
+
+              else:
+
+                  # ----------------------------------------------------------
+                  # Enter VLAN interface
+                  # ----------------------------------------------------------
+
+                  output = send_command(
+                      shell,
+                      "interface vlan " + str(VLAN_ID),
+                      1
+                  )
+
+                  if command_failed(output):
+
+                      raise RuntimeError(
+                          "interface vlan command failed: "
+                          + output
+                      )
+
+                  # ==========================================================
+                  # MANUAL CONFIGURATION
+                  # ==========================================================
+
+                  if IP_ATTRIBUTE == "Manual configuration":
+
+                      primary_ip, primary_mask = get_ip_and_mask(
+                          PRIMARY_IP,
+                          PRIMARY_MASK
+                      )
+
+                      # ------------------------------------------------------
+                      # Remove existing primary IP
+                      #
+                      # Ignore:
+                      #   %err: No such IP address.
+                      #
+                      # because there may be no existing IP.
+                      # ------------------------------------------------------
+
+                      send_command(
+                          shell,
+                          "no ip address",
+                          1
+                      )
+
+                      # ------------------------------------------------------
+                      # Configure primary IP FIRST
+                      # ------------------------------------------------------
+
+                      primary_command = (
+                          "ip address "
+                          + primary_ip
+                          + " "
+                          + primary_mask
+                      )
+
+                      primary_output = send_command(
+                          shell,
+                          primary_command,
+                          1.5
+                      )
+
+                      if command_failed(primary_output):
+
+                          raise RuntimeError(
+                              "Primary IP configuration failed: "
+                              + primary_output
+                          )
+
+                      # ------------------------------------------------------
+                      # Configure secondary IP 1 and 2
+                      #
+                      # Primary IP is always configured first.
+                      # ------------------------------------------------------
+
+                      for secondary_ip, secondary_mask in secondary_ips:
+
+                          secondary_command = (
+                              "ip address "
+                              + secondary_ip
+                              + " "
+                              + secondary_mask
+                              + " secondary"
+                          )
+
+                          secondary_output = send_command(
+                              shell,
+                              secondary_command,
+                              1.5
+                          )
+
+                          if command_failed(secondary_output):
+
+                              raise RuntimeError(
+                                  "Secondary IP configuration failed: "
+                                  + secondary_output
+                              )
+
+                      # ------------------------------------------------------
+                      # SET output
+                      #
+                      # Only SUCCESS and primary IP are written.
+                      # Secondary IPs are NOT included in output.
+                      # ------------------------------------------------------
+
+                      result = {
+                          "status": "SUCCESS",
+                          "ip_address": primary_ip
+                      }
+
+                  # ==========================================================
+                  # DHCP CONFIGURATION
+                  # ==========================================================
+
+                  elif IP_ATTRIBUTE == "DHCP Auto configuration":
+
+                      dhcp_output = send_command(
+                          shell,
+                          "ip address dhcp",
+                          1.5
+                      )
+
+                      if command_failed(dhcp_output):
+
+                          raise RuntimeError(
+                              "DHCP configuration failed: "
+                              + dhcp_output
+                          )
+
+                      # ------------------------------------------------------
+                      # Configure optional secondary IPs
+                      # ------------------------------------------------------
+
+                      for secondary_ip, secondary_mask in secondary_ips:
+
+                          secondary_command = (
+                              "ip address "
+                              + secondary_ip
+                              + " "
+                              + secondary_mask
+                              + " secondary"
+                          )
+
+                          secondary_output = send_command(
+                              shell,
+                              secondary_command,
+                              1.5
+                          )
+
+                          if command_failed(secondary_output):
+
+                              raise RuntimeError(
+                                  "Secondary IP configuration failed: "
+                                  + secondary_output
+                              )
+
+                      # ------------------------------------------------------
+                      # DHCP output
+                      #
+                      # DHCP has no static primary IP to report.
+                      # ------------------------------------------------------
+
+                      result = {
+                          "status": "SUCCESS",
+                          "ip_address": ""
+                      }
+
+                  else:
+
+                      raise RuntimeError(
+                          "Unsupported IP attribute: "
+                          + IP_ATTRIBUTE
+                      )
+
+                  # ----------------------------------------------------------
+                  # Exit VLAN interface
+                  # ----------------------------------------------------------
+
+                  send_command(
+                      shell,
+                      "exit",
+                      0.8
+                  )
+
+              # --------------------------------------------------------------
+              # Close SSH connection
+              # --------------------------------------------------------------
+
+              client.close()
+
+              # --------------------------------------------------------------
+              # Write result YAML
+              # --------------------------------------------------------------
+
+              with open(OUTPUT_FILE, "w") as f:
+
+                  yaml.dump(
+                      result,
+                      f,
+                      default_flow_style=False,
+                      sort_keys=False
+                  )
+
+              print("SUCCESS")
+
+          except Exception as e:
+
+              if client:
+
+                  try:
+                      client.close()
+                  except Exception:
+                      pass
+
+              result = {
+                  "status": "FAILED",
+                  "error": str(e)
+              }
+
+              with open(OUTPUT_FILE, "w") as f:
+
+                  yaml.dump(
+                      result,
+                      f,
+                      default_flow_style=False,
+                      sort_keys=False
+                  )
+
+              print("FAILED:", str(e))
+
+              sys.exit(1)
+
+    # ========================================================================
+    # Execute script
+    # ========================================================================
+
+    - name: Execute VLAN Interface IPv4 configuration
+      ansible.builtin.command:
+        cmd: "python3 {{ tmp_dir }}/setvlaninterfaceip.py"
+      delegate_to: localhost
+      register: vlan_set_result
+      changed_when: false
+
+    # ========================================================================
+    # Display output file
+    # ========================================================================
+
+    - name: Show VLAN Interface IPv4 result
+      ansible.builtin.debug:
+        msg: >-
+          {{
+            lookup(
+              'file',
+              output_dir + '/' +
+              ansible_host +
+              '_vlan_interface_ip_attribute.yml'
+            )
+          }}

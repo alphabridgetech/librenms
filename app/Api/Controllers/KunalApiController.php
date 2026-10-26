@@ -4824,4 +4824,1026 @@ public function getvlan($hostname)
         ], 400);
     }
 
+    #------------------------------------------------------------
+    #   L3 CONFIGURATION - IPv6 ROUTE / STATIC ROUTE /
+    #   VLAN INTERFACE IPv4 / VLAN INTERFACE IPv6 - GET / SET
+    #------------------------------------------------------------
+    //
+    // All values below end up inside the single-quoted --extra-vars JSON
+    // that runAnsiblejs() builds, and the set playbooks paste them into
+    // double-quoted Python strings and switch CLI commands - so every text
+    // field is restricted by strict ip / in / regex rules (never a free
+    // string that could carry ' " \ or spaces).
+    //
+    // Each module has a per-switch lock file. Synchronous GETs and SETs
+    // take it with flock(); the background refresh after a cached GET runs
+    // under `flock -n` on the same file, so it is skipped instead of
+    // overlapping a SET (several set playbooks write the same output file
+    // as their GET, with a different shape).
+
+    private const L3_MODULES = [
+        'ipv6route'  => ['dir' => 'ipv6routel3',       'get' => 'getipv6route',         'set' => 'setipv6route',         'get_out' => 'ipv6_route',                 'set_out' => 'ipv6route',                  'key' => 'ipv6_route_configuration_list_info', 'label' => 'IPv6 route'],
+        'staticroute'=> ['dir' => 'static_route_l3',   'get' => 'getstaticroute',       'set' => 'setstaticroute',       'get_out' => 'staticroute',                'set_out' => 'staticroute',                'key' => 'static_routes',                      'label' => 'Static route'],
+        'vlanip'     => ['dir' => 'vlan_interface_IP', 'get' => 'getvlaninterfaceip',   'set' => 'setvlaninterfaceip',   'get_out' => 'vlan_interface_ip_attribute', 'set_out' => 'vlan_interface_ip_attribute', 'key' => 'vlan_interface_ip_attribute',     'label' => 'VLAN interface IPv4'],
+        'vlanipv6'   => ['dir' => 'vlan_IPv6_L3',      'get' => 'getvlaninterfaceipv6', 'set' => 'setvlaninterfaceipv6', 'get_out' => 'vlan_interface_ipv6',        'set_out' => 'vlan_interface_ipv6_set',    'key' => 'vlan_interface_ipv6',                'label' => 'VLAN interface IPv6'],
+    ];
+
+    private const L3_STATIC_INTERFACE_TYPES = ['Interface VLAN', 'Null0', 'Gateway IP Address'];
+    private const L3_VLAN_IP_ATTRIBUTES     = ['Manual configuration', 'DHCP Auto configuration'];
+
+    // Batch delete: the single-delete method that handles each item, and the
+    // request fields copied from each item.
+    private const L3_BATCH_DELETE = [
+        'ipv6route'   => ['setipv6route',         ['ipv6_address', 'ipv6_gateway']],
+        'staticroute' => ['setstaticroute',       ['dest_ip', 'dest_mask', 'interface_type', 'interface_vlan', 'forwarding_routing_address', 'gateway_ip', 'distance_metric', 'routing_tag']],
+        'vlanip'      => ['setvlaninterfaceip',   ['vlan_id']],
+        'vlanipv6'    => ['setvlaninterfaceipv6', ['vlan_id']],
+    ];
+
+    // While a batch runs, l3RunSet skips its per-item re-read (the batch
+    // re-reads once at the end) and the management VLAN check reuses the
+    // VLAN table read before the batch started.
+    private bool $l3Batch = false;
+    private ?array $l3BatchVlanIp = null;
+
+    private function l3Playbook(string $module, string $which): string
+    {
+        $m = self::L3_MODULES[$module];
+
+        return "{$this->pluginPath}/playbooks/{$m['dir']}/{$m[$which]}.yml";
+    }
+
+    private function l3OutputFile(string $hostname, string $module, string $which): string
+    {
+        return "{$this->pluginPath}/output/{$hostname}_" . self::L3_MODULES[$module][$which] . ".yml";
+    }
+
+    /**
+     * Inventory file for $hostname, or null. The hostname is part of shell
+     * commands, so it must look like a host/IP and have an inventory file.
+     */
+    private function l3Hosts(string $hostname): ?string
+    {
+        if (!preg_match('/^[A-Za-z0-9][A-Za-z0-9._-]*$/', $hostname)) {
+            return null;
+        }
+
+        $hosts = "{$this->pluginPath}/hosts/{$hostname}.yml";
+
+        return file_exists($hosts) ? $hosts : null;
+    }
+
+    private function l3LockPath(string $hostname, string $module): string
+    {
+        return "{$this->pluginPath}/tmp/{$hostname}_l3_{$module}.lock";
+    }
+
+    /**
+     * Run $fn holding the module's lock. $waited tells $fn whether another
+     * run (background refresh or SET) held the lock first.
+     */
+    private function l3WithLock(string $hostname, string $module, callable $fn)
+    {
+        $lock = @fopen($this->l3LockPath($hostname, $module), 'c');
+
+        if ($lock === false) {
+            return $fn(false);
+        }
+
+        $waited = false;
+        if (!flock($lock, LOCK_EX | LOCK_NB)) {
+            $waited = true;
+            flock($lock, LOCK_EX);
+        }
+
+        try {
+            return $fn($waited);
+        } finally {
+            flock($lock, LOCK_UN);
+            fclose($lock);
+        }
+    }
+
+    private function l3RunAsync(string $hostname, string $module, string $hosts): void
+    {
+        $lock = escapeshellarg($this->l3LockPath($hostname, $module));
+        $cmd  = "source {$this->venv} && flock -n {$lock} ansible-playbook -i {$hosts} " . $this->l3Playbook($module, 'get') . " > /dev/null 2>&1 &";
+
+        shell_exec($cmd);
+    }
+
+    private function l3ReadGet(string $hostname, string $module): ?array
+    {
+        $file = $this->l3OutputFile($hostname, $module, 'get_out');
+        $data = file_exists($file) ? $this->parseYamlSafely($file) : null;
+        $key  = self::L3_MODULES[$module]['key'];
+
+        if (!is_array($data) || !array_key_exists($key, $data) || strtoupper((string) ($data['status'] ?? '')) !== 'SUCCESS') {
+            return null;
+        }
+
+        return $data;
+    }
+
+    /**
+     * Run the GET playbook synchronously (caller holds the lock) and return
+     * its parsed output, or null with the ansible output in $output.
+     */
+    private function l3RunGet(string $hostname, string $module, string $hosts, ?string &$output = null): ?array
+    {
+        $output = $this->runAnsiblejs($this->l3Playbook($module, 'get'), $hosts);
+
+        return $this->l3ReadGet($hostname, $module);
+    }
+
+    /**
+     * Cached GET: serve the saved output (when it still has the GET's shape)
+     * and refresh it in the background; ?refresh=1 or no usable file runs
+     * the playbook live. ?peek=1 returns the saved output without running
+     * anything (falls through to a live read when there is none).
+     */
+    private function l3CachedGet(Request $request, string $hostname, string $module, callable $format)
+    {
+        if (!function_exists('yaml_parse_file')) {
+            return $this->error("PHP YAML extension missing", null);
+        }
+
+        $hosts = $this->l3Hosts($hostname);
+        if (!$hosts) {
+            return $this->error("Unknown device {$hostname}", null);
+        }
+
+        // ?peek=1: re-read the saved file only (the page's follow-up after a
+        // cached response, once the background refresh has had time to run).
+        if ($request->boolean('peek')) {
+            $saved = $this->l3ReadGet($hostname, $module);
+            if ($saved !== null) {
+                return $this->success([
+                    "data"       => $format($saved),
+                    "cached"     => false,
+                    "updated_at" => @filemtime($this->l3OutputFile($hostname, $module, 'get_out')) ?: null,
+                ]);
+            }
+        }
+
+        if (!$request->boolean('refresh')) {
+            $cached = $this->l3ReadGet($hostname, $module);
+
+            if ($cached !== null) {
+                $this->l3RunAsync($hostname, $module, $hosts);
+
+                return $this->success([
+                    "data"       => $format($cached),
+                    "cached"     => true,
+                    "updated_at" => @filemtime($this->l3OutputFile($hostname, $module, 'get_out')) ?: null,
+                ]);
+            }
+        }
+
+        $output = null;
+        $data   = $this->l3WithLock($hostname, $module, function (bool $waited) use ($hostname, $module, $hosts, &$output) {
+            // Someone else just ran the GET (or a SET + GET) - use that result.
+            if ($waited && ($fresh = $this->l3ReadGet($hostname, $module)) !== null) {
+                return $fresh;
+            }
+
+            return $this->l3RunGet($hostname, $module, $hosts, $output);
+        });
+
+        if ($data === null) {
+            $label = self::L3_MODULES[$module]['label'];
+
+            return $this->error($this->l3ErrorMessage(null, (string) $output, "Failed to read {$label} configuration from the switch"), $output);
+        }
+
+        return $this->success([
+            "data"       => $format($data),
+            "cached"     => false,
+            "updated_at" => @filemtime($this->l3OutputFile($hostname, $module, 'get_out')) ?: null,
+        ]);
+    }
+
+    /**
+     * Best error text from a failed set: the playbook's own error, the
+     * script's "reason:" / "FAILED:" / "ERROR:" line, or an assert msg.
+     */
+    private function l3ErrorMessage(?array $result, string $output, string $fallback): string
+    {
+        if (is_array($result) && !empty($result['error'])) {
+            return mb_substr(trim((string) $result['error']), 0, 400);
+        }
+
+        $patterns = [
+            '/reason: (.*?)(?:\\\\n|"|$)/m',
+            '/FAILED: (.*?)(?:\\\\n|"|$)/m',
+            '/ERROR: (.*?)(?:\\\\n|"|$)/m',
+            '/FAILED! => \{.*?"msg": "((?:[^"\\\\]|\\\\.)*)"/s',
+            '/UNREACHABLE! => \{.*?"msg": "((?:[^"\\\\]|\\\\.)*)"/s',
+        ];
+
+        foreach ($patterns as $pattern) {
+            if (preg_match($pattern, $output, $m) && trim($m[1]) !== '') {
+                $text = json_decode('"' . $m[1] . '"');
+
+                return mb_substr(trim(is_string($text) ? $text : stripcslashes($m[1])), 0, 400);
+            }
+        }
+
+        return $fallback;
+    }
+
+    /**
+     * Run a SET playbook and then refresh its GET, both under the module
+     * lock. Failure is taken from the ansible run (failed task / recap)
+     * and from the status in the set's own output file, which is removed
+     * first so an earlier run can't be mistaken for this one.
+     *
+     * Returns [errorResponse|null, refreshed GET data|null].
+     */
+    private function l3RunSet(string $hostname, string $module, array $extraVars, string $label): array
+    {
+        $hosts = $this->l3Hosts($hostname);
+        if (!$hosts) {
+            return [$this->error("Unknown device {$hostname}", null), null];
+        }
+
+        // Every playbook var is passed as a string: several asserts use
+        // `| length`, which fails on JSON integers.
+        $extraVars = array_map('strval', array_filter($extraVars, fn ($value) => $value !== null && $value !== ''));
+
+        return $this->l3WithLock($hostname, $module, function () use ($hostname, $module, $hosts, $extraVars, $label) {
+            $setFile = $this->l3OutputFile($hostname, $module, 'set_out');
+            @unlink($setFile);
+
+            $output = (string) $this->runAnsiblejs($this->l3Playbook($module, 'set'), $hosts, $extraVars);
+            $result = file_exists($setFile) ? $this->parseYamlSafely($setFile) : null;
+
+            $failed = $this->ansiblePlaybookFailed($output)
+                || stripos($output, 'FAILED!') !== false
+                || stripos($output, 'PLAY RECAP') === false
+                || !is_array($result)
+                || strtoupper((string) ($result['status'] ?? '')) !== 'SUCCESS';
+
+            if ($failed) {
+                // Static route / VLAN IP sets overwrite the GET's file even
+                // on failure - re-read the switch so it is valid again.
+                $m = self::L3_MODULES[$module];
+                if ($m['set_out'] === $m['get_out'] && !$this->l3Batch) {
+                    $this->l3RunGet($hostname, $module, $hosts);
+                }
+
+                return [$this->error($this->l3ErrorMessage($result, $output, "{$label} failed"), $output), null];
+            }
+
+            return [null, $this->l3Batch ? null : $this->l3RunGet($hostname, $module, $hosts)];
+        });
+    }
+
+    private function l3SetResponse(string $message, ?array $fresh, callable $format)
+    {
+        if ($this->l3Batch) {
+            return $this->success(["message" => $message]);
+        }
+
+        return $this->success([
+            "message"   => $fresh === null ? "{$message}, but re-reading the switch failed - press Refresh" : $message,
+            "data"      => $fresh === null ? null : $format($fresh),
+            "refreshed" => $fresh !== null,
+        ]);
+    }
+
+    private function l3ValidationError(string $field, string $message)
+    {
+        return response()->json([
+            "status"  => "error",
+            "message" => $message,
+            "errors"  => [$field => [$message]],
+        ], 422);
+    }
+
+    /** Validation rule: a dotted IPv4 netmask with contiguous bits. */
+    private function l3NetmaskRule(bool $allowZero = false): \Closure
+    {
+        return function ($attribute, $value, $fail) use ($allowZero) {
+            if (!is_string($value) || !filter_var($value, FILTER_VALIDATE_IP, FILTER_FLAG_IPV4)) {
+                $fail("The {$attribute} must be a dotted netmask such as 255.255.255.0.");
+
+                return;
+            }
+
+            $bits = sprintf('%032b', ip2long($value));
+            if (str_contains(rtrim($bits, '0'), '0') || (!$allowZero && $value === '0.0.0.0')) {
+                $fail("The {$attribute} is not a valid netmask.");
+            }
+        };
+    }
+
+    /** Validation rule: IPv6 prefix X:X::X/<0-128> (the playbooks' regex plus a real address check). */
+    private function l3Ipv6PrefixRule(): \Closure
+    {
+        return function ($attribute, $value, $fail) {
+            if (!is_string($value) || !preg_match('/^([0-9A-Fa-f:]+)\/([0-9]{1,3})$/', $value, $m)
+                || !filter_var($m[1], FILTER_VALIDATE_IP, FILTER_FLAG_IPV6)
+                || (int) $m[2] > 128) {
+                $fail("The {$attribute} must be an IPv6 prefix such as 2001:db8::/64.");
+            }
+        };
+    }
+
+    /**
+     * Addresses the switch is managed on: the device hostname, what it
+     * resolves to and the inventory's ansible_host.
+     */
+    private function l3ManagementIps(string $hostname): array
+    {
+        $ips = [$hostname];
+
+        $resolved = @gethostbyname($hostname);
+        if ($resolved && $resolved !== $hostname) {
+            $ips[] = $resolved;
+        }
+
+        $inventory = $this->parseYamlSafely("{$this->pluginPath}/hosts/{$hostname}.yml") ?? [];
+        array_walk_recursive($inventory, function ($value, $key) use (&$ips) {
+            if ($key === 'ansible_host' && is_string($value) && $value !== '') {
+                $ips[] = $value;
+            }
+        });
+
+        return array_values(array_unique(array_filter($ips, fn ($ip) => filter_var($ip, FILTER_VALIDATE_IP))));
+    }
+
+    /** VLAN ID whose primary IPv4 address is a management address, or null. */
+    private function l3ManagementVlan(array $vlanIpData, array $mgmtIps): ?int
+    {
+        foreach ($vlanIpData['vlan_interface_ip_attribute'] ?? [] as $row) {
+            if (in_array((string) ($row['ip_address'] ?? ''), $mgmtIps, true)) {
+                return (int) $row['vlan_id'];
+            }
+        }
+
+        return null;
+    }
+
+    /**
+     * Current VLAN IPv4 table for the management checks: the saved GET
+     * output, or a live read when there is none.
+     */
+    private function l3CurrentVlanIp(string $hostname): ?array
+    {
+        if ($this->l3BatchVlanIp !== null) {
+            return $this->l3BatchVlanIp;
+        }
+
+        $data = $this->l3ReadGet($hostname, 'vlanip');
+        if ($data !== null) {
+            return $data;
+        }
+
+        $hosts = $this->l3Hosts($hostname);
+
+        return $hosts ? $this->l3WithLock($hostname, 'vlanip', fn () => $this->l3RunGet($hostname, 'vlanip', $hosts)) : null;
+    }
+
+    /** VLAN IDs known from the saved L2 VLAN list (getvlan.yml) - never runs ansible. */
+    private function l3KnownVlans(string $hostname): array
+    {
+        $data = $this->parseYamlSafely("{$this->pluginPath}/output/{$hostname}_getvlan.yml") ?? [];
+        $ids  = [];
+
+        foreach (is_array($data['vlans'] ?? null) ? $data['vlans'] : [] as $vlan) {
+            $id = (int) ($vlan['id'] ?? 0);
+            if ($id >= 1 && $id <= 4094) {
+                $ids[] = $id;
+            }
+        }
+
+        $ids = array_values(array_unique($ids));
+        sort($ids);
+
+        return $ids;
+    }
+
+    /* ---------------------------- IPv6 ROUTE ---------------------------- */
+
+    private function formatL3Ipv6Route(array $d): array
+    {
+        $g = is_array($d['ipv6_route_configuration'] ?? null) ? $d['ipv6_route_configuration'] : [];
+
+        return [
+            'global' => [
+                'equal_cost_paths'    => $g['maximum_of_equal_cost_paths'] ?? null,
+                'max_number_routes'   => $g['maximum_number_of_routes'] ?? null,
+                'max_static_routes'   => $g['maximum_static_routes'] ?? null,
+                'max_dynamic_routes'  => $g['maximum_dynamic_routes'] ?? null,
+                'prefixlen_unlimited' => strtolower((string) ($g['unlimited_the_length_of_prefix'] ?? '')) === 'enable' ? 'enable' : 'disable',
+            ],
+            'routes' => array_values(array_map(fn ($r) => [
+                'ipv6_address' => (string) ($r['ipv6_address'] ?? ''),
+                'ipv6_gateway' => (string) ($r['gateway_address'] ?? ''),
+            ], is_array($d['ipv6_route_configuration_list_info'] ?? null) ? $d['ipv6_route_configuration_list_info'] : [])),
+        ];
+    }
+
+    public function getipv6route(Request $request, $hostname)
+    {
+        return $this->l3CachedGet($request, $hostname, 'ipv6route', fn (array $d) => $this->formatL3Ipv6Route($d));
+    }
+
+    /**
+     * setipv6route.yml: operation=set needs a route AND all global values
+     * (it always runs "ipv6 route <prefix> <gw>" plus every global command);
+     * operation=delete needs only the route.
+     */
+    public function setipv6route(Request $request, $hostname)
+    {
+        $data = $request->validate([
+            'operation'           => 'required|string|in:set,delete',
+            'ipv6_address'        => ['required', 'string', 'max:49', $this->l3Ipv6PrefixRule()],
+            'ipv6_gateway'        => ['required', 'string', 'max:45', 'regex:/^[0-9A-Fa-f:]+$/', 'ipv6'],
+            'equal_cost_paths'    => 'required_if:operation,set|nullable|integer|min:1|max:8',
+            'max_number_routes'   => 'required_if:operation,set|nullable|integer|min:64|max:640000',
+            'max_static_routes'   => 'required_if:operation,set|nullable|integer|min:1|max:32000',
+            'max_dynamic_routes'  => 'required_if:operation,set|nullable|integer|min:1|max:128000',
+            'prefixlen_unlimited' => 'required_if:operation,set|nullable|string|in:enable,disable',
+        ]);
+
+        $extraVars = [
+            'operation'    => $data['operation'],
+            'ipv6_address' => $data['ipv6_address'],
+            'ipv6_gateway' => $data['ipv6_gateway'],
+        ];
+
+        if ($data['operation'] === 'set') {
+            $extraVars += [
+                'equal_cost_paths'    => (int) $data['equal_cost_paths'],
+                'max_number_routes'   => (int) $data['max_number_routes'],
+                'max_static_routes'   => (int) $data['max_static_routes'],
+                'max_dynamic_routes'  => (int) $data['max_dynamic_routes'],
+                'prefixlen_unlimited' => $data['prefixlen_unlimited'],
+            ];
+        }
+
+        $route = "{$data['ipv6_address']} via {$data['ipv6_gateway']}";
+        [$error, $fresh] = $this->l3RunSet($hostname, 'ipv6route', $extraVars, "IPv6 route {$data['operation']} ({$route})");
+
+        if ($error) {
+            return $error;
+        }
+
+        $message = $data['operation'] === 'delete'
+            ? "IPv6 route {$route} deleted successfully"
+            : "IPv6 route {$route} and global route settings applied successfully";
+
+        return $this->l3SetResponse($message, $fresh, fn (array $d) => $this->formatL3Ipv6Route($d));
+    }
+
+    /* --------------------------- STATIC ROUTE --------------------------- */
+
+    private function formatL3StaticRoute(array $d): array
+    {
+        $routes = [];
+
+        foreach (is_array($d['static_routes'] ?? null) ? $d['static_routes'] : [] as $r) {
+            $iface   = (string) ($r['interface'] ?? '');
+            $forward = $r['forwarding_routing_address'] ?? null;
+            $type    = null;
+            $vlan    = null;
+            $gateway = null;
+
+            if (preg_match('/^vlan\s*(\d+)$/i', $iface, $m)) {
+                $type = 'Interface VLAN';
+                $vlan = (int) $m[1];
+            } elseif (strcasecmp($iface, 'Null0') === 0) {
+                $type = 'Null0';
+            } elseif ($iface === '' && $forward) {
+                $type    = 'Gateway IP Address';
+                $gateway = $forward;
+                $forward = null;
+            }
+
+            $default = (bool) ($r['default_route'] ?? false);
+
+            // The running config leaves out the default administrative
+            // distance (1 for a static route), so a route listed without
+            // one has distance 1 - which is what the delete line needs.
+            $distanceDefault = ($r['distance_metric'] ?? null) === null;
+            if ($distanceDefault) {
+                $r['distance_metric'] = 1;
+            }
+
+            // setstaticroute.yml's delete rebuilds the exact line
+            // "no ip route <dst> <mask> <type...> <distance> tag <tag>",
+            // so every part must be known.
+            $notDeletable = match (true) {
+                $default                                                 => 'Default routes are not supported by setstaticroute.yml',
+                $type === null                                           => 'Unsupported interface ' . ($iface ?: '-'),
+                empty($r['destination_ip']) || empty($r['destination_ip_mask']) => 'Destination is not known',
+                ($r['distance_metric'] ?? null) === null                 => 'Distance metric is not known',
+                ($r['routing_tag'] ?? null) === null                     => 'Route has no tag - the delete command needs one',
+                $type !== 'Gateway IP Address' && empty($forward)        => 'Forwarding address is not known',
+                default                                                  => null,
+            };
+
+            $routes[] = [
+                'default_route'              => $default,
+                'destination_ip'             => $r['destination_ip'] ?? null,
+                'destination_ip_mask'        => $r['destination_ip_mask'] ?? null,
+                'interface'                  => $iface !== '' ? $iface : null,
+                'interface_type'             => $type,
+                'interface_vlan'             => $vlan,
+                'gateway_ip'                 => $gateway,
+                'forwarding_routing_address' => $forward,
+                'distance_metric'            => $r['distance_metric'] ?? null,
+                'distance_default'           => $distanceDefault,
+                'routing_tag'                => $r['routing_tag'] ?? null,
+                'route_description'          => $r['route_description'] ?? null,
+                'deletable'                  => $notDeletable === null,
+                'not_deletable_reason'       => $notDeletable,
+            ];
+        }
+
+        return ['routes' => $routes];
+    }
+
+    public function getstaticroute(Request $request, $hostname)
+    {
+        return $this->l3CachedGet($request, $hostname, 'staticroute', fn (array $d) => $this->formatL3StaticRoute($d));
+    }
+
+    private function l3StaticRouteRules(): array
+    {
+        return [
+            'operation'                  => 'required|string|in:set,delete',
+            'dest_ip'                    => 'required|ipv4',
+            'dest_mask'                  => ['required', 'string', $this->l3NetmaskRule(true)],
+            'interface_type'             => ['required', 'string', \Illuminate\Validation\Rule::in(self::L3_STATIC_INTERFACE_TYPES)],
+            'interface_vlan'             => 'required_if:interface_type,Interface VLAN|nullable|integer|min:1|max:4094',
+            'forwarding_routing_address' => 'required_if:interface_type,Interface VLAN,Null0|nullable|ipv4',
+            'gateway_ip'                 => 'required_if:interface_type,Gateway IP Address|nullable|ipv4',
+            'distance_metric'            => 'required|integer|min:1|max:255',
+            'routing_tag'                => 'required|integer|min:0|max:4294967295',
+            'route_description'          => ['required_if:operation,set', 'nullable', 'string', 'max:64', 'regex:/^[A-Za-z0-9_.-]+$/'],
+        ];
+    }
+
+    public function setstaticroute(Request $request, $hostname)
+    {
+        $data = $request->validate($this->l3StaticRouteRules());
+
+        $type = $data['interface_type'];
+
+        $extraVars = [
+            'operation'       => $data['operation'],
+            'dest_ip'         => $data['dest_ip'],
+            'dest_mask'       => $data['dest_mask'],
+            'interface_type'  => $type,
+            'distance_metric' => (int) $data['distance_metric'],
+            'routing_tag'     => (int) $data['routing_tag'],
+        ];
+
+        if ($type === 'Interface VLAN') {
+            $extraVars['interface_vlan'] = (int) $data['interface_vlan'];
+        }
+        if ($type === 'Interface VLAN' || $type === 'Null0') {
+            $extraVars['forwarding_routing_address'] = $data['forwarding_routing_address'];
+        }
+        if ($type === 'Gateway IP Address') {
+            $extraVars['gateway_ip'] = $data['gateway_ip'];
+        }
+        if ($data['operation'] === 'set') {
+            $extraVars['route_description'] = $data['route_description'];
+        }
+
+        $route = "{$data['dest_ip']} {$data['dest_mask']}";
+        [$error, $fresh] = $this->l3RunSet($hostname, 'staticroute', $extraVars, "Static route {$data['operation']} ({$route})");
+
+        if ($error) {
+            return $error;
+        }
+
+        $verb = $data['operation'] === 'delete' ? 'deleted' : 'added';
+
+        return $this->l3SetResponse("Static route {$route} {$verb} successfully", $fresh, fn (array $d) => $this->formatL3StaticRoute($d));
+    }
+
+    /* ------------------------ VLAN INTERFACE IPv4 ----------------------- */
+
+    private function formatL3VlanIp(array $d, string $hostname): array
+    {
+        $mgmtIps  = $this->l3ManagementIps($hostname);
+        $mgmtVlan = $this->l3ManagementVlan($d, $mgmtIps);
+
+        return [
+            'interfaces' => array_values(array_map(fn ($r) => [
+                'vlan_id'      => (int) ($r['vlan_id'] ?? 0),
+                'ip_attribute' => (string) ($r['ip_attribute'] ?? ''),
+                'ip_address'   => (string) ($r['ip_address'] ?? ''),
+                'operate'      => (string) ($r['operate'] ?? ''),
+                'management'   => $mgmtVlan !== null && (int) ($r['vlan_id'] ?? 0) === $mgmtVlan,
+            ], is_array($d['vlan_interface_ip_attribute'] ?? null) ? $d['vlan_interface_ip_attribute'] : [])),
+            'management_vlan' => $mgmtVlan,
+            'management_ips'  => $mgmtIps,
+            'known_vlans'     => $this->l3KnownVlans($hostname),
+        ];
+    }
+
+    public function getvlaninterfaceip(Request $request, $hostname)
+    {
+        return $this->l3CachedGet($request, $hostname, 'vlanip', fn (array $d) => $this->formatL3VlanIp($d, $hostname));
+    }
+
+    public function setvlaninterfaceip(Request $request, $hostname)
+    {
+        $rules = [
+            'operation' => 'required|string|in:set,delete',
+            'vlan_id'   => 'required|integer|min:1|max:4094',
+        ];
+
+        if ($request->input('operation') === 'set') {
+            $mask = ['nullable', 'string', $this->l3NetmaskRule(false)];
+
+            $rules += [
+                'ip_attribute'           => ['required', 'string', \Illuminate\Validation\Rule::in(self::L3_VLAN_IP_ATTRIBUTES)],
+                'ip_address'             => 'required_if:ip_attribute,Manual configuration|nullable|ipv4',
+                'ip_mask'                => array_merge(['required_if:ip_attribute,Manual configuration'], $mask),
+                'secondary_ip_address_1' => 'nullable|ipv4',
+                'secondary_ip_mask_1'    => array_merge(['required_with:secondary_ip_address_1'], $mask),
+                'secondary_ip_address_2' => 'nullable|ipv4',
+                'secondary_ip_mask_2'    => array_merge(['required_with:secondary_ip_address_2'], $mask),
+            ];
+        }
+
+        $data   = $request->validate($rules);
+        $vlanId = (int) $data['vlan_id'];
+
+        // ---- Management VLAN protection -------------------------------
+        $current = $this->l3CurrentVlanIp($hostname);
+        if ($current === null) {
+            return $this->error("Could not read the current VLAN interface IPs from the switch, so the management VLAN can't be verified - nothing was changed", null);
+        }
+
+        $mgmtIps  = $this->l3ManagementIps($hostname);
+        $mgmtVlan = $this->l3ManagementVlan($current, $mgmtIps);
+
+        if ($mgmtVlan !== null && $vlanId === $mgmtVlan) {
+            if ($data['operation'] === 'delete') {
+                return $this->l3ValidationError('vlan_id', "VLAN {$vlanId} carries the management address {$hostname}. Deleting its interface would cut this server off from the switch, so it is refused.");
+            }
+
+            if ($data['ip_attribute'] !== 'Manual configuration' || !in_array($data['ip_address'] ?? '', $mgmtIps, true)) {
+                return $this->l3ValidationError('ip_address', "VLAN {$vlanId} carries the management address {$hostname}. Changing its primary IP or switching it to DHCP would cut this server off from the switch, so it is refused.");
+            }
+
+            // Same primary IP: setvlaninterfaceip.yml still sends "no ip address"
+            // before re-adding it, over the SSH session that uses that address.
+            return $this->l3ValidationError('vlan_id', "VLAN {$vlanId} carries the management address {$hostname}. setvlaninterfaceip.yml always removes the primary IP (\"no ip address\") before setting it again, which drops the SSH session in the middle of the change and leaves the switch unreachable - so the management VLAN can't be edited from here. Change it from the switch console.");
+        }
+
+        if ($data['operation'] === 'set') {
+            foreach (['ip_address', 'secondary_ip_address_1', 'secondary_ip_address_2'] as $field) {
+                if (!empty($data[$field]) && in_array($data[$field], $mgmtIps, true)) {
+                    return $this->l3ValidationError($field, "{$data[$field]} is the switch's management address and can't be assigned to VLAN {$vlanId}.");
+                }
+            }
+        }
+
+        // ---- Run --------------------------------------------------------
+        $extraVars = ['operation' => $data['operation'], 'vlan_id' => $vlanId];
+
+        if ($data['operation'] === 'set') {
+            $extraVars['ip_attribute'] = $data['ip_attribute'];
+
+            if ($data['ip_attribute'] === 'Manual configuration') {
+                $extraVars['ip_address'] = $data['ip_address'];
+                $extraVars['ip_mask']    = $data['ip_mask'];
+            }
+
+            foreach ([1, 2] as $n) {
+                if (!empty($data["secondary_ip_address_{$n}"])) {
+                    $extraVars["secondary_ip_address_{$n}"] = $data["secondary_ip_address_{$n}"];
+                    $extraVars["secondary_ip_mask_{$n}"]    = $data["secondary_ip_mask_{$n}"];
+                }
+            }
+        }
+
+        [$error, $fresh] = $this->l3RunSet($hostname, 'vlanip', $extraVars, "VLAN {$vlanId} interface IPv4 {$data['operation']}");
+
+        if ($error) {
+            return $error;
+        }
+
+        $message = $data['operation'] === 'delete'
+            ? "VLAN {$vlanId} interface deleted successfully"
+            : "VLAN {$vlanId} interface IPv4 configured successfully";
+
+        return $this->l3SetResponse($message, $fresh, fn (array $d) => $this->formatL3VlanIp($d, $hostname));
+    }
+
+    /* ------------------------ VLAN INTERFACE IPv6 ----------------------- */
+
+    private function formatL3VlanIpv6(array $d, string $hostname): array
+    {
+        $ipv4     = $this->l3ReadGet($hostname, 'vlanip');
+        $mgmtVlan = $ipv4 !== null ? $this->l3ManagementVlan($ipv4, $this->l3ManagementIps($hostname)) : null;
+
+        return [
+            'interfaces' => array_values(array_map(fn ($r) => [
+                'vlan_id'      => (int) ($r['vlan_id'] ?? 0),
+                'ip_attribute' => (string) ($r['ip_attribute'] ?? ''),
+                'autoconfig'   => stripos((string) ($r['ip_attribute'] ?? ''), 'auto') !== false ? 'Enable' : 'Disable',
+                'ipv6_enable'  => strtolower((string) ($r['ipv6_enable'] ?? '')) === 'enable' ? 'Enable' : 'Disable',
+                'ipv6_address' => (string) ($r['ipv6_address'] ?? ''),
+                'operate'      => (string) ($r['operate'] ?? ''),
+                'management'   => $mgmtVlan !== null && (int) ($r['vlan_id'] ?? 0) === $mgmtVlan,
+            ], is_array($d['vlan_interface_ipv6'] ?? null) ? $d['vlan_interface_ipv6'] : [])),
+            'management_vlan' => $mgmtVlan,
+            'known_vlans'     => $this->l3KnownVlans($hostname),
+        ];
+    }
+
+    public function getvlaninterfaceipv6(Request $request, $hostname)
+    {
+        return $this->l3CachedGet($request, $hostname, 'vlanipv6', fn (array $d) => $this->formatL3VlanIpv6($d, $hostname));
+    }
+
+    /**
+     * setvlaninterfaceipv6.yml: set = (no) ipv6 address autoconfig, optional
+     * "ipv6 address <prefix>", (no) ipv6 enable; delete = "no interface vlan
+     * <id>", which removes the whole L3 VLAN interface (IPv4 included).
+     */
+    public function setvlaninterfaceipv6(Request $request, $hostname)
+    {
+        $rules = [
+            'operation' => 'required|string|in:set,delete',
+            'vlan_id'   => 'required|integer|min:1|max:4094',
+        ];
+
+        if ($request->input('operation') === 'set') {
+            $rules += [
+                'ip_attribute' => 'required|string|in:Enable,Disable',
+                'ipv6_enable'  => 'required|string|in:Enable,Disable',
+                'ipv6_address' => ['nullable', 'string', 'max:49', $this->l3Ipv6PrefixRule()],
+            ];
+        }
+
+        $data   = $request->validate($rules);
+        $vlanId = (int) $data['vlan_id'];
+
+        if ($data['operation'] === 'delete') {
+            $current = $this->l3CurrentVlanIp($hostname);
+            if ($current === null) {
+                return $this->error("Could not read the current VLAN interface IPs from the switch, so the management VLAN can't be verified - nothing was changed", null);
+            }
+
+            $mgmtVlan = $this->l3ManagementVlan($current, $this->l3ManagementIps($hostname));
+            if ($mgmtVlan !== null && $vlanId === $mgmtVlan) {
+                return $this->l3ValidationError('vlan_id', "VLAN {$vlanId} carries the management address {$hostname}. The IPv6 delete runs \"no interface vlan {$vlanId}\", which also removes its IPv4 address and would cut this server off from the switch, so it is refused.");
+            }
+        }
+
+        $extraVars = ['operation' => $data['operation'], 'vlan_id' => $vlanId];
+
+        if ($data['operation'] === 'set') {
+            $extraVars += [
+                'ip_attribute' => $data['ip_attribute'],
+                'ipv6_enable'  => $data['ipv6_enable'],
+                'ipv6_address' => $data['ipv6_address'] ?? null,
+            ];
+        }
+
+        [$error, $fresh] = $this->l3RunSet($hostname, 'vlanipv6', $extraVars, "VLAN {$vlanId} interface IPv6 {$data['operation']}");
+
+        if ($error) {
+            return $error;
+        }
+
+        if ($data['operation'] === 'delete' && !$this->l3Batch) {
+            // The IPv4 table lost this interface too - refresh it in the background.
+            $hosts = $this->l3Hosts($hostname);
+            if ($hosts) {
+                $this->l3RunAsync($hostname, 'vlanip', $hosts);
+            }
+        }
+
+        $message = $data['operation'] === 'delete'
+            ? "VLAN {$vlanId} interface deleted successfully"
+            : "VLAN {$vlanId} interface IPv6 configured successfully";
+
+        return $this->l3SetResponse($message, $fresh, fn (array $d) => $this->formatL3VlanIpv6($d, $hostname));
+    }
+
+    /* --------------------------- BATCH DELETE --------------------------- */
+
+    /**
+     * Delete several entries in one request: body {"items": [{...}, ...]},
+     * each item holding the same fields as that module's single delete.
+     * Every item goes through the single-delete method (same validation and
+     * management VLAN protection); the switch is re-read once at the end.
+     */
+    private function l3BatchDelete(Request $request, string $hostname, string $module, callable $format)
+    {
+        $data = $request->validate([
+            'items'   => 'required|array|min:1|max:50',
+            'items.*' => 'required|array',
+        ]);
+
+        $hosts = $this->l3Hosts($hostname);
+        if (!$hosts) {
+            return $this->error("Unknown device {$hostname}", null);
+        }
+
+        [$method, $fields] = self::L3_BATCH_DELETE[$module];
+
+        $vlanTable = null;
+        if ($module === 'vlanip' || $module === 'vlanipv6') {
+            $vlanTable = $this->l3CurrentVlanIp($hostname);
+            if ($vlanTable === null) {
+                return $this->error("Could not read the current VLAN interface IPs from the switch, so the management VLAN can't be verified - nothing was changed", null);
+            }
+        }
+
+        $results = [];
+        $this->l3Batch       = true;
+        $this->l3BatchVlanIp = $vlanTable;
+
+        try {
+            foreach ($data['items'] as $item) {
+                $item  = array_intersect_key($item, array_flip($fields));
+                $label = implode(' ', array_filter($item, fn ($value) => is_scalar($value) && $value !== ''));
+
+                try {
+                    $response = $this->{$method}(Request::create('', 'POST', ['operation' => 'delete'] + $item), $hostname);
+                    $body     = $response->getData(true);
+                    $ok       = $response->getStatusCode() === 200;
+                    $message  = $body['message'] ?? ($ok ? 'Deleted' : 'Delete failed');
+                } catch (\Illuminate\Validation\ValidationException $e) {
+                    $ok      = false;
+                    $message = collect($e->errors())->flatten()->first() ?? $e->getMessage();
+                }
+
+                $results[] = ['item' => $item, 'label' => $label, 'status' => $ok ? 'success' : 'error', 'message' => $message];
+            }
+        } finally {
+            $this->l3Batch       = false;
+            $this->l3BatchVlanIp = null;
+        }
+
+        $deleted = count(array_filter($results, fn ($r) => $r['status'] === 'success'));
+        $total   = count($results);
+
+        // One re-read for the whole batch (several set playbooks also
+        // overwrite the GET's output file, so this makes it valid again).
+        $fresh = $this->l3WithLock($hostname, $module, fn () => $this->l3RunGet($hostname, $module, $hosts));
+
+        if ($module === 'vlanipv6' && $deleted > 0) {
+            // "no interface vlan" removed the IPv4 side too.
+            $this->l3RunAsync($hostname, 'vlanip', $hosts);
+        }
+
+        $label = self::L3_MODULES[$module]['label'];
+
+        return response()->json([
+            "status"    => $deleted > 0 ? "success" : "error",
+            "message"   => "{$label}: deleted {$deleted} of {$total}" . ($fresh === null ? " - re-reading the switch failed, press Refresh" : ""),
+            "deleted"   => $deleted,
+            "failed"    => $total - $deleted,
+            "results"   => $results,
+            "data"      => $fresh === null ? null : $format($fresh),
+            "refreshed" => $fresh !== null,
+        ], $deleted > 0 ? 200 : 400);
+    }
+
+    public function batchdeleteipv6route(Request $request, $hostname)
+    {
+        return $this->l3BatchDelete($request, $hostname, 'ipv6route', fn (array $d) => $this->formatL3Ipv6Route($d));
+    }
+
+    public function batchdeletestaticroute(Request $request, $hostname)
+    {
+        return $this->l3BatchDelete($request, $hostname, 'staticroute', fn (array $d) => $this->formatL3StaticRoute($d));
+    }
+
+    public function batchdeletevlaninterfaceip(Request $request, $hostname)
+    {
+        return $this->l3BatchDelete($request, $hostname, 'vlanip', fn (array $d) => $this->formatL3VlanIp($d, $hostname));
+    }
+
+    public function batchdeletevlaninterfaceipv6(Request $request, $hostname)
+    {
+        return $this->l3BatchDelete($request, $hostname, 'vlanipv6', fn (array $d) => $this->formatL3VlanIpv6($d, $hostname));
+    }
+
+    /* ------------------------ STATIC ROUTE EDIT ------------------------- */
+
+    private const L3_STATIC_ROUTE_FIELDS = ['dest_ip', 'dest_mask', 'interface_type', 'interface_vlan', 'forwarding_routing_address', 'gateway_ip', 'distance_metric', 'routing_tag', 'route_description'];
+
+    /** Destination + next hop of a static route (what makes it "the same route"). */
+    private function l3StaticRouteKey(array $r): string
+    {
+        $hop = match ($r['interface_type']) {
+            'Interface VLAN' => 'vlan' . (int) $r['interface_vlan'] . ' ' . $r['forwarding_routing_address'],
+            'Null0'          => 'Null0 ' . $r['forwarding_routing_address'],
+            default          => $r['gateway_ip'],
+        };
+
+        return "{$r['dest_ip']} {$r['dest_mask']} {$hop}";
+    }
+
+    /**
+     * Edit a static route. The switch only knows "ip route" (add) and the
+     * exact-line "no ip route ... <distance> tag <tag>" (delete), so an edit
+     * replaces the old route with the new one:
+     *  - same destination and next hop (only distance / tag / description
+     *    change): delete the old line, then add the new one; if the add
+     *    fails the old route is put back;
+     *  - different route: add the new one first, then delete the old one,
+     *    so the destination never goes without a route.
+     * Body: "old" = the route as listed (same fields as a delete, plus
+     * route_description), and the new route's fields at the top level.
+     */
+    public function editstaticroute(Request $request, $hostname)
+    {
+        $request->validate(['old' => 'required|array']);
+
+        $fields = self::L3_STATIC_ROUTE_FIELDS;
+        $old    = array_intersect_key((array) $request->input('old'), array_flip($fields));
+        $new    = array_intersect_key($request->all(), array_flip($fields));
+
+        // Check both routes before touching the switch.
+        $rules = $this->l3StaticRouteRules();
+        $oldOk = \Illuminate\Support\Facades\Validator::make(['operation' => 'delete'] + $old, array_diff_key($rules, ['route_description' => 1]));
+        if ($oldOk->fails()) {
+            return $this->l3ValidationError('old', 'The route being edited is not valid: ' . $oldOk->errors()->first());
+        }
+        \Illuminate\Support\Facades\Validator::make(['operation' => 'set'] + $new, $rules)->validate();
+
+        $hosts = $this->l3Hosts($hostname);
+        if (!$hosts) {
+            return $this->error("Unknown device {$hostname}", null);
+        }
+
+        $sameRoute = $this->l3StaticRouteKey($old) === $this->l3StaticRouteKey($new);
+        $sameLine  = $sameRoute
+            && (int) $old['distance_metric'] === (int) $new['distance_metric']
+            && (string) $old['routing_tag'] === (string) $new['routing_tag'];
+
+        if ($sameLine && (string) ($old['route_description'] ?? '') === (string) $new['route_description']) {
+            return $this->l3ValidationError('route_description', 'Nothing was changed.');
+        }
+
+        // Put-back copy of the old route: "set" needs a valid description.
+        $restoreDescription = preg_match('/^[A-Za-z0-9_.-]{1,64}$/', (string) ($old['route_description'] ?? '')) ? $old['route_description'] : 'restored';
+
+        // A delete doesn't use the description, and the switch's own
+        // description may not pass the set's strict pattern - leave it out.
+        $run     = fn (string $operation, array $route) => $this->setstaticroute(Request::create('', 'POST', ['operation' => $operation]
+            + ($operation === 'delete' ? array_diff_key($route, ['route_description' => 1]) : $route)), $hostname);
+        $ok      = fn ($response) => $response->getStatusCode() === 200;
+        $message = fn ($response) => (string) ($response->getData(true)['message'] ?? 'failed');
+
+        $this->l3Batch = true;
+
+        try {
+            if ($sameRoute) {
+                $delete = $run('delete', $old);
+
+                if (!$ok($delete)) {
+                    [$success, $text] = [false, 'Could not remove the old route, nothing was changed: ' . $message($delete)];
+                } else {
+                    $add = $run('set', $new);
+
+                    if ($ok($add)) {
+                        [$success, $text] = [true, 'Static route ' . $this->l3StaticRouteKey($new) . ' updated successfully'];
+                    } else {
+                        $restore = $run('set', ['route_description' => $restoreDescription] + $old);
+                        [$success, $text] = [false, 'Could not add the new route: ' . $message($add)
+                            . ($ok($restore) ? ' - the old route was put back.' : ' - putting the old route back ALSO failed (' . $message($restore) . '). Re-add it manually.')];
+                    }
+                }
+            } else {
+                $add = $run('set', $new);
+
+                if (!$ok($add)) {
+                    [$success, $text] = [false, 'Could not add the new route, the old route was not changed: ' . $message($add)];
+                } else {
+                    $delete = $run('delete', $old);
+                    [$success, $text] = $ok($delete)
+                        ? [true, 'Static route updated: ' . $this->l3StaticRouteKey($old) . ' replaced by ' . $this->l3StaticRouteKey($new)]
+                        : [false, 'The new route was added, but removing the old one failed: ' . $message($delete) . '. Delete it from the list.'];
+                }
+            }
+        } finally {
+            $this->l3Batch = false;
+        }
+
+        $fresh = $this->l3WithLock($hostname, 'staticroute', fn () => $this->l3RunGet($hostname, 'staticroute', $hosts));
+
+        return response()->json([
+            "status"    => $success ? "success" : "error",
+            "message"   => $text . ($fresh === null ? ' (re-reading the switch failed - press Refresh)' : ''),
+            "data"      => $fresh === null ? null : $this->formatL3StaticRoute($fresh),
+            "refreshed" => $fresh !== null,
+        ], $success ? 200 : 400);
+    }
 }

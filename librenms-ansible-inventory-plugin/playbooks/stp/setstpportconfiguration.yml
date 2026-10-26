@@ -37,8 +37,14 @@
 #   Enable  -> spanning-tree bpdufilter enable
 #   Disable -> no spanning-tree bpdufilter
 #ansible-playbook -i hosts/10.10.10.1.yml playbooks/stp/setstpportconfiguration.yml -e "operation=set interface=GigaEthernet0/1 protocol_status=Enable priority=128 path_cost=100 edge_port=Enable rstp_ring=Enable bpdu_filter=Enable"
-#ansible-playbook -i inventory/192.168.200.245.yml playbooks/stp/setstpportconfiguration.yml -e "operation=set interface=GigaEthernet0/1 protocol_status=Disable"
-#ansible-playbook -i inventory/192.168.200.245.yml playbooks/stp/setstpportconfiguration.yml -e "operation=delete interface=GigaEthernet0/1"
+#ansible-playbook -i inventory/192.168.200.245.yml \
+ # playbooks/stp/setstpportconfiguration.yml \
+ # -e "operation=set interface=GigaEthernet0/1 protocol_status=Disable"
+
+#ansible-playbook -i inventory/192.168.200.245.yml \
+  #playbooks/stp/setstpportconfiguration.yml \
+  #-e "operation=delete interface=GigaEthernet0/1"
+
 # ============================================================================
 
 - name: STP Port Configuration - SET
@@ -61,30 +67,28 @@
     output_file: "{{ output_dir }}/{{ ansible_host }}_stp_port_configuration.yml"
 
 
+    # ------------------------------------------------------------------------
+    # Parameters
+    # ------------------------------------------------------------------------
+
+    operation: "{{ operation | default('set') }}"
+
+    interface: "{{ interface | default('') }}"
+
+    protocol_status: "{{ protocol_status | default('') }}"
+
+    priority: "{{ priority | default('') }}"
+
+    path_cost: "{{ path_cost | default('') }}"
+
+    edge_port: "{{ edge_port | default('') }}"
+
+    rstp_ring: "{{ rstp_ring | default('') }}"
+
+    bpdu_filter: "{{ bpdu_filter | default('') }}"
+
 
   tasks:
-
-    # ========================================================================
-    # Parameter defaults
-    #
-    # Set here rather than in play vars: a play var such as
-    #   priority: "{{ priority | default('') }}"
-    # refers to itself, so any parameter not passed with -e (e.g. priority
-    # on operation=delete) fails with "Recursive loop detected in template".
-    # set_fact is evaluated once, and -e values still take precedence.
-    # ========================================================================
-
-    - name: Apply parameter defaults
-      ansible.builtin.set_fact:
-        operation: "{{ operation | default('set') }}"
-        interface: "{{ interface | default('') }}"
-        protocol_status: "{{ protocol_status | default('') }}"
-        priority: "{{ priority | default('') }}"
-        path_cost: "{{ path_cost | default('') }}"
-        edge_port: "{{ edge_port | default('') }}"
-        rstp_ring: "{{ rstp_ring | default('') }}"
-        bpdu_filter: "{{ bpdu_filter | default('') }}"
-
 
     # ========================================================================
     # Validate operation
