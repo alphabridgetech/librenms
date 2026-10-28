@@ -129,6 +129,7 @@ Route::prefix('v0')->group(function () {
         Route::post('stp/port/set/{hostname}', [App\Api\Controllers\KunalApiController::class, 'setstpport'])->name('stp.port.set');
         Route::get('stp/portguard/show/{hostname}', [App\Api\Controllers\KunalApiController::class, 'getstpportguard'])->name('stp.portguard.show');
         Route::post('stp/portguard/set/{hostname}', [App\Api\Controllers\KunalApiController::class, 'setstpportguard'])->name('stp.portguard.set');
+        Route::get('devicecapabilities/{hostname}', [App\Api\Controllers\KunalApiController::class, 'devicecapabilities'])->name('devicecapabilities');
         Route::get('l3/ipv6route/show/{hostname}', [App\Api\Controllers\KunalApiController::class, 'getipv6route'])->name('l3.ipv6route.show');
         Route::post('l3/ipv6route/set/{hostname}', [App\Api\Controllers\KunalApiController::class, 'setipv6route'])->name('l3.ipv6route.set');
         Route::get('l3/staticroute/show/{hostname}', [App\Api\Controllers\KunalApiController::class, 'getstaticroute'])->name('l3.staticroute.show');

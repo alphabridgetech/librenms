@@ -31,6 +31,7 @@
                 <i class="fa fa-spinner fa-spin"></i> reading from device...
             </span>
             <span id="sr_cache_note" class="text-muted" style="display:none; margin-left:10px;">last known data, refreshing...</span>
+            <span id="sr_playbook" class="label label-default" style="display:none; margin-left:10px; font-weight:normal;"></span>
             <button type="button" class="btn btn-xs btn-default pull-right" onclick="loadSr('refresh')">
                 <i class="fa fa-refresh"></i> Refresh
             </button>
@@ -280,6 +281,19 @@
         srTable.ajax.reload(null, false);
     }
 
+    // Which playbook read this switch, e.g.
+    // "static_route_l3/switchv1alphabridge/10g/getstaticroute.yml" -> "switchv1alphabridge / 10g",
+    // "static_route_l3/getstaticroute.yml" -> common.
+    function srShowPlaybook(playbook) {
+        const el = document.getElementById('sr_playbook');
+        if (!playbook) { el.style.display = 'none'; return; }
+        const variant = playbook.split('/').slice(1, -1).join(' / ');
+        el.className = 'label ' + (variant ? 'label-info' : 'label-default');
+        el.textContent = 'Playbook: ' + (variant || 'common');
+        el.title = 'playbooks/' + playbook;
+        el.style.display = 'inline';
+    }
+
     function loadSr(mode) {
         const loading = document.getElementById('sr_loading');
         loading.style.display = 'inline';
@@ -292,6 +306,7 @@
             success: function (res) {
                 loading.style.display = 'none';
                 renderSr(res.data, res.cached);
+                srShowPlaybook(res.playbook);
                 if (res.cached) srPeekTimer = setTimeout(() => loadSr('peek'), 30000);
             },
             error: function (xhr) {

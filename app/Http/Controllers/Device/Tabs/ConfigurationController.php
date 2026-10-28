@@ -119,18 +119,30 @@ class ConfigurationController implements DeviceTab
     $tftpServer = $request->getHost();
 
         
+        // Tabs this switch doesn't support (resources/definitions/
+        // config_module_support.yaml) are left out of the menu, and opening
+        // one by its url shows a notice instead of the page.
+        $submenu = $this->supportedTabs($device, [
+            $this->getTabs($device),
+            'Basic Configuration'  => $this->getbasicconfigTabs($device),
+            'L2 Configuration'  => $this->getl2configTabs($device),
+            'L3 Configuration'  => $this->getl3configTabs($device),
+            'Port Configuration'  => $this->getportconfigTabs($device),
+            'System Management'  => $this->getsysmanageconfigTabs($device),
+        ]);
+
+        $unsupportedTab = null;
+        if (!\App\Services\DeviceCapabilities::supports($device, $tab)) {
+            $unsupportedTab = $tab;
+            $tab = 'notsupported';
+        }
+
         return array_merge([
             'tab' => $tab,
+            'unsupported_tab' => $unsupportedTab,
             'details' => $this->detail,
             
-            'submenu' => [
-                $this->getTabs($device),
-                'Basic Configuration'  => $this->getbasicconfigTabs($device),
-                'L2 Configuration'  => $this->getl2configTabs($device),
-                'L3 Configuration'  => $this->getl3configTabs($device),
-                'Port Configuration'  => $this->getportconfigTabs($device),
-                'System Management'  => $this->getsysmanageconfigTabs($device),
-            ],
+            'submenu' => $submenu,
             'tftpServer' => $tftpServer,
             'tftp_files' => $tftpFiles,
             'backup_time' => \DB::table('config')->where('config_name', 'backup_time')->value('config_value') ?: '01:30',
@@ -293,6 +305,22 @@ class ConfigurationController implements DeviceTab
 
 
    
+    /** $groups without the tabs $device doesn't support, and without groups left empty. */
+    private function supportedTabs(Device $device, array $groups): array
+    {
+        foreach ($groups as $header => $items) {
+            $items = array_values(array_filter($items, fn ($sm) => \App\Services\DeviceCapabilities::supports($device, $sm['url'])));
+
+            if ($items || is_int($header)) {
+                $groups[$header] = $items;
+            } else {
+                unset($groups[$header]);
+            }
+        }
+
+        return $groups;
+    }
+
     private function getTabs(Device $device): array
     {
         $tabs = [

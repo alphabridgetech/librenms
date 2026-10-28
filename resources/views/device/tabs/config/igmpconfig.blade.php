@@ -81,6 +81,9 @@
 
 <div class="container-fluid" style="margin-top:30px; padding-left:0; padding-right:0;">
     @php
+        // Sub-tabs this switch supports (resources/definitions/config_module_support.yaml).
+        $igmpVlanListOn = \App\Services\DeviceCapabilities::supports($device, 'igmpconfig.vlanlist');
+
         // Same short-form port mapping used by the Port Channel tab -
         // igmp_snooping_vlan_config_set.yml's member_port has no format
         // validation of its own (a real gap in the playbook), so this is
@@ -103,7 +106,9 @@
     <!-- Tabs -->
     <ul class="nav nav-tabs">
         <li class="active"><a href="#igmp_global_tab" data-toggle="tab">IGMP Snooping</a></li>
+        @if($igmpVlanListOn)
         <li><a href="#igmp_vlan_tab" data-toggle="tab">IGMP Snooping VLAN List </a></li>
+        @endif
         <li><a href="#igmp_filter_tab" data-toggle="tab">IGMP Snooping Filter Configuration List </a></li>
         <li><a href="#igmp_multicast_tab" data-toggle="tab">  Static Multicast Address List</a></li>
         
@@ -451,6 +456,9 @@
 <script>
     const IGMP_DEVICE_IP = "{{ $device->hostname }}";
     const IGMP_API_TOKEN = "{{ $data['api_token'] }}";
+    // false when the VLAN List sub-tab is hidden for this switch: its table
+    // then stays empty and never asks the switch.
+    const IGMP_VLAN_LIST = @json($igmpVlanListOn);
 
     /* -----------------------------------------------------
        GLOBAL CONFIGURATION
@@ -558,7 +566,8 @@
         processing: true,
         serverSide: false,
         autoWidth: false,
-        ajax: {
+        data: [],
+        ajax: !IGMP_VLAN_LIST ? null : {
             url: "/api/v0/igmp/vlan/show/" + IGMP_DEVICE_IP,
             type: "GET",
             headers: { "Authorization": "Bearer " + IGMP_API_TOKEN, "Accept": "application/json" },

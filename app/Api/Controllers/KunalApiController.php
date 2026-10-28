@@ -4866,11 +4866,61 @@ public function getvlan($hostname)
     private bool $l3Batch = false;
     private ?array $l3BatchVlanIp = null;
 
-    private function l3Playbook(string $module, string $which): string
+    private function l3Playbook(string $module, string $which, ?string $hostname = null): string
     {
         $m = self::L3_MODULES[$module];
 
-        return "{$this->pluginPath}/playbooks/{$m['dir']}/{$m[$which]}.yml";
+        return $this->devicePlaybook("{$m['dir']}/{$m[$which]}.yml", $hostname);
+    }
+
+    /** The playbook $hostname gets, relative to playbooks/ - e.g. "static_route_l3/switchv1alphabridge/10g/getstaticroute.yml". */
+    private function l3PlaybookName(string $module, string $which, string $hostname): string
+    {
+        return substr($this->l3Playbook($module, $which, $hostname), strlen("{$this->pluginPath}/playbooks/"));
+    }
+
+    /**
+     * Playbook path for a device - the most specific one that exists:
+     *
+     *   playbooks/<dir>/<family>/<speed>/<file>   e.g. static_route_l3/switchv1alphabridge/10g/
+     *   playbooks/<dir>/<family>/<file>           e.g. static_route_l3/switchv2alphabridge/
+     *   playbooks/<dir>/<file>                    common playbook
+     *
+     * family is the detected OS (os_detection/<os>.yaml) and speed the
+     * fastest physical port, both from discovery (App\Services\DeviceCapabilities),
+     * so a variant is only needed where a family's or model's CLI differs.
+     */
+    private function devicePlaybook(string $relative, ?string $hostname): string
+    {
+        $base = "{$this->pluginPath}/playbooks/" . dirname($relative);
+        $file = basename($relative);
+        $caps = $hostname ? \App\Services\DeviceCapabilities::forHostname($hostname) : null;
+
+        $candidates = [];
+        if (!empty($caps['family'])) {
+            if (!empty($caps['speed_slug'])) {
+                $candidates[] = "{$base}/{$caps['family']}/{$caps['speed_slug']}/{$file}";
+            }
+            $candidates[] = "{$base}/{$caps['family']}/{$file}";
+        }
+
+        foreach ($candidates as $path) {
+            if (is_file($path)) {
+                return $path;
+            }
+        }
+
+        return "{$base}/{$file}";
+    }
+
+    /** GET devicecapabilities/{hostname}: family, firmware, speed and ports from discovery. */
+    public function devicecapabilities($hostname)
+    {
+        $caps = \App\Services\DeviceCapabilities::forHostname($hostname);
+
+        return $caps === null
+            ? response()->json(["status" => "error", "message" => "Unknown device {$hostname}"], 404)
+            : $this->success(["data" => $caps]);
     }
 
     private function l3OutputFile(string $hostname, string $module, string $which): string
@@ -4927,7 +4977,7 @@ public function getvlan($hostname)
     private function l3RunAsync(string $hostname, string $module, string $hosts): void
     {
         $lock = escapeshellarg($this->l3LockPath($hostname, $module));
-        $cmd  = "source {$this->venv} && flock -n {$lock} ansible-playbook -i {$hosts} " . $this->l3Playbook($module, 'get') . " > /dev/null 2>&1 &";
+        $cmd  = "source {$this->venv} && flock -n {$lock} ansible-playbook -i {$hosts} " . $this->l3Playbook($module, 'get', $hostname) . " > /dev/null 2>&1 &";
 
         shell_exec($cmd);
     }
@@ -4951,7 +5001,7 @@ public function getvlan($hostname)
      */
     private function l3RunGet(string $hostname, string $module, string $hosts, ?string &$output = null): ?array
     {
-        $output = $this->runAnsiblejs($this->l3Playbook($module, 'get'), $hosts);
+        $output = $this->runAnsiblejs($this->l3Playbook($module, 'get', $hostname), $hosts);
 
         return $this->l3ReadGet($hostname, $module);
     }
@@ -4982,6 +5032,7 @@ public function getvlan($hostname)
                     "data"       => $format($saved),
                     "cached"     => false,
                     "updated_at" => @filemtime($this->l3OutputFile($hostname, $module, 'get_out')) ?: null,
+                    "playbook"   => $this->l3PlaybookName($module, 'get', $hostname),
                 ]);
             }
         }
@@ -4996,6 +5047,7 @@ public function getvlan($hostname)
                     "data"       => $format($cached),
                     "cached"     => true,
                     "updated_at" => @filemtime($this->l3OutputFile($hostname, $module, 'get_out')) ?: null,
+                    "playbook"   => $this->l3PlaybookName($module, 'get', $hostname),
                 ]);
             }
         }
@@ -5020,6 +5072,7 @@ public function getvlan($hostname)
             "data"       => $format($data),
             "cached"     => false,
             "updated_at" => @filemtime($this->l3OutputFile($hostname, $module, 'get_out')) ?: null,
+            "playbook"   => $this->l3PlaybookName($module, 'get', $hostname),
         ]);
     }
 
@@ -5075,7 +5128,7 @@ public function getvlan($hostname)
             $setFile = $this->l3OutputFile($hostname, $module, 'set_out');
             @unlink($setFile);
 
-            $output = (string) $this->runAnsiblejs($this->l3Playbook($module, 'set'), $hosts, $extraVars);
+            $output = (string) $this->runAnsiblejs($this->l3Playbook($module, 'set', $hostname), $hosts, $extraVars);
             $result = file_exists($setFile) ? $this->parseYamlSafely($setFile) : null;
 
             $failed = $this->ansiblePlaybookFailed($output)

@@ -313,6 +313,7 @@ Route::middleware(['auth', 'license'])->group(function () {
         Route::get('/device/{device}/edit', [Device\EditDeviceController::class, 'index'])->name('device.edit');
         Route::put('/device/{device}/edit', [Device\EditDeviceController::class, 'update'])->name('device.edit.update');
         Route::post('/device/{device}/rediscover', [DeviceController::class, 'rediscover'])->name('device.rediscover');
+        Route::post('/delhost/bulk', \App\Http\Controllers\DeviceBulkDeleteController::class)->name('delhost.bulk');
     });
 
     Route::prefix('device/{device}')->name('device.')->group(function () {

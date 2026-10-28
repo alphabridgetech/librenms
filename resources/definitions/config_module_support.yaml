@@ -1,0 +1,37 @@
+# Which Configuration tabs a switch gets, by what discovery found on it
+# (App\Services\DeviceCapabilities). A tab with no entry here is shown on
+# every switch.
+#
+# <tab url>:            the url part of the tab, e.g. stpconfig
+#   only:               show the tab only when ANY of these matches
+#     - speed: 1g
+#   hide:               never show the tab when ANY of these matches
+#     - family: switchv2alphabridge
+#
+# One match line can use:
+#   family:    detected OS, e.g. switchv1alphabridge
+#   speed:     fastest physical port, e.g. 1g, 10g, 100g
+#   hardware:  model, e.g. AS200/12/XF
+# Each takes one value or a list; everything in one line must match.
+#
+#   - family: switchv1alphabridge
+#     speed: [10g, 100g]      -> V1 switches at 10G or 100G
+#
+# A switch whose family/speed is not known yet (not discovered) is never
+# hidden by a rule.
+
+# stpconfig:
+#   only:
+#     - speed: 1g
+# pdpconfig:
+#   only:
+#     - speed: 1g
+
+# A section inside a page is written as <tab>.<section>. Sections that
+# can be switched off this way:
+#   igmpconfig.vlanlist   IGMP page -> "IGMP Snooping VLAN List"
+#
+# Example - hide the IGMP VLAN List on V1 switches:
+# igmpconfig.vlanlist:
+#   hide:
+#     - family: switchv1alphabridge

@@ -198,6 +198,18 @@
             </div>
 
             <div class="cfgsidebar-content">
+                @php($cfgCaps = \App\Services\DeviceCapabilities::for($device))
+                <div class="text-muted" style="margin-bottom:10px; font-size:12px;"
+                     title="Worked out from discovery: OS detection, firmware and the fastest physical port">
+                    <i class="fa fa-microchip"></i>
+                    <strong>{{ $cfgCaps['hardware'] ?: '-' }}</strong>
+                    &middot; {{ $cfgCaps['family_text'] }}
+                    @if($cfgCaps['speed'])
+                        &middot; <span class="label label-info">{{ $cfgCaps['speed'] }}</span>
+                    @endif
+                    &middot; {{ $cfgCaps['port_count'] }} ports
+                    &middot; firmware {{ $cfgCaps['version'] ?: '-' }}
+                </div>
                 @includeFirst(['device.tabs.config.' . $data['tab'], 'device.tabs.config.home'])
             </div>
         </div>
