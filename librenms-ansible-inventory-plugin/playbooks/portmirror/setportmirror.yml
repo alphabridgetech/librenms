@@ -1,0 +1,316 @@
+
+# ============================================================
+# Set Port Mirroring Configuration
+#
+# Configures port mirroring with port-based or flow-based
+# RSPAN destination settings and source interface direction.
+# Supports destination commands with or without the type keyword.
+# Validates switch prompts and reports configuration results.
+# Saves the execution report in the output directory.
+#
+# Required Parameters:
+# - mirror_port: Destination interface
+# - mirrored_port: Source interface
+# - mirror_type: port-based or flow-based
+# - mirror_mode: RX, TX, RX & TX, or BOTH
+# - vid: RSPAN VLAN ID
+# - tpid: TPID value
+# - portmirror_type_keyword: true or false
+#
+# Ansible command for the AS210T
+#  ansible-playbook -i inventory/10.10.10.1.yml   playbooks/portconfiguration/portmirror/setportmirror.yml   -e '{"mirror_port":"g0/2","mirror_type":"port-based","mirrored_port":"g0/3","mirror_mode":"TX","vid":23,"tpid":"0x0025","portmirror_type_keyword":false}'
+#  Ansible command for the 12XTS
+#  ansible-playbook -i inventory/10.10.10.1.yml   playbooks/portconfiguration/portmirror/setportmirror.yml   -e '{"mirror_port":"g0/7","mirror_type":"port-based","mirrored_port":"g0/1","mirror_mode":"TX","vid":45,"tpid":"0x0021","portmirror_type_keyword":true}'
+#ansible-playbook -i inventory/10.10.10.1.yml   playbooks/portconfiguration/portmirror/setportmirror.yml   -e '{"mirror_port":"g0/7","mirror_type":"flow-based","mirrored_port":"g0/1","mirror_mode":"TX","vid":45,"tpid":"0x0021","portmirror_type_keyword":true}'
+# ============================================================
+
+---
+- name: Set Port Mirroring Configuration
+  hosts: alphabridge_devices
+  gather_facts: false
+  connection: local
+
+  vars:
+    project_root: "{{ playbook_dir }}/../../.."
+    output_dir: "{{ project_root }}/output"
+    tmp_dir: "{{ project_root }}/tmp"
+
+  tasks:
+    - name: Validate port mirroring parameters
+      ansible.builtin.assert:
+        that:
+          - mirror_port is defined
+          - mirrored_port is defined
+          - (mirror_type | default('port-based')) in ['port-based', 'flow-based']
+          - (mirror_mode | default('TX') | upper) in ['RX', 'TX', 'RX & TX', 'BOTH']
+          - (vid | default(45) | int) >= 1
+          - (vid | default(45) | int) <= 4094
+          - (tpid | default('0x0021') | string | length) > 0
+        fail_msg: "Invalid port mirroring parameters."
+        success_msg: "Port mirroring parameters validated."
+
+    - name: Create output directory
+      ansible.builtin.file:
+        path: "{{ output_dir }}"
+        state: directory
+        mode: "0755"
+
+    - name: Create temporary directory
+      ansible.builtin.file:
+        path: "{{ tmp_dir }}"
+        state: directory
+        mode: "0755"
+
+    - name: Generate port mirroring configuration script
+      ansible.builtin.copy:
+        dest: "{{ tmp_dir }}/set_portmirror.py"
+        mode: "0755"
+        content: |
+          import sys
+          import time
+          import json
+          import re
+          import paramiko
+
+          HOST = "{{ ansible_host | default(inventory_hostname) }}"
+          PORT = int("{{ ansible_port | default(22) }}")
+          USERNAME = "{{ ansible_user | default(ansible_ssh_user | default('admin')) }}"
+          PASSWORD = "{{ ansible_password | default(ansible_ssh_pass | default('')) }}"
+
+          DEST_PORT = "{{ mirror_port }}"
+          SOURCE_PORT = "{{ mirrored_port }}"
+          MIRROR_TYPE = "{{ mirror_type | default('port-based') }}"
+          MIRROR_MODE = "{{ mirror_mode | default('TX') | upper }}"
+          VID = "{{ vid | default(45) }}"
+          TPID = "{{ tpid | default('0x0021') }}"
+          TYPE_KEYWORD = {{ (portmirror_type_keyword | default(false) | bool) }}
+
+          OUTPUT_FILE = "{{ output_dir }}/{{ inventory_hostname }}_portmirror.yml"
+
+          def normalize_port(port):
+              port = str(port).strip()
+              match = re.fullmatch(r"[gG](?:igaEthernet)?\s*0?\s*/\s*(\d+)", port)
+              if match:
+                  return "g0/" + match.group(1)
+              return port
+
+          def read_output(channel, wait=1):
+              time.sleep(wait)
+              output = ""
+              while channel.recv_ready():
+                  output += channel.recv(65535).decode("utf-8", errors="ignore")
+                  time.sleep(0.2)
+              return output
+
+          def run_command(channel, command, wait=2):
+              channel.send(command + "\n")
+              return read_output(channel, wait)
+
+          def last_prompt(output):
+              lines = [line.strip() for line in output.splitlines() if line.strip()]
+              if not lines:
+                  return ""
+              return lines[-1].replace("\x1b", "").strip()
+
+          def has_cli_error(output):
+              patterns = [
+                  r"Unknown command",
+                  r"Invalid command",
+                  r"invalid input",
+                  r"Incomplete command",
+                  r"% Error",
+                  r"% Invalid",
+                  r"destination port failed",
+                  r"source port failed"
+              ]
+              return any(re.search(p, output, re.IGNORECASE) for p in patterns)
+
+          def main():
+              client = None
+              status = "failed"
+              results = []
+              errors = []
+
+              report = {
+                  "host": HOST,
+                  "status": status,
+                  "mirror_session": 1,
+                  "mirror_type": MIRROR_TYPE,
+                  "destination_port": DEST_PORT,
+                  "source_port": SOURCE_PORT,
+                  "source_mode": MIRROR_MODE,
+                  "rspan_vlan": VID,
+                  "tpid": TPID,
+                  "type_keyword_enabled": TYPE_KEYWORD,
+                  "results": results,
+                  "errors": errors
+              }
+
+              try:
+                  client = paramiko.SSHClient()
+                  client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+                  client.connect(
+                      hostname=HOST,
+                      port=PORT,
+                      username=USERNAME,
+                      password=PASSWORD,
+                      look_for_keys=False,
+                      allow_agent=False,
+                      timeout=15,
+                      banner_timeout=15,
+                      auth_timeout=15
+                  )
+
+                  channel = client.invoke_shell()
+                  initial_output = read_output(channel, 2)
+                  prompt = last_prompt(initial_output)
+
+                  results.append({
+                      "step": "initial_prompt",
+                      "prompt": prompt,
+                      "output": initial_output.strip()
+                  })
+
+                  if not prompt:
+                      raise RuntimeError("Could not read the switch prompt.")
+
+                  if "config#" not in prompt.lower():
+                      if prompt.endswith(">"):
+                          output = run_command(channel, "enable", 2)
+                          results.append({
+                              "command": "enable",
+                              "output": output.strip()
+                          })
+
+                          if has_cli_error(output):
+                              raise RuntimeError(
+                                  "The switch rejected the enable command."
+                              )
+
+                          prompt = last_prompt(output)
+                          if not prompt.endswith("#"):
+                              raise RuntimeError(
+                                  "Enable did not reach privileged EXEC mode. "
+                                  "Prompt: " + prompt
+                              )
+
+                      output = run_command(channel, "config", 2)
+                      results.append({
+                          "command": "config",
+                          "output": output.strip()
+                      })
+
+                      prompt = last_prompt(output)
+                      if has_cli_error(output) or "config#" not in prompt.lower():
+                          raise RuntimeError(
+                              "Could not enter configuration mode. "
+                              "Current prompt: " + prompt
+                          )
+
+                  dest_port = normalize_port(DEST_PORT)
+                  source_port = normalize_port(SOURCE_PORT)
+
+                  type_keyword = (
+                      "flowbased" if MIRROR_TYPE == "flow-based"
+                      else "portbased"
+                  )
+
+                  typed_destination = (
+                      "mirror session 1 destination interface "
+                      + dest_port + " " + type_keyword
+                      + " rspan " + str(VID) + " " + TPID
+                  )
+
+                  untyped_destination = (
+                      "mirror session 1 destination interface "
+                      + dest_port + " rspan " + str(VID) + " " + TPID
+                  )
+
+                  if TYPE_KEYWORD:
+                      destination_commands = [typed_destination]
+                  else:
+                      destination_commands = [
+                          untyped_destination,
+                          typed_destination
+                      ]
+
+                  destination_success = False
+
+                  for command in destination_commands:
+                      output = run_command(channel, command, 3)
+                      results.append({
+                          "command": command,
+                          "output": output.strip()
+                      })
+
+                      if has_cli_error(output):
+                          errors.append(
+                              "Destination command failed: " + command
+                          )
+                          continue
+
+                      destination_success = True
+                      break
+
+                  if not destination_success:
+                      raise RuntimeError(
+                          "All destination command formats failed."
+                      )
+
+                  mode_map = {
+                      "RX": "rx",
+                      "TX": "tx",
+                      "RX & TX": "both",
+                      "BOTH": "both"
+                  }
+
+                  source_mode = mode_map[MIRROR_MODE]
+                  source_command = (
+                      "mirror session 1 source interface "
+                      + source_port + " " + source_mode
+                  )
+
+                  source_output = run_command(channel, source_command, 3)
+                  results.append({
+                      "command": source_command,
+                      "output": source_output.strip()
+                  })
+
+                  if has_cli_error(source_output):
+                      raise RuntimeError("Source command failed.")
+
+                  status = "success"
+
+              except Exception as exc:
+                  errors.append(str(exc))
+                  status = "failed"
+
+              finally:
+                  if client:
+                      client.close()
+
+              report["status"] = status
+
+              with open(OUTPUT_FILE, "w") as report_file:
+                  json.dump(report, report_file, indent=2)
+                  report_file.write("\n")
+
+              print(json.dumps(report, indent=2))
+              sys.exit(0 if status == "success" else 1)
+
+          if __name__ == "__main__":
+              main()
+
+    - name: Execute port mirroring configuration script
+      ansible.builtin.command:
+        argv:
+          - python3
+          - "{{ tmp_dir }}/set_portmirror.py"
+      register: portmirror_result
+      changed_when: portmirror_result.rc == 0
+      failed_when: portmirror_result.rc != 0
+
+    - name: Display port mirroring configuration result
+      ansible.builtin.debug:
+        var: portmirror_result.stdout
+
