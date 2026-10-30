@@ -1,0 +1,451 @@
+
+---
+# ============================================================================
+# File        : setkeepalive.yml
+# Feature     : Keepalive - SET
+#
+# Purpose:
+#   Configure keepalive on a specified GigaEthernet interface.
+#
+# Parameters:
+#   interface : GigaEthernet interface name
+#   status    : Enable / Disable
+#   period    : Keepalive interval in seconds (when enabled)
+#
+# Commands:
+#   Enable  : keepalive
+#   Disable : no keepalive
+#   Period  : keepalive <seconds>
+#
+# Output:
+#   /home/gayatri/ansible/ABOSS/output/<device-ip>_keepalive_set.yml
+#
+# Ansible command for the eanble and the disable:
+# ansible-playbook -i inventory/10.10.10.1.yml playbooks/portconfiguration/keepalive/setkeepalive.yml -e "interface=GigaEthernet0/1 status=Enable period=20"
+#
+#ansible-playbook -i inventory/10.10.10.1.yml playbooks/portconfiguration/keepalive/setkeepalive.yml -e "interface=GigaEthernet0/1 status=Disable"
+# ============================================================================
+
+- name: Set Keepalive Configuration
+  hosts: all
+  gather_facts: no
+  connection: local
+
+  vars:
+
+    # ------------------------------------------------------------------------
+    # Default directories
+    #
+    # These can be overridden from the command line:
+    #
+    # -e '{"output_dir": "...", "tmp_dir": "..."}'
+    # ------------------------------------------------------------------------
+
+    output_dir: "{{ playbook_dir }}/../../output"
+
+    tmp_dir: "{{ playbook_dir }}/../../tmp"
+
+  tasks:
+
+    # ========================================================================
+    # VALIDATE REQUIRED INTERFACE
+    # ========================================================================
+
+    - name: Validate interface
+      ansible.builtin.assert:
+        that:
+          - interface is defined
+          - interface | length > 0
+        fail_msg: "interface is required"
+
+    # ========================================================================
+    # VALIDATE STATUS
+    # ========================================================================
+
+    - name: Validate status
+      ansible.builtin.assert:
+        that:
+          - status is defined
+          - status in ['Enable', 'Disable']
+        fail_msg: "status must be Enable or Disable"
+
+    # ========================================================================
+    # VALIDATE KEEPALIVE PERIOD
+    # ========================================================================
+
+    - name: Validate keepalive period
+      ansible.builtin.assert:
+        that:
+          - status != 'Enable' or period is defined
+          - status != 'Enable' or (period | string | regex_search('^[0-9]+$')) is not none
+          - status != 'Enable' or (period | int >= 0 and period | int <= 32767)
+        fail_msg: "period must be a positive integer when status=Enable"
+
+    # ========================================================================
+    # CREATE OUTPUT DIRECTORY
+    # ========================================================================
+
+    - name: Create output directory
+      ansible.builtin.file:
+        path: "{{ output_dir }}"
+        state: directory
+        mode: "0755"
+      delegate_to: localhost
+
+    # ========================================================================
+    # CREATE TEMP DIRECTORY
+    # ========================================================================
+
+    - name: Create temporary script directory
+      ansible.builtin.file:
+        path: "{{ tmp_dir }}"
+        state: directory
+        mode: "0755"
+      delegate_to: localhost
+
+    # ========================================================================
+    # CREATE PYTHON SCRIPT
+    # ========================================================================
+
+    - name: Create Keepalive SET script
+      ansible.builtin.copy:
+        dest: "{{ tmp_dir }}/set_keepalive.py"
+        mode: "0755"
+        content: |
+          #!/usr/bin/env python3
+
+          import paramiko
+          import time
+          import json
+          import re
+          import sys
+
+          HOST = "{{ ansible_host | default(inventory_hostname) }}"
+          USER = "{{ ansible_user | default('admin') }}"
+          PASS = "{{ ansible_password | default('admin') }}"
+
+          INTERFACE = "{{ interface }}"
+          STATUS = "{{ status }}"
+          PERIOD = "{{ period | default('') }}"
+
+          # ================================================================
+          # CLEAN OUTPUT
+          # ================================================================
+
+          def clean_output(data):
+
+              data = re.sub(
+                  r'\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])',
+                  '',
+                  data
+              )
+
+              return data.replace('\r', '')
+
+          # ================================================================
+          # READ SHELL OUTPUT
+          # ================================================================
+
+          def read_output(shell, timeout=8):
+
+              buffer = ""
+              end_time = time.time() + timeout
+              last_data = time.time()
+
+              while time.time() < end_time:
+
+                  if shell.recv_ready():
+
+                      data = shell.recv(65535).decode(
+                          errors="ignore"
+                      )
+
+                      buffer += data
+                      last_data = time.time()
+
+                      if "--More--" in data:
+                          shell.send(" ")
+
+                  else:
+
+                      if buffer and time.time() - last_data > 1:
+                          break
+
+                      time.sleep(0.1)
+
+              return clean_output(buffer)
+
+          # ================================================================
+          # SEND COMMAND
+          # ================================================================
+
+          def cmd(shell, command):
+
+              while shell.recv_ready():
+                  shell.recv(65535)
+
+              shell.send(command + "\n")
+
+              return read_output(shell)
+
+          # ================================================================
+          # CHECK CLI ERROR
+          # ================================================================
+
+          def check_error(output):
+
+              patterns = [
+                  r"Unknown command",
+                  r"Invalid command",
+                  r"invalid input",
+                  r"Incomplete command",
+                  r"can't excute",
+                  r"% ?Error",
+                  r"% ?Invalid"
+              ]
+
+              return any(
+                  re.search(pattern, output, re.IGNORECASE)
+                  for pattern in patterns
+              )
+
+          # ================================================================
+          # NORMALIZE INTERFACE
+          # ================================================================
+
+          def normalize_interface(interface):
+
+              value = interface.strip()
+
+              match = re.fullmatch(
+                  r"GigaEthernet\s*(\d+/\d+)",
+                  value,
+                  re.IGNORECASE
+              )
+
+              if match:
+                  return "GigaEthernet", match.group(1)
+
+              raise Exception(
+                  "Unsupported interface format: " + interface
+              )
+
+          # ================================================================
+          # SSH
+          # ================================================================
+
+          ssh = paramiko.SSHClient()
+
+          ssh.set_missing_host_key_policy(
+              paramiko.AutoAddPolicy()
+          )
+
+          try:
+
+              # ------------------------------------------------------------
+              # CONNECT
+              # ------------------------------------------------------------
+
+              ssh.connect(
+                  HOST,
+                  username=USER,
+                  password=PASS,
+                  look_for_keys=False,
+                  allow_agent=False,
+                  timeout=10
+              )
+
+              shell = ssh.invoke_shell()
+
+              time.sleep(1)
+
+              while shell.recv_ready():
+                  shell.recv(65535)
+
+              # ------------------------------------------------------------
+              # ENABLE
+              # ------------------------------------------------------------
+
+              output = cmd(shell, "enable")
+
+              # ------------------------------------------------------------
+              # CONFIG MODE
+              # ------------------------------------------------------------
+
+              output = cmd(shell, "config")
+
+              if check_error(output):
+
+                  raise Exception(
+                      "Failed to enter configuration mode: "
+                      + output
+                  )
+
+              # ------------------------------------------------------------
+              # NORMALIZE INTERFACE
+              # ------------------------------------------------------------
+
+              interface_type, interface_number = normalize_interface(
+                  INTERFACE
+              )
+
+              # ------------------------------------------------------------
+              # ENTER INTERFACE
+              # ------------------------------------------------------------
+
+              output = cmd(
+                  shell,
+                  "interface "
+                  + interface_type
+                  + " "
+                  + interface_number
+              )
+
+              if check_error(output):
+
+                  raise Exception(
+                      "Failed to enter interface "
+                      + INTERFACE
+                      + ": "
+                      + output
+                  )
+
+              # ------------------------------------------------------------
+              # CONFIGURE KEEPALIVE
+              # ------------------------------------------------------------
+
+              if STATUS == "Enable":
+
+                  output = cmd(
+                      shell,
+                      "keepalive"
+                  )
+
+                  if check_error(output):
+
+                      raise Exception(
+                          "Failed to enable keepalive: "
+                          + output
+                      )
+
+                  output = cmd(
+                      shell,
+                      "keepalive " + str(int(PERIOD))
+                  )
+
+                  if check_error(output):
+
+                      raise Exception(
+                          "Failed to configure keepalive period: "
+                          + output
+                      )
+
+              else:
+
+                  output = cmd(
+                      shell,
+                      "no keepalive"
+                  )
+
+                  if check_error(output):
+
+                      raise Exception(
+                          "Failed to disable keepalive: "
+                          + output
+                      )
+
+              # ------------------------------------------------------------
+              # EXIT INTERFACE CONFIGURATION
+              # ------------------------------------------------------------
+
+              output = cmd(
+                  shell,
+                  "exit"
+              )
+
+              # ------------------------------------------------------------
+              # SAVE CONFIGURATION
+              # ------------------------------------------------------------
+
+              output = cmd(
+                  shell,
+                  "write memory"
+              )
+
+              # ------------------------------------------------------------
+              # SUCCESS
+              # ------------------------------------------------------------
+
+              result = {
+                  "device_ip": HOST,
+                  "interface": INTERFACE,
+                  "status": "success",
+                  "keepalive_status": STATUS,
+                  "period": int(PERIOD) if STATUS == "Enable" else 0,
+                  "message": "Keepalive SET configuration successful"
+              }
+
+              print(json.dumps(result, indent=4))
+
+              sys.exit(0)
+
+          except Exception as e:
+
+              result = {
+                  "device_ip": HOST,
+                  "interface": INTERFACE,
+                  "status": "failure",
+                  "message": "Keepalive SET configuration failed",
+                  "error": str(e)
+              }
+
+              print(json.dumps(result, indent=4))
+
+              sys.exit(1)
+
+          finally:
+
+              try:
+                  ssh.close()
+              except Exception:
+                  pass
+
+    # ========================================================================
+    # EXECUTE SCRIPT
+    # ========================================================================
+
+    - name: Execute Keepalive SET
+      ansible.builtin.command:
+        cmd: "python3 {{ tmp_dir }}/set_keepalive.py"
+      register: keepalive_set
+      changed_when: keepalive_set.rc == 0
+      delegate_to: localhost
+
+    # ========================================================================
+    # FAIL IF CONFIGURATION FAILED
+    # ========================================================================
+
+    - name: Fail if Keepalive SET failed
+      ansible.builtin.fail:
+        msg: "{{ keepalive_set.stdout | default(keepalive_set.stderr) }}"
+      when: keepalive_set.rc != 0
+
+    # ========================================================================
+    # SAVE SUCCESS OUTPUT
+    # ========================================================================
+
+    - name: Save Keepalive SET output
+      ansible.builtin.copy:
+        dest: "{{ output_dir }}/{{ ansible_host | default(inventory_hostname) }}_keepalive_set.yml"
+        mode: "0644"
+        content: "{{ keepalive_set.stdout | from_json | to_nice_yaml }}"
+      delegate_to: localhost
+
+    # ========================================================================
+    # DISPLAY RESULT
+    # ========================================================================
+
+    - name: Display Keepalive SET result
+      ansible.builtin.debug:
+        msg: "{{ keepalive_set.stdout | from_json }}"
+
