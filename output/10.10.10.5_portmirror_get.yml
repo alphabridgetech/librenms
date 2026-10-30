@@ -1,7 +1,0 @@
-10.10.10.5: SUCCESS
-mirror_port: g0/7
-mirror_type: port-based
-mirrored_port: g0/1
-mirror_mode: TX
-vid: 45
-tpid: 0x0021
