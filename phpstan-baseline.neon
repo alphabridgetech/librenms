@@ -1,186 +1,356 @@
 parameters:
 	ignoreErrors:
 		-
-			message: "#^Property LibreNMS\\\\Data\\\\Store\\\\Rrd\\:\\:\\$async_process \\(LibreNMS\\\\Proc\\) in isset\\(\\) is not nullable\\.$#"
+			message: '#^Property LibreNMS\\Data\\Store\\Rrd\:\:\$async_process \(LibreNMS\\Proc\) in isset\(\) is not nullable\.$#'
+			identifier: isset.property
 			count: 1
 			path: LibreNMS/Data/Store/Rrd.php
 
 		-
-			message: "#^Property LibreNMS\\\\Data\\\\Store\\\\Rrd\\:\\:\\$sync_process \\(LibreNMS\\\\Proc\\) in isset\\(\\) is not nullable\\.$#"
+			message: '#^Property LibreNMS\\Data\\Store\\Rrd\:\:\$sync_process \(LibreNMS\\Proc\) in isset\(\) is not nullable\.$#'
+			identifier: isset.property
 			count: 1
 			path: LibreNMS/Data/Store/Rrd.php
 
 		-
-			message: "#^Right side of && is always true\\.$#"
+			message: '#^Right side of && is always true\.$#'
+			identifier: booleanAnd.rightAlwaysTrue
 			count: 1
 			path: LibreNMS/Data/Store/Rrd.php
 
 		-
-			message: "#^Parameter \\#1 \\$model of static method LibreNMS\\\\Model\\:\\:onCreate\\(\\) expects static\\(LibreNMS\\\\Device\\\\Processor\\), LibreNMS\\\\Device\\\\Processor given\\.$#"
+			message: '#^Parameter \#1 \$model of static method LibreNMS\\Model\:\:onCreate\(\) expects static\(LibreNMS\\Device\\Processor\), LibreNMS\\Device\\Processor given\.$#'
+			identifier: argument.type
 			count: 1
 			path: LibreNMS/Device/Processor.php
 
 		-
-			message: "#^Parameter \\#1 \\$model of static method LibreNMS\\\\Model\\:\\:onDelete\\(\\) expects static\\(LibreNMS\\\\Device\\\\Processor\\), LibreNMS\\\\Device\\\\Processor given\\.$#"
+			message: '#^Parameter \#1 \$model of static method LibreNMS\\Model\:\:onDelete\(\) expects static\(LibreNMS\\Device\\Processor\), LibreNMS\\Device\\Processor given\.$#'
+			identifier: argument.type
 			count: 1
 			path: LibreNMS/Device/Processor.php
 
 		-
-			message: "#^Unsafe call to private method LibreNMS\\\\Device\\\\Processor\\:\\:pollProcessors\\(\\) through static\\:\\:\\.$#"
+			message: '#^Unsafe call to private method LibreNMS\\Device\\Processor\:\:pollProcessors\(\) through static\:\:\.$#'
+			identifier: staticClassAccess.privateMethod
 			count: 1
 			path: LibreNMS/Device/Processor.php
 
 		-
-			message: "#^Unsafe call to private method LibreNMS\\\\Device\\\\Processor\\:\\:processData\\(\\) through static\\:\\:\\.$#"
+			message: '#^Unsafe call to private method LibreNMS\\Device\\Processor\:\:processData\(\) through static\:\:\.$#'
+			identifier: staticClassAccess.privateMethod
 			count: 3
 			path: LibreNMS/Device/Processor.php
 
 		-
-			message: "#^Variable \\$lsps might not be defined\\.$#"
+			message: '#^Variable \$lsps might not be defined\.$#'
+			identifier: variable.undefined
 			count: 1
 			path: LibreNMS/Modules/Mpls.php
 
 		-
-			message: "#^Variable \\$paths might not be defined\\.$#"
+			message: '#^Variable \$paths might not be defined\.$#'
+			identifier: variable.undefined
 			count: 2
 			path: LibreNMS/Modules/Mpls.php
 
 		-
-			message: "#^Variable \\$features on left side of \\?\\? is never defined\\.$#"
+			message: '#^Variable \$features on left side of \?\? is never defined\.$#'
+			identifier: nullCoalesce.variable
 			count: 1
 			path: LibreNMS/Modules/Os.php
 
 		-
-			message: "#^Variable \\$hardware on left side of \\?\\? is never defined\\.$#"
+			message: '#^Variable \$hardware on left side of \?\? is never defined\.$#'
+			identifier: nullCoalesce.variable
 			count: 1
 			path: LibreNMS/Modules/Os.php
 
 		-
-			message: "#^Variable \\$location in empty\\(\\) always exists and is always falsy\\.$#"
+			message: '#^Variable \$location in empty\(\) always exists and is always falsy\.$#'
+			identifier: empty.variable
 			count: 1
 			path: LibreNMS/Modules/Os.php
 
 		-
-			message: "#^Variable \\$serial on left side of \\?\\? is never defined\\.$#"
+			message: '#^Variable \$serial on left side of \?\? is never defined\.$#'
+			identifier: nullCoalesce.variable
 			count: 1
 			path: LibreNMS/Modules/Os.php
 
 		-
-			message: "#^Variable \\$version on left side of \\?\\? is never defined\\.$#"
+			message: '#^Variable \$version on left side of \?\? is never defined\.$#'
+			identifier: nullCoalesce.variable
 			count: 1
 			path: LibreNMS/Modules/Os.php
 
 		-
-			message: "#^If condition is always true\\.$#"
+			message: '#^If condition is always true\.$#'
+			identifier: if.alwaysTrue
 			count: 1
 			path: LibreNMS/Modules/Ospf.php
 
 		-
-			message: "#^Variable \\$multi_get_array on left side of \\?\\? is never defined\\.$#"
+			message: '#^Variable \$multi_get_array on left side of \?\? is never defined\.$#'
+			identifier: nullCoalesce.variable
 			count: 2
 			path: LibreNMS/OS/Ceraos.php
 
 		-
-			message: "#^Parameter \\#16 \\$entPhysicalIndex of class LibreNMS\\\\Device\\\\WirelessSensor constructor expects float\\|int\\|null, string given\\.$#"
+			message: '#^Parameter \#16 \$entPhysicalIndex of class LibreNMS\\Device\\WirelessSensor constructor expects float\|int\|null, string given\.$#'
+			identifier: argument.type
 			count: 1
 			path: LibreNMS/OS/Ios.php
 
 		-
-			message: "#^Variable \\$index might not be defined\\.$#"
+			message: '#^Variable \$index might not be defined\.$#'
+			identifier: variable.undefined
 			count: 2
 			path: LibreNMS/OS/SmOs.php
 
 		-
-			message: "#^If condition is always false\\.$#"
+			message: '#^If condition is always false\.$#'
+			identifier: if.alwaysFalse
 			count: 2
 			path: LibreNMS/Util/CiHelper.php
 
 		-
-			message: "#^Unreachable statement \\- code above always terminates\\.$#"
+			message: '#^Unreachable statement \- code above always terminates\.$#'
+			identifier: deadCode.unreachable
 			count: 1
 			path: LibreNMS/Util/Graph.php
 
 		-
-			message: "#^Variable \\$rrd_options in empty\\(\\) always exists and is always falsy\\.$#"
+			message: '#^Variable \$rrd_options in empty\(\) always exists and is always falsy\.$#'
+			identifier: empty.variable
 			count: 1
 			path: LibreNMS/Util/Graph.php
 
 		-
-			message: "#^Property App\\\\Console\\\\Commands\\\\InternalHttpRequest\\:\\:\\$app is never read, only written\\.$#"
+			message: '#^Match expression does not handle remaining value\: mixed$#'
+			identifier: match.unhandled
+			count: 1
+			path: app/Api/Controllers/KunalApiController.php
+
+		-
+			message: '#^Match expression does not handle remaining value\: string$#'
+			identifier: match.unhandled
+			count: 1
+			path: app/Api/Controllers/KunalApiController.php
+
+		-
+			message: '#^Method App\\Api\\Controllers\\KunalApiController\:\:l3RunGet\(\) never assigns null to &\$output so it can be removed from the by\-ref type\.$#'
+			identifier: parameterByRef.unusedType
+			count: 1
+			path: app/Api/Controllers/KunalApiController.php
+
+		-
+			message: '#^Anonymous function has an unused use \$currentFilename\.$#'
+			identifier: closure.unusedUse
+			count: 1
+			path: app/Console/Commands/ArchiveAlarmHistory.php
+
+		-
+			message: '#^Anonymous function has an unused use \$firstTimestamp\.$#'
+			identifier: closure.unusedUse
+			count: 1
+			path: app/Console/Commands/ArchiveAlarmHistory.php
+
+		-
+			message: '#^If condition is always false\.$#'
+			identifier: if.alwaysFalse
+			count: 1
+			path: app/Console/Commands/ArchiveAlarmHistory.php
+
+		-
+			message: '#^Property App\\Console\\Commands\\InternalHttpRequest\:\:\$app is never read, only written\.$#'
+			identifier: property.onlyWritten
 			count: 1
 			path: app/Console/Commands/InternalHttpRequest.php
 
 		-
-			message: "#^Called 'Model\\:\\:make\\(\\)' which performs unnecessary work, use 'new Model\\(\\)'\\.$#"
+			message: '#^Relation ''user'' is not found in App\\Models\\BackupLog model\.$#'
+			identifier: larastan.relationExistence
+			count: 2
+			path: app/Http/Controllers/BackupController.php
+
+		-
+			message: '#^Relation ''user'' is not found in App\\Models\\ConfigBackupLog model\.$#'
+			identifier: larastan.relationExistence
+			count: 1
+			path: app/Http/Controllers/BackupController.php
+
+		-
+			message: '#^Deprecated in PHP 8\.0\: Required parameter \$token follows optional parameter \$params\.$#'
+			identifier: parameter.requiredAfterOptional
+			count: 1
+			path: app/Http/Controllers/ChatBotController.php
+
+		-
+			message: '#^PHPDoc tag @return with type array\<array\> is incompatible with native type void\.$#'
+			identifier: return.phpDocType
+			count: 1
+			path: app/Http/Controllers/Device/Tabs/ConfigurationController.php
+
+		-
+			message: '#^Relation ''user'' is not found in App\\Models\\ConfigBackupLog model\.$#'
+			identifier: larastan.relationExistence
+			count: 1
+			path: app/Http/Controllers/Device/Tabs/ConfigurationController.php
+
+		-
+			message: '#^Parameter \#1 \$view of function view expects view\-string\|null, string given\.$#'
+			identifier: argument.type
+			count: 3
+			path: app/Http/Controllers/Device/Tabs/alphabridgeController.php
+
+		-
+			message: '#^Called ''Model\:\:make\(\)'' which performs unnecessary work, use ''new Model\(\)''\.$#'
+			identifier: larastan.noModelMake
 			count: 1
 			path: app/Http/Controllers/DeviceGroupController.php
 
 		-
-			message: "#^Ternary operator condition is always false\\.$#"
+			message: '#^Ternary operator condition is always false\.$#'
+			identifier: ternary.alwaysFalse
 			count: 1
 			path: app/Http/Controllers/LegacyController.php
 
 		-
-			message: "#^Called 'Model\\:\\:make\\(\\)' which performs unnecessary work, use 'new Model\\(\\)'\\.$#"
+			message: '#^Relation ''uploader'' is not found in App\\Models\\CustomMib model\.$#'
+			identifier: larastan.relationExistence
+			count: 1
+			path: app/Http/Controllers/MibsUploadController.php
+
+		-
+			message: '#^Called ''Model\:\:make\(\)'' which performs unnecessary work, use ''new Model\(\)''\.$#'
+			identifier: larastan.noModelMake
 			count: 1
 			path: app/Http/Controllers/PortGroupController.php
 
 		-
-			message: "#^Call to an undefined static method App\\\\Models\\\\ServiceTemplate\\:\\:hasAccess\\(\\)\\.$#"
+			message: '#^Access to an undefined property App\\Models\\PortStatusAlert\:\:\$device\.$#'
+			identifier: property.notFound
+			count: 2
+			path: app/Http/Controllers/PortStatusAlertController.php
+
+		-
+			message: '#^Relation ''device'' is not found in App\\Models\\PortStatusAlert model\.$#'
+			identifier: larastan.relationExistence
+			count: 1
+			path: app/Http/Controllers/PortStatusAlertController.php
+
+		-
+			message: '#^Call to an undefined static method App\\Models\\ServiceTemplate\:\:hasAccess\(\)\.$#'
+			identifier: staticMethod.notFound
 			count: 1
 			path: app/Http/Controllers/Select/ServiceTemplateController.php
 
 		-
-			message: "#^Called 'Model\\:\\:make\\(\\)' which performs unnecessary work, use 'new Model\\(\\)'\\.$#"
+			message: '#^Called ''Model\:\:make\(\)'' which performs unnecessary work, use ''new Model\(\)''\.$#'
+			identifier: larastan.noModelMake
 			count: 1
 			path: app/Http/Controllers/ServiceController.php
 
 		-
-			message: "#^Cannot call method only\\(\\) on array\\<string, string\\>\\.$#"
+			message: '#^Cannot call method only\(\) on array\<string, string\>\.$#'
+			identifier: method.nonObject
 			count: 1
 			path: app/Http/Controllers/ServiceController.php
 
 		-
-			message: "#^Called 'Model\\:\\:make\\(\\)' which performs unnecessary work, use 'new Model\\(\\)'\\.$#"
+			message: '#^Called ''Model\:\:make\(\)'' which performs unnecessary work, use ''new Model\(\)''\.$#'
+			identifier: larastan.noModelMake
 			count: 1
 			path: app/Http/Controllers/ServiceTemplateController.php
 
 		-
-			message: "#^Offset 'image_title' does not exist on null\\.$#"
+			message: '#^Call to function is_null\(\) with mixed will always evaluate to false\.$#'
+			identifier: function.impossibleType
+			count: 1
+			path: app/Http/Controllers/SystemBulkUploadController.php
+
+		-
+			message: '#^Parameter \#3 \$subject of function preg_replace expects array\<float\|int\|string\>\|string, int given\.$#'
+			identifier: argument.type
+			count: 1
+			path: app/Http/Controllers/SystemBulkUploadController.php
+
+		-
+			message: '#^Parameter \#3 \$subject of function preg_replace expects array\<float\|int\|string\>\|string, int given\.$#'
+			identifier: argument.type
+			count: 1
+			path: app/Http/Controllers/SystemBulkUploadController24-04-2026.php
+
+		-
+			message: '#^Access to an undefined property App\\Models\\EntPhysical\:\:\$serial\.$#'
+			identifier: property.notFound
+			count: 1
+			path: app/Http/Controllers/Table/SfpInventoryController.php
+
+		-
+			message: '#^If condition is always true\.$#'
+			identifier: if.alwaysTrue
+			count: 1
+			path: app/Http/Controllers/VLANController.php
+
+		-
+			message: '#^Parameter \#1 \$view of function view expects view\-string\|null, string given\.$#'
+			identifier: argument.type
+			count: 2
+			path: app/Http/Controllers/VLANController.php
+
+		-
+			message: '#^Unreachable statement \- code above always terminates\.$#'
+			identifier: deadCode.unreachable
+			count: 1
+			path: app/Http/Controllers/VLANController.php
+
+		-
+			message: '#^Offset ''image_title'' does not exist on null\.$#'
+			identifier: offsetAccess.notFound
 			count: 1
 			path: app/Http/Controllers/Widgets/ImageController.php
 
 		-
-			message: "#^Offset 'image_title' on null in empty\\(\\) does not exist\\.$#"
+			message: '#^Offset ''image_title'' on null in empty\(\) does not exist\.$#'
+			identifier: empty.offset
 			count: 1
 			path: app/Http/Controllers/Widgets/ImageController.php
 
 		-
-			message: "#^Access to an undefined property App\\\\Models\\\\DeviceRelatedModel\\:\\:\\$device_id\\.$#"
+			message: '#^Access to an undefined property App\\Models\\DeviceRelatedModel\:\:\$device_id\.$#'
+			identifier: property.notFound
 			count: 1
 			path: app/Models/DeviceRelatedModel.php
 
 		-
-			message: "#^PHPDoc type array of property App\\\\Models\\\\UserPref\\:\\:\\$primaryKey is not covariant with PHPDoc type string of overridden property Illuminate\\\\Database\\\\Eloquent\\\\Model\\:\\:\\$primaryKey\\.$#"
+			message: '#^PHPDoc type array of property App\\Models\\UserPref\:\:\$primaryKey is not covariant with PHPDoc type string of overridden property Illuminate\\Database\\Eloquent\\Model\:\:\$primaryKey\.$#'
+			identifier: property.phpDocType
 			count: 1
 			path: app/Models/UserPref.php
 
 		-
-			message: "#^Variable \\$username on left side of \\?\\? is never defined\\.$#"
+			message: '#^Variable \$username on left side of \?\? is never defined\.$#'
+			identifier: nullCoalesce.variable
 			count: 1
 			path: app/Providers/LegacyUserProvider.php
 
 		-
-			message: "#^Parameter \\#1 \\$attr of method LibreNMS\\\\Authentication\\\\SSOAuthorizer\\:\\:authSSOGetAttr\\(\\) expects string, int given\\.$#"
-			count: 2
-			path: tests/AuthSSOTest.php
+			message: '#^Class App\\Http\\Middleware\\CheckLicense not found\.$#'
+			identifier: class.notFound
+			count: 1
+			path: bootstrap/app.php
 
 		-
-			message: "#^Parameter \\#1 \\$attr of method LibreNMS\\\\Authentication\\\\SSOAuthorizer\\:\\:authSSOGetAttr\\(\\) expects string, null given\\.$#"
-			count: 2
-			path: tests/AuthSSOTest.php
+			message: '#^Call to method verify\(\) on an unknown class App\\Services\\LicenseVerifier\.$#'
+			identifier: class.notFound
+			count: 1
+			path: routes/web.php
 
 		-
-			message: "#^Parameter \\#2 \\$default of function set_null expects null, int given\\.$#"
-			count: 2
-			path: tests/CommonFunctionsTest.php
+			message: '#^Instantiated class App\\Services\\LicenseVerifier not found\.$#'
+			identifier: class.notFound
+			count: 1
+			path: routes/web.php
+

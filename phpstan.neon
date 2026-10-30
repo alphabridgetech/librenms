@@ -16,10 +16,11 @@ parameters:
         - LibreNMS
         - resources
         - routes
-        - tests
 
     excludePaths:
-        - tests/Unit/Data/KafkaDBStoreTest.php
+        # SourceGuardian-encoded, can't be analysed
+        - app/Services/LicenseVerifier.php
+        - app/Http/Middleware/CheckLicense.php
         - LibreNMS/Data/Store/Kafka.php
 
     scanDirectories:
