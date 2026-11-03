@@ -55,9 +55,11 @@ use App\Models\Vrf;
 use App\Models\WirelessSensor;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\Redis;
 use LibreNMS\Data\Store\Rrd;
 use LibreNMS\Util\Http;
 use LibreNMS\Util\Version;
+use Symfony\Component\Process\Process;
 
 class AboutController extends Controller
 {
@@ -84,6 +86,16 @@ class AboutController extends Controller
             'version_webserver' => $request->server('SERVER_SOFTWARE'),
             'version_rrdtool' => Rrd::version(),
             'version_netsnmp' => str_replace('version: ', '', rtrim(shell_exec(LibrenmsConfig::get('snmpget', 'snmpget') . ' -V 2>&1'))),
+            'version_os' => $version->os(),
+            'version_kernel' => php_uname('r'),
+            'version_docker' => file_exists('/.dockerenv') ? __('Yes (container)') : __('No'),
+            'version_redis' => $this->redisVersion(),
+            'version_ansible' => preg_replace('/^ansible \[core (.+)\]$/', '$1', $this->commandVersion(['ansible', '--version'])),
+            'version_composer' => preg_replace('/^Composer version (\S+).*$/', '$1', $this->commandVersion(['composer', '--version', '--no-ansi'])),
+            'version_git' => str_replace('git version ', '', $this->commandVersion(['git', '--version'])),
+            'git_branch' => $version->git->branch(),
+            'git_commit' => substr($version->git->commitHash(), 0, 10),
+            'git_commit_date' => $version->git->commitDate(),
 
             'stat_apps' => Application::count(),
             'stat_devices' => Device::count(),
@@ -110,6 +122,32 @@ class AboutController extends Controller
             'stat_vrf' => Vrf::count(),
             'stat_wireless' => WirelessSensor::count(),
         ]);
+    }
+
+    /** First line of a command's output, or '' if it isn't installed. */
+    private function commandVersion(array $command): string
+    {
+        $proc = new Process($command, base_path(), ['COMPOSER_ALLOW_SUPERUSER' => 1]);
+        $proc->setTimeout(10);
+        try {
+            $proc->run();
+        } catch (\Throwable $e) {
+            return '';
+        }
+
+        return $proc->isSuccessful() ? trim(strtok($proc->getOutput(), "\n")) : '';
+    }
+
+    private function redisVersion(): string
+    {
+        try {
+            $info = Redis::connection()->info('server');
+
+            // phpredis nests the result under the section name
+            return $info['redis_version'] ?? $info['Server']['redis_version'] ?? '';
+        } catch (\Throwable $e) {
+            return '';
+        }
     }
 
     public function clearReportingData(): JsonResponse

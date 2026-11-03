@@ -60,10 +60,10 @@
                     <td><b>{{ __('Database Schema') }}</b></td>
                     <td>{{ $db_schema }}</td>
                 </tr>
-                <tr>
+                {{-- <tr>
                     <td><b>{{ __('Web Server') }}</b></td>
                     <td>{{ $version_webserver }}</td>
-                </tr>
+                </tr> --}}
                 <tr>
                     <td><b>{{ __('PHP') }}</b></td>
                     <td>{{ $version_php }}</td>
@@ -83,6 +83,42 @@
                 <tr>
                     <td><a target="_blank" href="https://oss.oetiker.ch/rrdtool/"><b>{{ __('RRDtool') }}</b></a></td>
                     <td>{{ $version_rrdtool }}</td>
+                </tr>
+                <tr>
+                    <td><b>{{ __('Net-SNMP') }}</b></td>
+                    <td>{{ $version_netsnmp }}</td>
+                </tr>
+                <tr>
+                    <td><b>{{ __('Redis') }}</b></td>
+                    <td>{{ $version_redis ?: '-' }}</td>
+                </tr>
+                <tr>
+                    <td><b>{{ __('Ansible') }}</b></td>
+                    <td>{{ $version_ansible ?: '-' }}</td>
+                </tr>
+                <tr>
+                    <td><b>{{ __('Composer') }}</b></td>
+                    <td>{{ $version_composer ?: '-' }}</td>
+                </tr>
+                <tr>
+                    <td><b>{{ __('Git') }}</b></td>
+                    <td>{{ $version_git ?: '-' }}</td>
+                </tr>
+                <tr>
+                    <td><b>{{ __('Git Branch / Commit') }}</b></td>
+                    <td>{{ $git_branch ?: '-' }} / {{ $git_commit ?: '-' }} @if($git_commit_date)<small class="text-muted">({{ $git_commit_date }})</small>@endif</td>
+                </tr>
+                <tr>
+                    <td><b>{{ __('Operating System') }}</b></td>
+                    <td>{{ $version_os }}</td>
+                </tr>
+                <tr>
+                    <td><b>{{ __('Kernel') }}</b></td>
+                    <td>{{ $version_kernel }}</td>
+                </tr>
+                <tr>
+                    <td><b>{{ __('Docker') }}</b></td>
+                    <td>{{ $version_docker }}</td>
                 </tr>
             </table>
 
