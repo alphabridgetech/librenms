@@ -400,6 +400,7 @@ class ConfigurationController implements DeviceTab
             ['name' => __('Port Mirror'), 'url' => 'portmirrorconfig'],
             ['name' => __('Keepalive'), 'url' => 'keepaliveconfig'],
             ['name' => __('Port Protect Group'), 'url' => 'portprotectgroupconfig'],
+            ['name' => __('Port Security'), 'url' => 'portsecurityconfig'],
         ];
 
         return $tabs;

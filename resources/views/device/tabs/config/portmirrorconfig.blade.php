@@ -214,7 +214,8 @@
             const p = pmParsePort(port);
             const show = (!type || p.type === type)
                 && (!slot || p.slot === slot)
-                && (!names.length || names.some(n => port.toLowerCase().indexOf(n) !== -1));
+                // "g0/1" matches only g0/1 (not tg0/1); a partial name like "tg" matches from the start
+                && (!names.length || names.some(n => n.indexOf('/') !== -1 ? port.toLowerCase() === n : port.toLowerCase().indexOf(n) === 0));
             $(this).toggle(show);
         });
     }

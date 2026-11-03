@@ -92,6 +92,10 @@ Route::prefix('v0')->group(function () {
         Route::get('portprotect/show/{hostname}', [App\Api\Controllers\KunalApiController::class, 'getportprotect'])->name('portprotect.show');
         Route::post('portprotect/group/set/{hostname}', [App\Api\Controllers\KunalApiController::class, 'setportprotectgroup'])->name('portprotect.group.set');
         Route::post('portprotect/interface/set/{hostname}', [App\Api\Controllers\KunalApiController::class, 'setportprotectinterface'])->name('portprotect.interface.set');
+        Route::get('portsecurity/show/{hostname}', [App\Api\Controllers\KunalApiController::class, 'getportsecurity'])->name('portsecurity.show');
+        Route::post('portsecurity/mode/set/{hostname}', [App\Api\Controllers\KunalApiController::class, 'setportsecuritymode'])->name('portsecurity.mode.set');
+        Route::post('portsecurity/staticmac/set/{hostname}', [App\Api\Controllers\KunalApiController::class, 'setportsecuritystaticmac'])->name('portsecurity.staticmac.set');
+        Route::post('portsecurity/ipmac/set/{hostname}', [App\Api\Controllers\KunalApiController::class, 'setportsecurityipmac'])->name('portsecurity.ipmac.set');
         Route::get('gvrp/show/{hostname}', [App\Api\Controllers\KunalApiController::class, 'getgvrp'])->name('gvrp.show');
         Route::post('gvrp/set/{hostname}', [App\Api\Controllers\KunalApiController::class, 'setgvrp'])->name('gvrp.set');
         Route::get('gvrp/global/show/{hostname}', [App\Api\Controllers\KunalApiController::class, 'getgvrpglobal'])->name('gvrp.global.show');

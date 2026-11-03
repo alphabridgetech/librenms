@@ -1,0 +1,316 @@
+---
+# ============================================================
+# Get Static MAC Filtration Mode
+#
+# Retrieves Static MAC Filtration Mode for all physical
+# interfaces from show running-config.
+# Displays Accept, Reject or Disable for each interface.
+# If neither static accept nor static reject is configured,
+# the mode is reported as Disable.
+# Saves the result in the output directory.
+#
+# Ansible command:
+# ansible-playbook -i inventory/10.10.10.1.yml playbooks/portconfiguration/portsecurity/staticmacmode/getstaticmacfiltrationmode.yml
+#
+# ============================================================
+
+- name: Get Static MAC Filtration Mode
+  hosts: alphabridge_devices
+  gather_facts: false
+  connection: local
+
+  vars:
+    project_root: "{{ playbook_dir }}/../.."
+    output_dir: "{{ project_root }}/output"
+    tmp_dir: "{{ project_root }}/tmp"
+
+  tasks:
+    - name: Create output directory
+      ansible.builtin.file:
+        path: "{{ output_dir }}"
+        state: directory
+        mode: "0755"
+
+    - name: Create temporary directory
+      ansible.builtin.file:
+        path: "{{ tmp_dir }}"
+        state: directory
+        mode: "0755"
+
+    - name: Generate Static MAC Filtration Mode retrieval script
+      ansible.builtin.copy:
+        dest: "{{ tmp_dir }}/get_staticmacfiltrationmode.py"
+        mode: "0755"
+        content: |
+          import sys
+          import time
+          import json
+          import re
+          import paramiko
+
+          HOST = "{{ ansible_host | default(inventory_hostname) }}"
+          SSH_PORT = int("{{ ansible_port | default(22) }}")
+          USERNAME = "{{ ansible_user | default(ansible_ssh_user | default('admin')) }}"
+          PASSWORD = "{{ ansible_password | default(ansible_ssh_pass | default('')) }}"
+          OUTPUT_FILE = "{{ output_dir }}/{{ ansible_host | default(inventory_hostname) }}_staticmacfiltrationmode.yml"
+
+          def clean_output(output):
+              output = re.sub(r"\x1b\[[0-?]*[ -/]*[@-~]", "", output)
+              # Drop pager prompts the switch has already erased with
+              # backspaces - otherwise the next config line ends up glued
+              # to "--More--" and is missed (e.g. "interface g0/2").
+              output = re.sub(r" ?--More-- ?\x08+ *\x08*", "", output)
+              output = output.replace("\x08", "")
+              return output.replace("\r", "")
+
+          def read_until_prompt(channel, timeout=15):
+              output = ""
+              end_time = time.time() + timeout
+
+              while time.time() < end_time:
+                  if channel.recv_ready():
+                      output += channel.recv(65535).decode(
+                          "utf-8", errors="ignore"
+                      )
+                      cleaned_lines = [
+                          line.strip() for line in clean_output(output).splitlines()
+                          if line.strip()
+                      ]
+                      if cleaned_lines and re.search(r"[>#]\s*$", cleaned_lines[-1]):
+                          time.sleep(0.3)
+                          while channel.recv_ready():
+                              output += channel.recv(65535).decode(
+                                  "utf-8", errors="ignore"
+                              )
+                          return clean_output(output)
+                  else:
+                      time.sleep(0.2)
+
+              return clean_output(output)
+
+          def run_command(channel, command, timeout=60):
+              channel.send(command + "\n")
+              output = ""
+              end_time = time.time() + timeout
+              last_data_time = time.time()
+
+              while time.time() < end_time:
+                  if channel.recv_ready():
+                      output += channel.recv(65535).decode(
+                          "utf-8", errors="ignore"
+                      )
+                      last_data_time = time.time()
+
+                      cleaned = clean_output(output)
+                      if re.search(
+                          r"--More--|Press any key|Press <SPACE>",
+                          cleaned,
+                          re.IGNORECASE
+                      ):
+                          channel.send(" ")
+
+                      lines = [
+                          line.strip() for line in cleaned.splitlines()
+                          if line.strip()
+                      ]
+                      if lines and re.search(r"[>#]\s*$", lines[-1]):
+                          time.sleep(0.3)
+                          while channel.recv_ready():
+                              output += channel.recv(65535).decode(
+                                  "utf-8", errors="ignore"
+                              )
+                          return clean_output(output)
+                  else:
+                      time.sleep(0.2)
+                      if output and time.time() - last_data_time > 3:
+                          break
+
+              return clean_output(output)
+
+          def has_cli_error(output):
+              patterns = [
+                  r"Unknown command",
+                  r"Invalid command",
+                  r"invalid input",
+                  r"Incomplete command",
+                  r"% Error",
+                  r"% Invalid",
+                  r"command failed"
+              ]
+              return any(
+                  re.search(pattern, output, re.IGNORECASE)
+                  for pattern in patterns
+              )
+
+          def is_physical_interface(name):
+              return bool(re.fullmatch(
+                  r"(?:TGigaEthernet|TenGigabitEthernet|GigaEthernet|"
+                  r"FastEthernet|Ethernet|TGigabitEthernet|"
+                  r"tg|te|g|ge|fe|e)\s*\d+\s*/\s*\d+",
+                  name.strip(),
+                  re.IGNORECASE
+              ))
+
+          def parse_modes(config):
+              interfaces = {}
+              current_interface = None
+
+              for raw_line in config.splitlines():
+                  line = raw_line.strip()
+                  interface_match = re.match(
+                      r"^interface\s+([^\s]+)", line, re.IGNORECASE
+                  )
+
+                  if interface_match:
+                      name = interface_match.group(1).strip()
+                      if is_physical_interface(name):
+                          if name not in interfaces:
+                              interfaces[name] = {
+                                  "interface": name,
+                                  "mode": "Disable"
+                              }
+                          current_interface = name
+                      else:
+                          current_interface = None
+                      continue
+
+                  if current_interface is None:
+                      continue
+
+                  mode_match = re.match(
+                      r"^switchport\s+port-security\s+mode\s+static\s+"
+                      r"(accept|reject)\s*$",
+                      line,
+                      re.IGNORECASE
+                  )
+
+                  dynamic_max_match = re.match(
+                      r"^switchport\s+port-security\s+dynamic\s+maximum\s+(\d+)\s*$",
+                      line,
+                      re.IGNORECASE
+                  )
+
+                  if mode_match:
+                      interfaces[current_interface]["mode"] = (
+                          mode_match.group(1).capitalize()
+                      )
+
+                  elif re.fullmatch(
+                      r"switchport\s+port-security\s+mode\s+dynamic",
+                      line,
+                      re.IGNORECASE
+                  ):
+                      interfaces[current_interface]["mode"] = "Dynamic"
+
+                  elif dynamic_max_match:
+                      interfaces[current_interface]["dynamic_maximum"] = int(
+                          dynamic_max_match.group(1)
+                      )
+
+                  elif re.fullmatch(
+                      r"no\s+switchport\s+port-security\s+mode",
+                      line,
+                      re.IGNORECASE
+                  ):
+                      interfaces[current_interface]["mode"] = "Disable"
+
+              return list(interfaces.values())
+
+          def main():
+              client = None
+              error = None
+              entries = []
+
+              try:
+                  client = paramiko.SSHClient()
+                  client.set_missing_host_key_policy(
+                      paramiko.AutoAddPolicy()
+                  )
+                  client.connect(
+                      hostname=HOST,
+                      port=SSH_PORT,
+                      username=USERNAME,
+                      password=PASSWORD,
+                      look_for_keys=False,
+                      allow_agent=False,
+                      timeout=15,
+                      banner_timeout=15,
+                      auth_timeout=15
+                  )
+
+                  channel = client.invoke_shell()
+                  initial_output = read_until_prompt(channel, 10)
+                  prompt_lines = [
+                      line.strip() for line in initial_output.splitlines()
+                      if line.strip()
+                  ]
+                  prompt = prompt_lines[-1] if prompt_lines else ""
+
+                  if not prompt:
+                      raise RuntimeError("Could not read the switch prompt.")
+
+                  if prompt.endswith(">"):
+                      output = run_command(channel, "enable", 10)
+                      prompt_lines = [
+                          line.strip() for line in output.splitlines()
+                          if line.strip()
+                      ]
+                      prompt = prompt_lines[-1] if prompt_lines else ""
+                      if has_cli_error(output) or not prompt.endswith("#"):
+                          raise RuntimeError("Could not enter privileged EXEC mode.")
+
+                  config = run_command(channel, "show running-config", 60)
+                  if has_cli_error(config):
+                      raise RuntimeError("Switch rejected show running-config.")
+
+                  entries = parse_modes(config)
+                  entries.sort(key=lambda item: item["interface"].lower())
+                  for index, item in enumerate(entries, start=1):
+                      item["serial_number"] = index
+
+              except Exception as exc:
+                  error = str(exc)
+
+              finally:
+                  if client:
+                      client.close()
+
+              if error:
+                  report = {
+                      "ip": HOST,
+                      "message": "Failed to retrieve Static MAC Filtration Mode."
+                  }
+                  print(json.dumps(report, indent=2))
+                  with open(OUTPUT_FILE, "w") as report_file:
+                      json.dump(report, report_file, indent=2)
+                      report_file.write("\n")
+                  print("ERROR: " + error, file=sys.stderr)
+                  sys.exit(1)
+
+              report = {
+                  "ip": HOST,
+                  "interfaces": entries
+              }
+
+              with open(OUTPUT_FILE, "w") as report_file:
+                  json.dump(report, report_file, indent=2)
+                  report_file.write("\n")
+
+              print(json.dumps(report, indent=2))
+
+          if __name__ == "__main__":
+              main()
+
+    - name: Execute Static MAC Filtration Mode retrieval
+      ansible.builtin.command:
+        argv:
+          - python3
+          - "{{ tmp_dir }}/get_staticmacfiltrationmode.py"
+      register: static_mac_get_result
+      changed_when: false
+      failed_when: static_mac_get_result.rc != 0
+
+    - name: Display Static MAC Filtration Mode result
+      ansible.builtin.debug:
+        var: static_mac_get_result.stdout
+

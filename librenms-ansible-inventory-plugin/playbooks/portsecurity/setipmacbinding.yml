@@ -1,0 +1,305 @@
+---
+# ============================================================
+# Configure IP-MAC Binding
+#
+# Configures an IP address and MAC address binding on the
+# specified switch interface for port security.
+# Validates the IP and MAC address formats before configuration.
+# Supports dotted and continuous MAC address formats.
+# Saves the execution report in the output directory.
+#
+# Required Parameters:
+# - port: Switch interface (e.g. g0/1)
+# - ip_address: IP address to bind
+# - mac_address: MAC address to bind
+# - operation: set or delete (defaults to set)
+#
+# Ansible command:
+# Set:    ansible-playbook -i inventory/10.10.10.1.yml playbooks/portconfiguration/portsecurity/ipmac/setipmacbinding.yml -e '{"operation":"set","port":"g0/2","ip_address":"192.168.10.12","mac_address":"aabb.ccdd.eedd"}'
+# Delete: ansible-playbook -i inventory/10.10.10.1.yml playbooks/portconfiguration/portsecurity/ipmac/setipmacbinding.yml -e '{"operation":"delete","port":"g0/2","ip_address":"192.168.10.12","mac_address":"aabb.ccdd.eedd"}'
+#
+# ============================================================
+
+- name: Configure IP-MAC Binding
+  hosts: alphabridge_devices
+  gather_facts: false
+  connection: local
+
+  vars:
+    project_root: "{{ playbook_dir }}/../.."
+    output_dir: "{{ project_root }}/output"
+    tmp_dir: "{{ project_root }}/tmp"
+
+  tasks:
+    - name: Validate IP-MAC Binding parameters
+      ansible.builtin.assert:
+        that:
+          - port is defined
+          - (port | string | length) > 0
+          - ip_address is defined
+          - (ip_address | string | length) > 0
+          - mac_address is defined
+          - (mac_address | string | length) > 0
+          - operation | default('set') in ['set', 'delete']
+        fail_msg: "Provide port, ip_address and mac_address; operation must be set or delete."
+        success_msg: "IP-MAC Binding parameters validated."
+
+    - name: Create output directory
+      ansible.builtin.file:
+        path: "{{ output_dir }}"
+        state: directory
+        mode: "0755"
+
+    - name: Create temporary directory
+      ansible.builtin.file:
+        path: "{{ tmp_dir }}"
+        state: directory
+        mode: "0755"
+
+    - name: Generate IP-MAC Binding configuration script
+      ansible.builtin.copy:
+        dest: "{{ tmp_dir }}/set_ipmacbinding.py"
+        mode: "0755"
+        content: |
+          import sys
+          import time
+          import json
+          import re
+          import ipaddress
+          import paramiko
+
+          HOST = "{{ ansible_host | default(inventory_hostname) }}"
+          PORT = int("{{ ansible_port | default(22) }}")
+          USERNAME = "{{ ansible_user | default(ansible_ssh_user | default('admin')) }}"
+          PASSWORD = "{{ ansible_password | default(ansible_ssh_pass | default('')) }}"
+
+          INTERFACE = "{{ port }}"
+          IP_ADDRESS = "{{ ip_address }}"
+          MAC_ADDRESS = "{{ mac_address }}"
+          OPERATION = "{{ operation | default('set') }}".lower()
+          OUTPUT_FILE = "{{ output_dir }}/{{ ansible_host | default(inventory_hostname) }}_ipmacbinding_set.yml"
+
+          def normalize_interface(interface):
+              interface = str(interface).strip()
+              match = re.fullmatch(
+                  r"[gG](?:igaEthernet)?\s*0?\s*/\s*(\d+)",
+                  interface
+              )
+              if match:
+                  return "g0/" + match.group(1)
+              return interface
+
+          def normalize_mac(mac):
+              mac = str(mac).strip().lower()
+
+              if re.fullmatch(
+                  r"[0-9a-f]{4}\.[0-9a-f]{4}\.[0-9a-f]{4}",
+                  mac
+              ):
+                  return mac
+
+              if re.fullmatch(r"[0-9a-f]{12}", mac):
+                  return mac
+
+              raise ValueError(
+                  "Invalid MAC address. Use aabb.ccdd.eeff or aabbccddeeff."
+              )
+
+          def read_output(channel, wait=1):
+              time.sleep(wait)
+              output = ""
+              while channel.recv_ready():
+                  output += channel.recv(65535).decode(
+                      "utf-8", errors="ignore"
+                  )
+                  time.sleep(0.2)
+              return output
+
+          def run_command(channel, command, wait=2):
+              channel.send(command + "\n")
+              return read_output(channel, wait)
+
+          def has_cli_error(output):
+              patterns = [
+                  r"Unknown command",
+                  r"Invalid command",
+                  r"invalid input",
+                  r"Incomplete command",
+                  r"% Error",
+                  r"% Invalid",
+                  r"command failed",
+                  r"configuration failed"
+              ]
+              return any(
+                  re.search(pattern, output, re.IGNORECASE)
+                  for pattern in patterns
+              )
+
+          def main():
+              client = None
+              status = "failed"
+              results = []
+              errors = []
+
+              report = {
+                  "host": HOST,
+                  "status": status,
+                  "feature": "IP-MAC Binding",
+                  "interface": INTERFACE,
+                  "ip_address": IP_ADDRESS,
+                  "mac_address": MAC_ADDRESS,
+                  "operation": OPERATION,
+                  "results": results,
+                  "errors": errors
+              }
+
+              try:
+                  ipaddress.IPv4Address(IP_ADDRESS)
+                  mac = normalize_mac(MAC_ADDRESS)
+                  interface = normalize_interface(INTERFACE)
+
+                  if not re.fullmatch(
+                      r"[gG](?:igaEthernet)?\s*0?\s*/\s*\d+",
+                      interface
+                  ):
+                      raise ValueError(
+                          "Invalid interface format. Use an interface such as g0/1."
+                      )
+
+                  client = paramiko.SSHClient()
+                  client.set_missing_host_key_policy(
+                      paramiko.AutoAddPolicy()
+                  )
+                  client.connect(
+                      hostname=HOST,
+                      port=PORT,
+                      username=USERNAME,
+                      password=PASSWORD,
+                      look_for_keys=False,
+                      allow_agent=False,
+                      timeout=15,
+                      banner_timeout=15,
+                      auth_timeout=15
+                  )
+
+                  channel = client.invoke_shell()
+                  initial_output = read_output(channel, 2)
+                  prompt_lines = initial_output.strip().splitlines()
+                  prompt = prompt_lines[-1].strip() if prompt_lines else ""
+
+                  results.append({
+                      "step": "initial_prompt",
+                      "output": initial_output.strip()
+                  })
+
+                  if not prompt:
+                      raise RuntimeError("Could not read the switch prompt.")
+
+                  if "config#" not in prompt.lower():
+                      if prompt.endswith(">"):
+                          output = run_command(channel, "enable", 2)
+                          results.append({
+                              "command": "enable",
+                              "output": output.strip()
+                          })
+
+                          if has_cli_error(output):
+                              raise RuntimeError(
+                                  "Switch rejected the enable command."
+                              )
+
+                          prompt_lines = output.strip().splitlines()
+                          prompt = (
+                              prompt_lines[-1].strip()
+                              if prompt_lines else ""
+                          )
+
+                          if not prompt.endswith("#"):
+                              raise RuntimeError(
+                                  "Could not enter privileged EXEC mode. "
+                                  "Current prompt: " + prompt
+                              )
+
+                      output = run_command(channel, "config", 2)
+                      results.append({
+                          "command": "config",
+                          "output": output.strip()
+                      })
+
+                      prompt_lines = output.strip().splitlines()
+                      prompt = (
+                          prompt_lines[-1].strip()
+                          if prompt_lines else ""
+                      )
+
+                      if (
+                          has_cli_error(output)
+                          or "config#" not in prompt.lower()
+                      ):
+                          raise RuntimeError(
+                              "Could not enter configuration mode. "
+                              "Current prompt: " + prompt
+                          )
+
+                  interface_command = "interface " + interface
+                  output = run_command(channel, interface_command, 2)
+                  results.append({
+                      "command": interface_command,
+                      "output": output.strip()
+                  })
+
+                  if has_cli_error(output):
+                      raise RuntimeError(
+                          "Could not select interface " + interface
+                      )
+
+                  command = (
+                      ("no " if OPERATION == "delete" else "")
+                      + "switchport port-security bind ip "
+                      + IP_ADDRESS + " mac " + mac
+                  )
+                  output = run_command(channel, command, 3)
+                  results.append({
+                      "command": command,
+                      "output": output.strip()
+                  })
+
+                  if has_cli_error(output):
+                      raise RuntimeError("IP-MAC Binding command failed.")
+
+                  status = "success"
+
+              except Exception as exc:
+                  errors.append(str(exc))
+                  status = "failed"
+
+              finally:
+                  if client:
+                      client.close()
+
+              report["status"] = status
+
+              with open(OUTPUT_FILE, "w") as report_file:
+                  json.dump(report, report_file, indent=2)
+                  report_file.write("\n")
+
+              print(json.dumps(report, indent=2))
+              sys.exit(0 if status == "success" else 1)
+
+          if __name__ == "__main__":
+              main()
+
+    - name: Execute IP-MAC Binding configuration script
+      ansible.builtin.command:
+        argv:
+          - python3
+          - "{{ tmp_dir }}/set_ipmacbinding.py"
+      register: ipmacbinding_result
+      changed_when: ipmacbinding_result.rc == 0
+      failed_when: ipmacbinding_result.rc != 0
+
+    - name: Display IP-MAC Binding configuration result
+      ansible.builtin.debug:
+        var: ipmacbinding_result.stdout
+
+

@@ -1465,21 +1465,22 @@ public function getmtu($hostname)
     #                    PORT PROTECT GROUP (SHOW)
     #------------------------------------------------------------
     /**
-     * Port protect playbooks for one switch run one at a time (flock). A
-     * read takes ~12 s, so without this a background refresh started
-     * before an Add/Delete could finish after it and save the old list.
+     * Playbooks of one feature on one switch run one at a time (flock). A
+     * read can take ~12 s, so without this a background refresh started
+     * before an Add/Delete could finish after it and save the old data.
      */
-    private function portProtectCommand(string $playbook, string $hosts, array $extraVars): string
+    private function lockedCommand(string $feature, string $hosts): string
     {
-        $lock = "{$this->pluginPath}/tmp/" . basename($hosts, '.yml') . "_portprotect.lock";
-        $extraVarsString = empty($extraVars) ? '' : " --extra-vars '" . json_encode($extraVars) . "'";
+        $lock = "{$this->pluginPath}/tmp/" . basename($hosts, '.yml') . "_{$feature}.lock";
 
-        return "source {$this->venv} && flock {$lock} ansible-playbook -i {$hosts} {$playbook}{$extraVarsString}";
+        return "source {$this->venv} && flock {$lock}";
     }
 
-    private function runPortProtect(string $playbook, string $hosts, array $extraVars = []): string
+    private function runLocked(string $feature, string $playbook, string $hosts, array $extraVars = []): string
     {
-        return (string) shell_exec($this->portProtectCommand($playbook, $hosts, $extraVars) . " 2>&1");
+        $extraVarsString = empty($extraVars) ? '' : " --extra-vars '" . json_encode($extraVars) . "'";
+
+        return (string) shell_exec($this->lockedCommand($feature, $hosts) . " ansible-playbook -i {$hosts} {$playbook}{$extraVarsString} 2>&1");
     }
 
     /**
@@ -1487,12 +1488,12 @@ public function getmtu($hostname)
      * Skipped (flock -n) while another run holds the lock, so page loads
      * and Refresh clicks don't pile reads up in front of an Add/Delete.
      */
-    private function refreshPortProtectAsync(string $hosts, array $playbooks): void
+    private function refreshLockedAsync(string $feature, string $hosts, array $playbooks): void
     {
-        $lock = "{$this->pluginPath}/tmp/" . basename($hosts, '.yml') . "_portprotect.lock";
         $runs = implode('; ', array_map(fn ($p) => "ansible-playbook -i {$hosts} {$p}", $playbooks));
+        $command = str_replace(' flock ', ' flock -n ', $this->lockedCommand($feature, $hosts));
 
-        shell_exec("source {$this->venv} && flock -n {$lock} sh -c " . escapeshellarg($runs) . " > /dev/null 2>&1 &");
+        shell_exec("{$command} sh -c " . escapeshellarg($runs) . " > /dev/null 2>&1 &");
     }
 
     /**
@@ -1512,13 +1513,13 @@ public function getmtu($hostname)
         // Serve the last result straight away and refresh it in the
         // background, as Rate Limit does.
         if (file_exists($groupFile) && file_exists($portFile)) {
-            $this->refreshPortProtectAsync($hosts, [$groupPlaybook, $portPlaybook]);
+            $this->refreshLockedAsync('portprotect', $hosts, [$groupPlaybook, $portPlaybook]);
 
             return $this->success($this->readPortProtectFiles($groupFile, $portFile) + ["cached" => true]);
         }
 
         foreach ([$groupPlaybook, $portPlaybook] as $playbook) {
-            $output = $this->runPortProtect($playbook, $hosts);
+            $output = $this->runLocked('portprotect', $playbook, $hosts);
             if (stripos($output, 'FAILED!') !== false) {
                 return $this->error($this->portProtectFailureReason($output, "Port Protect GET failed"), $output);
             }
@@ -1572,7 +1573,7 @@ public function getmtu($hostname)
         $failed = [];
         $raw = '';
         foreach ($ids as $id) {
-            $output = $this->runPortProtect(
+            $output = $this->runLocked('portprotect',
                 "{$this->pluginPath}/playbooks/portprotectgroup/setportprotectgroup.yml",
                 $hosts,
                 ['operation' => $data['operation'], 'group_id' => $id]
@@ -1587,9 +1588,9 @@ public function getmtu($hostname)
         }
 
         // Refresh the saved lists so the page reloads with the change.
-        $this->runPortProtect("{$this->pluginPath}/playbooks/portprotectgroup/getportprotectgroup.yml", $hosts);
+        $this->runLocked('portprotect', "{$this->pluginPath}/playbooks/portprotectgroup/getportprotectgroup.yml", $hosts);
         if ($data['operation'] === 'delete') {
-            $this->runPortProtect("{$this->pluginPath}/playbooks/portprotectgroup/getportprotectconfiguration.yml", $hosts);
+            $this->runLocked('portprotect', "{$this->pluginPath}/playbooks/portprotectgroup/getportprotectconfiguration.yml", $hosts);
         }
 
         $verb = $data['operation'] === 'set' ? 'created' : 'deleted';
@@ -1616,13 +1617,13 @@ public function getmtu($hostname)
         ]);
 
         $hosts = "{$this->pluginPath}/hosts/{$hostname}.yml";
-        $output = $this->runPortProtect(
+        $output = $this->runLocked('portprotect',
             "{$this->pluginPath}/playbooks/portprotectgroup/setportprotectconfiguration.yml",
             $hosts,
             ['target_interface' => $data['interface'], 'group_id' => (int) $data['group_id']]
         );
 
-        $this->runPortProtect("{$this->pluginPath}/playbooks/portprotectgroup/getportprotectconfiguration.yml", $hosts);
+        $this->runLocked('portprotect', "{$this->pluginPath}/playbooks/portprotectgroup/getportprotectconfiguration.yml", $hosts);
 
         if (stripos($output, 'FAILED!') !== false) {
             return $this->error($this->portProtectFailureReason($output, "Port Protect Group assignment failed"), $output);
@@ -1630,6 +1631,246 @@ public function getmtu($hostname)
 
         return $this->success([
             "message" => "{$data['interface']} added to Port Protect Group {$data['group_id']}",
+            "raw"     => $output,
+        ]);
+    }
+
+
+    #------------------------------------------------------------
+    #                    PORT SECURITY (SHOW)
+    #------------------------------------------------------------
+    /**
+     * Port security for all three tabs: each port's mode (Disable, static
+     * Accept/Reject or Dynamic) from getstaticmacfiltrationmode.yml, static
+     * MAC entries from getstaticmacfiltration.yml and IP-MAC bindings from
+     * getipmacbinding.yml. Port names are the switch's short form (g0/1).
+     */
+    public function getportsecurity($hostname)
+    {
+        $hosts = "{$this->pluginPath}/hosts/{$hostname}.yml";
+        $reads = $this->portSecurityReads($hostname);
+
+        // Serve the last result straight away and refresh it in the
+        // background, as Rate Limit does.
+        if (count(array_filter(array_map('file_exists', $reads))) === count($reads)) {
+            $this->refreshLockedAsync('portsecurity', $hosts, array_keys($reads));
+
+            return $this->success($this->readPortSecurityFiles($reads) + ["cached" => true]);
+        }
+
+        foreach (array_keys($reads) as $playbook) {
+            $output = $this->runLocked('portsecurity', $playbook, $hosts);
+            if (stripos($output, 'FAILED!') !== false) {
+                return $this->error($this->portSecurityFailureReason($output, "Port Security GET failed"), $output);
+            }
+        }
+
+        return $this->success($this->readPortSecurityFiles($reads) + ["cached" => false]);
+    }
+
+    /** Read playbook => the JSON file it writes. */
+    private function portSecurityReads(string $hostname): array
+    {
+        $dir = "{$this->pluginPath}/playbooks/portsecurity";
+        $out = "{$this->pluginPath}/output/{$hostname}";
+
+        return [
+            "{$dir}/getstaticmacfiltrationmode.yml" => "{$out}_staticmacfiltrationmode.yml",
+            "{$dir}/getstaticmacfiltration.yml"     => "{$out}_staticmacfiltration.yml",
+            "{$dir}/getipmacbinding.yml"            => "{$out}_ipmacbinding.yml",
+        ];
+    }
+
+    private function readPortSecurityFiles(array $reads): array
+    {
+        [$modeFile, $staticFile, $ipMacFile] = array_values($reads);
+        $json = fn ($file) => json_decode((string) @file_get_contents($file), true) ?: [];
+
+        $ports = [];
+        foreach ($json($modeFile)['interfaces'] ?? [] as $row) {
+            $ports[] = [
+                'interface'       => $this->shortPortMirrorName((string) ($row['interface'] ?? '')),
+                'mode'            => $row['mode'] ?? 'Disable',
+                'dynamic_maximum' => $row['dynamic_maximum'] ?? null,
+            ];
+        }
+
+        $staticMacs = [];
+        foreach ($json($staticFile)['bindings'] ?? [] as $row) {
+            $staticMacs[] = [
+                'interface'   => $this->shortPortMirrorName((string) ($row['normalized_interface'] ?? $row['interface'] ?? '')),
+                'mac_address' => $row['mac_address'] ?? '',
+            ];
+        }
+
+        $ipMac = [];
+        foreach ($json($ipMacFile)['bindings'] ?? [] as $row) {
+            $ipMac[] = [
+                'interface'   => $this->shortPortMirrorName((string) ($row['interface'] ?? '')),
+                'ip_address'  => $row['ip_address'] ?? '',
+                'mac_address' => $row['mac_address'] ?? '',
+            ];
+        }
+
+        return ["ports" => $ports, "static_macs" => $staticMacs, "ip_mac" => $ipMac];
+    }
+
+    /**
+     * The port security playbooks report failures in different places: a
+     * JSON `errors`/`error` list on stdout, or a line on stderr
+     * ("Static MAC Filtration error: ...", "ERROR: ...").
+     */
+    private function portSecurityFailureReason(string $output, string $fallback): string
+    {
+        if (!preg_match('/FAILED!\s*=>\s*(\{.*)/s', $output, $m)) {
+            return $fallback;
+        }
+
+        for ($len = strlen($m[1]); $len > 0; $len--) {
+            if ($m[1][$len - 1] !== '}') {
+                continue;
+            }
+
+            $decoded = json_decode(substr($m[1], 0, $len), true);
+            if (!is_array($decoded)) {
+                continue;
+            }
+
+            $report = json_decode((string) ($decoded['stdout'] ?? ''), true);
+            $errors = $report['errors'] ?? $report['error'] ?? null;
+            if (is_array($errors) && $errors) {
+                return (string) end($errors);
+            }
+            if (is_string($errors) && $errors !== '') {
+                return $errors;
+            }
+
+            foreach (array_reverse(explode("\n", (string) ($decoded['stderr'] ?? ''))) as $line) {
+                if (preg_match('/(?:error|ERROR):\s*(.+)$/', $line, $e)) {
+                    return trim($e[1]);
+                }
+            }
+
+            return trim((string) ($decoded['msg'] ?? '')) ?: $fallback;
+        }
+
+        return $fallback;
+    }
+
+    #------------------------------------------------------------
+    #                    PORT SECURITY MODE (SET)
+    #------------------------------------------------------------
+    public function setportsecuritymode(Request $request, $hostname)
+    {
+        $data = $request->validate([
+            'interface'       => ['required', 'string', 'regex:/^t?g\d+\/\d+$/i'],
+            'mode'            => 'required|in:Disable,Accept,Reject,Dynamic',
+            'dynamic_maximum' => 'required_if:mode,Dynamic|nullable|integer|min:1|max:2048',
+        ]);
+
+        $dir = "{$this->pluginPath}/playbooks/portsecurity";
+        $hosts = "{$this->pluginPath}/hosts/{$hostname}.yml";
+
+        // target_interface is always sent: without it the static playbook
+        // changes every port.
+        if ($data['mode'] === 'Dynamic') {
+            $output = $this->runLocked('portsecurity', "{$dir}/setdynamicmacfiltrationmode.yml", $hosts, [
+                'mode'             => 'enable',
+                'target_interface' => $data['interface'],
+                'max_mac_address'  => (int) $data['dynamic_maximum'],
+            ]);
+        } else {
+            $output = $this->runLocked('portsecurity', "{$dir}/setstaticmacfiltrationmode.yml", $hosts, [
+                'mode'             => strtolower($data['mode']),
+                'target_interface' => $data['interface'],
+            ]);
+        }
+
+        $this->runLocked('portsecurity', "{$dir}/getstaticmacfiltrationmode.yml", $hosts);
+
+        if (stripos($output, 'FAILED!') !== false) {
+            return $this->error($this->portSecurityFailureReason($output, "Port Security mode change failed"), $output);
+        }
+
+        $label = match ($data['mode']) {
+            'Accept'  => 'Static Accept',
+            'Reject'  => 'Static Reject',
+            'Dynamic' => "Dynamic (maximum {$data['dynamic_maximum']} MAC)",
+            default   => 'Disable',
+        };
+
+        return $this->success([
+            "message" => "Port Security on {$data['interface']} set to {$label}",
+            "raw"     => $output,
+        ]);
+    }
+
+    #------------------------------------------------------------
+    #                    STATIC MAC FILTRATION (SET / DELETE)
+    #------------------------------------------------------------
+    public function setportsecuritystaticmac(Request $request, $hostname)
+    {
+        $data = $request->validate([
+            'operation'   => 'required|in:set,delete',
+            'interface'   => ['required', 'string', 'regex:/^t?g\d+\/\d+$/i'],
+            'mac_address' => ['required', 'string', 'regex:/^([0-9a-f]{4}\.[0-9a-f]{4}\.[0-9a-f]{4}|[0-9a-f]{12})$/i'],
+        ]);
+
+        $dir = "{$this->pluginPath}/playbooks/portsecurity";
+        $hosts = "{$this->pluginPath}/hosts/{$hostname}.yml";
+
+        $output = $this->runLocked('portsecurity', "{$dir}/setstaticmacfiltration.yml", $hosts, [
+            'operation'        => $data['operation'],
+            'target_interface' => $data['interface'],
+            'mac_address'      => strtolower($data['mac_address']),
+        ]);
+
+        $this->runLocked('portsecurity', "{$dir}/getstaticmacfiltration.yml", $hosts);
+
+        if (stripos($output, 'FAILED!') !== false) {
+            return $this->error($this->portSecurityFailureReason($output, "Static MAC Filtration {$data['operation']} failed"), $output);
+        }
+
+        return $this->success([
+            "message" => $data['operation'] === 'set'
+                ? "Static MAC {$data['mac_address']} added on {$data['interface']}"
+                : "Static MAC {$data['mac_address']} deleted from {$data['interface']}",
+            "raw"     => $output,
+        ]);
+    }
+
+    #------------------------------------------------------------
+    #                    IP-MAC BINDING (SET / DELETE)
+    #------------------------------------------------------------
+    public function setportsecurityipmac(Request $request, $hostname)
+    {
+        $data = $request->validate([
+            'operation'   => 'required|in:set,delete',
+            'interface'   => ['required', 'string', 'regex:/^t?g\d+\/\d+$/i'],
+            'ip_address'  => 'required|ipv4',
+            'mac_address' => ['required', 'string', 'regex:/^([0-9a-f]{4}\.[0-9a-f]{4}\.[0-9a-f]{4}|[0-9a-f]{12})$/i'],
+        ]);
+
+        $dir = "{$this->pluginPath}/playbooks/portsecurity";
+        $hosts = "{$this->pluginPath}/hosts/{$hostname}.yml";
+
+        $output = $this->runLocked('portsecurity', "{$dir}/setipmacbinding.yml", $hosts, [
+            'operation'   => $data['operation'],
+            'port'        => $data['interface'],
+            'ip_address'  => $data['ip_address'],
+            'mac_address' => strtolower($data['mac_address']),
+        ]);
+
+        $this->runLocked('portsecurity', "{$dir}/getipmacbinding.yml", $hosts);
+
+        if (stripos($output, 'FAILED!') !== false) {
+            return $this->error($this->portSecurityFailureReason($output, "IP-MAC Binding {$data['operation']} failed"), $output);
+        }
+
+        return $this->success([
+            "message" => $data['operation'] === 'set'
+                ? "IP-MAC Binding {$data['ip_address']} / {$data['mac_address']} added on {$data['interface']}"
+                : "IP-MAC Binding {$data['ip_address']} / {$data['mac_address']} deleted from {$data['interface']}",
             "raw"     => $output,
         ]);
     }
