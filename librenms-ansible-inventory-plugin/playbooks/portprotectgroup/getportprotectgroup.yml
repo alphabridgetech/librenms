@@ -52,6 +52,10 @@
 
           def clean_output(text):
               text = re.sub(r"\x1b\[[0-?]*[ -/]*[@-~]", "", text)
+              # Drop pager prompts the switch has already erased with
+              # backspaces - otherwise the next config line ends up glued
+              # to "--More--" and is missed (e.g. "interface g0/2").
+              text = re.sub(r" ?--More-- ?\x08+ *\x08*", "", text)
               return text.replace("\x08", "").replace("\r", "")
 
           def run_command(channel, command, timeout=60):

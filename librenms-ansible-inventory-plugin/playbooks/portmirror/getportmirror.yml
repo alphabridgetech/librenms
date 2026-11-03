@@ -118,11 +118,34 @@
                   re.IGNORECASE | re.MULTILINE
               )
 
+              # The switch condenses ports sharing a direction onto one
+              # line: "... source interface g0/1 , g0/3 - 4 tx"
               source_pattern = re.compile(
                   r'^\s*mirror\s+session\s+1\s+source\s+'
-                  r'interface\s+(\S+)\s+(both|rx|tx)\s*$',
+                  r'interface\s+(.+?)\s+(both|rx|tx)\s*$',
                   re.IGNORECASE | re.MULTILINE
               )
+
+              def expand_ports(port_list):
+                  ports = []
+                  for item in port_list.split(","):
+                      item = item.strip()
+                      match = re.fullmatch(
+                          r'([a-zA-Z]+\d+/)(\d+)'
+                          r'(?:\s*-\s*(?:[a-zA-Z]+\d+/)?(\d+))?',
+                          item
+                      )
+                      if not match:
+                          if item:
+                              ports.append(item)
+                          continue
+                      first = int(match.group(2))
+                      last = int(match.group(3) or first)
+                      ports.extend(
+                          match.group(1) + str(n)
+                          for n in range(first, last + 1)
+                      )
+                  return ports
 
               destination = destination_pattern.search(config)
               source = source_pattern.search(config)
@@ -140,14 +163,18 @@
                   result["vid"] = destination.group(3)
                   result["tpid"] = destination.group(4)
 
+              mode_names = {"rx": "RX", "tx": "TX", "both": "RX & TX"}
+
               if source:
-                  result["mirrored_port"] = source.group(1)
-                  mode = source.group(2).lower()
-                  result["mirror_mode"] = {
-                      "rx": "RX",
-                      "tx": "TX",
-                      "both": "RX & TX"
-                  }[mode]
+                  result["mirrored_port"] = expand_ports(source.group(1))[0]
+                  result["mirror_mode"] = mode_names[source.group(2).lower()]
+
+              # A session can mirror several source ports
+              result["sources"] = [
+                  port + "=" + mode_names[m.group(2).lower()]
+                  for m in source_pattern.finditer(config)
+                  for port in expand_ports(m.group(1))
+              ]
 
               return result
 
@@ -204,6 +231,7 @@
                   file.write(f"mirror_type: {config['mirror_type']}\n")
                   file.write(f"mirrored_port: {config['mirrored_port']}\n")
                   file.write(f"mirror_mode: {config['mirror_mode']}\n")
+                  file.write(f"sources: {','.join(config['sources'])}\n")
                   file.write(f"vid: {config['vid']}\n")
                   file.write(f"tpid: {config['tpid']}\n")
 

@@ -176,7 +176,7 @@
               for line in output.splitlines():
 
                   match = re.search(
-                      r'\b(GigaEthernet\s*\d+/\d+)\b',
+                      r'\b(T?GigaEthernet\s*\d+/\d+)\b',
                       line,
                       re.IGNORECASE
                   )
@@ -191,11 +191,15 @@
 
                       interfaces.add(interface)
 
+              # GigaEthernet ports first, then TGigaEthernet
               return sorted(
                   interfaces,
-                  key=lambda name: tuple(
-                      int(number)
-                      for number in re.findall(r'\d+', name)
+                  key=lambda name: (
+                      name.upper().startswith("T"),
+                      tuple(
+                          int(number)
+                          for number in re.findall(r'\d+', name)
+                      )
                   )
               )
 
@@ -299,14 +303,15 @@
 
               for interface in interfaces:
 
-                  interface_number = interface.replace(
-                      "GigaEthernet",
-                      ""
-                  )
+                  interface_type, interface_number = re.match(
+                      r'(T?GigaEthernet)(\d+/\d+)',
+                      interface,
+                      re.IGNORECASE
+                  ).groups()
 
                   command = (
                       "show running-config interface "
-                      "GigaEthernet " + interface_number
+                      + interface_type + " " + interface_number
                   )
 
                   output = cmd(shell, command)

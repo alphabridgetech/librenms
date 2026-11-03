@@ -218,13 +218,14 @@
               value = interface.strip()
 
               match = re.fullmatch(
-                  r"GigaEthernet\s*(\d+/\d+)",
+                  r"(T?)GigaEthernet\s*(\d+/\d+)",
                   value,
                   re.IGNORECASE
               )
 
               if match:
-                  return "GigaEthernet", match.group(1)
+                  prefix = "TGigaEthernet" if match.group(1) else "GigaEthernet"
+                  return prefix, match.group(2)
 
               raise Exception(
                   "Unsupported interface format: " + interface

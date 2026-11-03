@@ -918,6 +918,9 @@ public function getmtu($hostname)
                 if (is_array($inner) && !empty($inner['error'])) {
                     return $inner['error'];
                 }
+                if (is_array($inner) && !empty($inner['errors']) && is_array($inner['errors'])) {
+                    return (string) end($inner['errors']);
+                }
             }
 
             if (!empty($decoded['msg'])) {
@@ -1200,6 +1203,437 @@ public function getmtu($hostname)
             "raw"     => $output,
         ]);
     }
+
+    #------------------------------------------------------------
+    #                    PORT MIRROR (SHOW)
+    #------------------------------------------------------------
+    /**
+     * Mirror session 1, read from `show running-config` by
+     * getportmirror.yml. Ports come from LibreNMS's own `ports` table, same
+     * as Rate Limit, in the short form the switch uses (g0/1, tg0/1).
+     */
+    public function getportmirror($hostname)
+    {
+        $ports = array_map([$this, 'shortPortMirrorName'], $this->getEligibleRateLimitPorts($hostname));
+        if (empty($ports)) {
+            return $this->error("No GigaEthernet/TGigaEthernet ports found for this device in LibreNMS");
+        }
+
+        $playbook = "{$this->pluginPath}/playbooks/portmirror/getportmirror.yml";
+        $hosts    = "{$this->pluginPath}/hosts/{$hostname}.yml";
+        $yamlFile = "{$this->pluginPath}/output/{$hostname}_portmirror_get.yml";
+
+        // Serve the last result straight away and refresh it in the
+        // background, as Rate Limit does.
+        if (file_exists($yamlFile)) {
+            $this->runAnsibleAsync($playbook, $hosts);
+
+            return $this->success([
+                "ports"  => $ports,
+                "mirror" => $this->parsePortMirrorFile($yamlFile, $hostname),
+                "cached" => true,
+            ]);
+        }
+
+        $output = $this->runAnsiblejs($playbook, $hosts);
+
+        if (!file_exists($yamlFile)) {
+            return $this->error("Port Mirror output file not found", $output);
+        }
+
+        $mirror = $this->parsePortMirrorFile($yamlFile, $hostname);
+        if ($mirror === null) {
+            $reason = $this->extractPortConfigFailureReason($output);
+            return $this->error($reason ?: "Port Mirror GET failed", $output);
+        }
+
+        return $this->success([
+            "ports"  => $ports,
+            "mirror" => $mirror,
+            "cached" => false,
+        ]);
+    }
+
+    /**
+     * getportmirror.yml writes plain `key: value` lines. Read them as
+     * strings - a YAML parser turns a TPID like 0x0021 into the integer 33.
+     * Returns null when the playbook recorded a failure.
+     */
+    private function parsePortMirrorFile(string $path, string $hostname): ?array
+    {
+        $values = [];
+        foreach (file($path, FILE_IGNORE_NEW_LINES) ?: [] as $line) {
+            if (preg_match('/^([^:]+):\s*(.*)$/', $line, $m)) {
+                $values[trim($m[1])] = trim($m[2]);
+            }
+        }
+
+        if (($values[$hostname] ?? '') !== 'SUCCESS') {
+            return null;
+        }
+
+        // sources: g0/1=TX,g0/3=RX & TX  (older files only have mirrored_port)
+        $sources = [];
+        if (isset($values['sources'])) {
+            foreach (array_filter(explode(',', $values['sources'])) as $pair) {
+                [$port, $mode] = array_pad(explode('=', $pair, 2), 2, '');
+                $sources[$this->shortPortMirrorName($port)] = $mode;
+            }
+        } elseif (!empty($values['mirrored_port'])) {
+            $sources[$this->shortPortMirrorName($values['mirrored_port'])] = $values['mirror_mode'] ?? '';
+        }
+
+        $mirrorPort = $values['mirror_port'] ?? 'Disable';
+        $enabled = $mirrorPort !== '' && $mirrorPort !== 'Disable';
+
+        return [
+            'enabled'     => $enabled,
+            'mirror_port' => $enabled ? $this->shortPortMirrorName($mirrorPort) : '',
+            'mirror_type' => $values['mirror_type'] ?? 'port-based',
+            'vid'         => $values['vid'] ?? '',
+            'tpid'        => $values['tpid'] ?? '',
+            'sources'     => (object) $sources,
+        ];
+    }
+
+    /** "GigaEthernet0/2" -> "g0/2", "TGigaEthernet0/1" -> "tg0/1", as the switch names them. */
+    private function shortPortMirrorName(string $port): string
+    {
+        return preg_replace(['#^TGigaEthernet#i', '#^GigaEthernet#i'], ['tg', 'g'], trim($port));
+    }
+
+    #------------------------------------------------------------
+    #                    PORT MIRROR (SET)
+    #------------------------------------------------------------
+    public function setportmirror(Request $request, $hostname)
+    {
+        $portRule = 'regex:/^t?g\d+\/\d+$/i';
+        $data = $request->validate([
+            'mirror_port'     => ['required', 'string', $portRule],
+            'mirror_type'     => 'required|in:port-based,flow-based',
+            'vid'             => 'required|integer|min:1|max:4094',
+            'tpid'            => ['required', 'string', 'regex:/^0x[0-9a-fA-F]{1,4}$/'],
+            'sources'         => 'required|array|min:1',
+            'sources.*.port'  => ['required', 'string', $portRule, 'distinct'],
+            'sources.*.mode'  => 'required|in:RX,TX,RX & TX',
+        ]);
+
+        $sources = array_map(fn ($s) => ['port' => $s['port'], 'mode' => $s['mode']], array_values($data['sources']));
+
+        foreach ($sources as $source) {
+            if (strcasecmp($source['port'], $data['mirror_port']) === 0) {
+                return $this->error("The mirror port {$data['mirror_port']} can't also be a mirrored port");
+            }
+        }
+
+        $playbook = "{$this->pluginPath}/playbooks/portmirror/setportmirror.yml";
+        $hosts    = "{$this->pluginPath}/hosts/{$hostname}.yml";
+
+        $extraVars = [
+            'mirror_port' => $data['mirror_port'],
+            'mirror_type' => $data['mirror_type'],
+            'vid'         => (int) $data['vid'],
+            'tpid'        => $data['tpid'],
+            'sources'     => $sources,
+            // Without the keyword the playbook tries the untyped command
+            // first, which some switches accept as port-based - so a
+            // flow-based request must always send the keyword.
+            'portmirror_type_keyword' => $data['mirror_type'] === 'flow-based',
+        ];
+
+        $output = $this->runAnsiblejs($playbook, $hosts, $extraVars);
+
+        // Refresh the GET result so the page reloads with the new values.
+        $this->runAnsiblejs("{$this->pluginPath}/playbooks/portmirror/getportmirror.yml", $hosts);
+
+        if (stripos($output, 'FAILED!') !== false || stripos($output, '"status": "failed"') !== false) {
+            $reason = $this->extractPortConfigFailureReason($output);
+            return $this->error($reason ?: "Port Mirror SET failed", $output);
+        }
+
+        $list = implode(', ', array_map(fn ($s) => "{$s['port']} ({$s['mode']})", $sources));
+
+        return $this->success([
+            "message" => "Port mirroring set: {$list} -> {$data['mirror_port']}",
+            "raw"     => $output,
+        ]);
+    }
+
+
+    #------------------------------------------------------------
+    #                    KEEPALIVE (SHOW)
+    #------------------------------------------------------------
+    /**
+     * Per-port keepalive, read by getkeepalive.yml. The port list is the
+     * one the playbook discovers on the switch (GigaEthernet and
+     * TGigaEthernet).
+     */
+    public function getkeepalive($hostname)
+    {
+        $playbook = "{$this->pluginPath}/playbooks/keepalive/getkeepalive.yml";
+        $hosts    = "{$this->pluginPath}/hosts/{$hostname}.yml";
+        $jsonFile = "{$this->pluginPath}/output/{$hostname}_keepalive.yml";
+
+        // Serve the last result straight away and refresh it in the
+        // background, as Rate Limit does.
+        if (file_exists($jsonFile)) {
+            $this->runAnsibleAsync($playbook, $hosts);
+
+            return $this->success([
+                "interfaces" => $this->readKeepaliveFile($jsonFile),
+                "cached"     => true,
+            ]);
+        }
+
+        $output = $this->runAnsiblejs($playbook, $hosts);
+
+        // getkeepalive.yml only writes the file on success
+        if (!file_exists($jsonFile)) {
+            $reason = $this->extractPortConfigFailureReason($output);
+            return $this->error($reason ?: "Keepalive GET failed", $output);
+        }
+
+        return $this->success([
+            "interfaces" => $this->readKeepaliveFile($jsonFile),
+            "cached"     => false,
+        ]);
+    }
+
+    /** getkeepalive.yml's output file is JSON: {"interfaces": [{interface, status, period}, ...]}. */
+    private function readKeepaliveFile(string $path): array
+    {
+        $data = json_decode((string) file_get_contents($path), true);
+
+        return is_array($data['interfaces'] ?? null) ? $data['interfaces'] : [];
+    }
+
+    #------------------------------------------------------------
+    #                    KEEPALIVE (SET)
+    #------------------------------------------------------------
+    public function setkeepalive(Request $request, $hostname)
+    {
+        $data = $request->validate([
+            'interface' => ['required', 'string', 'regex:/^T?GigaEthernet\d+\/\d+$/'],
+            'status'    => 'required|in:Enable,Disable',
+            'period'    => 'required_if:status,Enable|nullable|integer|min:0|max:32767',
+        ]);
+
+        $playbook = "{$this->pluginPath}/playbooks/keepalive/setkeepalive.yml";
+        $hosts    = "{$this->pluginPath}/hosts/{$hostname}.yml";
+
+        $extraVars = ['interface' => $data['interface'], 'status' => $data['status']];
+        if ($data['status'] === 'Enable') {
+            $extraVars['period'] = (int) $data['period'];
+        }
+
+        $output = $this->runAnsiblejs($playbook, $hosts, $extraVars);
+
+        if (stripos($output, 'FAILED!') !== false) {
+            $reason = $this->extractPortConfigFailureReason($output);
+            return $this->error($reason ?: "Keepalive SET failed", $output);
+        }
+
+        // A full re-read takes one command per port, so update this port in
+        // the saved result now and refresh the rest in the background.
+        $jsonFile = "{$this->pluginPath}/output/{$hostname}_keepalive.yml";
+        $saved = file_exists($jsonFile) ? json_decode((string) file_get_contents($jsonFile), true) : null;
+        if (is_array($saved) && is_array($saved['interfaces'] ?? null)) {
+            foreach ($saved['interfaces'] as &$row) {
+                if (($row['interface'] ?? null) === $data['interface']) {
+                    $row['status'] = $data['status'];
+                    $row['period'] = $data['status'] === 'Enable' ? (int) $data['period'] : 0;
+                }
+            }
+            unset($row);
+            // Not fatal if unwritable - the background refresh catches up
+            @file_put_contents($jsonFile, json_encode($saved, JSON_PRETTY_PRINT) . "\n");
+        }
+        $this->runAnsibleAsync("{$this->pluginPath}/playbooks/keepalive/getkeepalive.yml", $hosts);
+
+        $message = $data['status'] === 'Enable'
+            ? "Keepalive enabled on {$data['interface']} ({$data['period']} s)"
+            : "Keepalive disabled on {$data['interface']}";
+
+        return $this->success([
+            "message" => $message,
+            "raw"     => $output,
+        ]);
+    }
+
+
+    #------------------------------------------------------------
+    #                    PORT PROTECT GROUP (SHOW)
+    #------------------------------------------------------------
+    /**
+     * Port protect playbooks for one switch run one at a time (flock). A
+     * read takes ~12 s, so without this a background refresh started
+     * before an Add/Delete could finish after it and save the old list.
+     */
+    private function portProtectCommand(string $playbook, string $hosts, array $extraVars): string
+    {
+        $lock = "{$this->pluginPath}/tmp/" . basename($hosts, '.yml') . "_portprotect.lock";
+        $extraVarsString = empty($extraVars) ? '' : " --extra-vars '" . json_encode($extraVars) . "'";
+
+        return "source {$this->venv} && flock {$lock} ansible-playbook -i {$hosts} {$playbook}{$extraVarsString}";
+    }
+
+    private function runPortProtect(string $playbook, string $hosts, array $extraVars = []): string
+    {
+        return (string) shell_exec($this->portProtectCommand($playbook, $hosts, $extraVars) . " 2>&1");
+    }
+
+    /**
+     * Background refresh of the given read playbooks, one after the other.
+     * Skipped (flock -n) while another run holds the lock, so page loads
+     * and Refresh clicks don't pile reads up in front of an Add/Delete.
+     */
+    private function refreshPortProtectAsync(string $hosts, array $playbooks): void
+    {
+        $lock = "{$this->pluginPath}/tmp/" . basename($hosts, '.yml') . "_portprotect.lock";
+        $runs = implode('; ', array_map(fn ($p) => "ansible-playbook -i {$hosts} {$p}", $playbooks));
+
+        shell_exec("source {$this->venv} && flock -n {$lock} sh -c " . escapeshellarg($runs) . " > /dev/null 2>&1 &");
+    }
+
+    /**
+     * Protect groups (`port-protected <id>`) from getportprotectgroup.yml
+     * and each port's group (`switchport protected <id>`) from
+     * getportprotectconfiguration.yml. Port names are the switch's short
+     * form (g0/1, tg0/1).
+     */
+    public function getportprotect($hostname)
+    {
+        $hosts = "{$this->pluginPath}/hosts/{$hostname}.yml";
+        $groupPlaybook = "{$this->pluginPath}/playbooks/portprotectgroup/getportprotectgroup.yml";
+        $portPlaybook  = "{$this->pluginPath}/playbooks/portprotectgroup/getportprotectconfiguration.yml";
+        $groupFile = "{$this->pluginPath}/output/{$hostname}_portprotectgroup.yml";
+        $portFile  = "{$this->pluginPath}/output/{$hostname}_portprotectconfiguration.yml";
+
+        // Serve the last result straight away and refresh it in the
+        // background, as Rate Limit does.
+        if (file_exists($groupFile) && file_exists($portFile)) {
+            $this->refreshPortProtectAsync($hosts, [$groupPlaybook, $portPlaybook]);
+
+            return $this->success($this->readPortProtectFiles($groupFile, $portFile) + ["cached" => true]);
+        }
+
+        foreach ([$groupPlaybook, $portPlaybook] as $playbook) {
+            $output = $this->runPortProtect($playbook, $hosts);
+            if (stripos($output, 'FAILED!') !== false) {
+                return $this->error($this->portProtectFailureReason($output, "Port Protect GET failed"), $output);
+            }
+        }
+
+        return $this->success($this->readPortProtectFiles($groupFile, $portFile) + ["cached" => false]);
+    }
+
+    /** Both get playbooks write JSON: {"groups": [...]} and {"interfaces": [{interface, port_protect_group}]}. */
+    private function readPortProtectFiles(string $groupFile, string $portFile): array
+    {
+        $groups = json_decode((string) @file_get_contents($groupFile), true);
+        $ports  = json_decode((string) @file_get_contents($portFile), true);
+
+        return [
+            "groups"     => array_values(array_map('intval', $groups['groups'] ?? [])),
+            "interfaces" => array_values(array_filter($ports['interfaces'] ?? [], 'is_array')),
+        ];
+    }
+
+    /**
+     * The port protect playbooks print the real reason to stderr
+     * ("Port Protect Group error: ...") and only a generic message to stdout.
+     */
+    private function portProtectFailureReason(string $output, string $fallback): string
+    {
+        if (preg_match('/Port Protect Group error: (.+?)(?:\\\\n|"|$)/m', $output, $m)) {
+            return stripcslashes($m[1]);
+        }
+
+        return $this->extractPortConfigFailureReason($output) ?: $fallback;
+    }
+
+    #------------------------------------------------------------
+    #                    PORT PROTECT GROUP (SET / DELETE)
+    #------------------------------------------------------------
+    public function setportprotectgroup(Request $request, $hostname)
+    {
+        // One group (group_id) or several at once (group_ids, Batch Delete)
+        $data = $request->validate([
+            'operation'   => 'required|in:set,delete',
+            'group_id'    => 'required_without:group_ids|integer|min:1|max:28',
+            'group_ids'   => 'required_without:group_id|array|min:1',
+            'group_ids.*' => 'integer|min:1|max:28|distinct',
+        ]);
+
+        $ids = array_map('intval', $data['group_ids'] ?? [$data['group_id']]);
+        $hosts = "{$this->pluginPath}/hosts/{$hostname}.yml";
+
+        $done = [];
+        $failed = [];
+        $raw = '';
+        foreach ($ids as $id) {
+            $output = $this->runPortProtect(
+                "{$this->pluginPath}/playbooks/portprotectgroup/setportprotectgroup.yml",
+                $hosts,
+                ['operation' => $data['operation'], 'group_id' => $id]
+            );
+            $raw .= $output;
+
+            if (stripos($output, 'FAILED!') !== false) {
+                $failed[] = "Group {$id}: " . $this->portProtectFailureReason($output, "{$data['operation']} failed");
+            } else {
+                $done[] = $id;
+            }
+        }
+
+        // Refresh the saved lists so the page reloads with the change.
+        $this->runPortProtect("{$this->pluginPath}/playbooks/portprotectgroup/getportprotectgroup.yml", $hosts);
+        if ($data['operation'] === 'delete') {
+            $this->runPortProtect("{$this->pluginPath}/playbooks/portprotectgroup/getportprotectconfiguration.yml", $hosts);
+        }
+
+        $verb = $data['operation'] === 'set' ? 'created' : 'deleted';
+        $doneText = $done ? "Port Protect Group " . implode(', ', $done) . " {$verb}." : '';
+
+        if ($failed) {
+            return $this->error(trim($doneText . ' ' . implode(' ', $failed)), $raw);
+        }
+
+        return $this->success([
+            "message" => $doneText,
+            "raw"     => $raw,
+        ]);
+    }
+
+    #------------------------------------------------------------
+    #                    PORT PROTECT GROUP (INTERFACE SET)
+    #------------------------------------------------------------
+    public function setportprotectinterface(Request $request, $hostname)
+    {
+        $data = $request->validate([
+            'interface' => ['required', 'string', 'regex:/^(tg|g|ge|fe|e)\d+\/\d+$/i'],
+            'group_id'  => 'required|integer|min:1|max:28',
+        ]);
+
+        $hosts = "{$this->pluginPath}/hosts/{$hostname}.yml";
+        $output = $this->runPortProtect(
+            "{$this->pluginPath}/playbooks/portprotectgroup/setportprotectconfiguration.yml",
+            $hosts,
+            ['target_interface' => $data['interface'], 'group_id' => (int) $data['group_id']]
+        );
+
+        $this->runPortProtect("{$this->pluginPath}/playbooks/portprotectgroup/getportprotectconfiguration.yml", $hosts);
+
+        if (stripos($output, 'FAILED!') !== false) {
+            return $this->error($this->portProtectFailureReason($output, "Port Protect Group assignment failed"), $output);
+        }
+
+        return $this->success([
+            "message" => "{$data['interface']} added to Port Protect Group {$data['group_id']}",
+            "raw"     => $output,
+        ]);
+    }
+
 
     #------------------------------------------------------------
     #                    GVRP INTERFACE (SHOW)

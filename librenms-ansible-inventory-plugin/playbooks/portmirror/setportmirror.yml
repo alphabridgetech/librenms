@@ -31,7 +31,7 @@
   connection: local
 
   vars:
-    project_root: "{{ playbook_dir }}/../../.."
+    project_root: "{{ playbook_dir }}/../.."
     output_dir: "{{ project_root }}/output"
     tmp_dir: "{{ project_root }}/tmp"
 
@@ -40,9 +40,10 @@
       ansible.builtin.assert:
         that:
           - mirror_port is defined
-          - mirrored_port is defined
+          - mirrored_port is defined or (sources is defined and sources | length > 0)
           - (mirror_type | default('port-based')) in ['port-based', 'flow-based']
           - (mirror_mode | default('TX') | upper) in ['RX', 'TX', 'RX & TX', 'BOTH']
+          - (sources | default([]) | map(attribute='mode') | map('upper') | reject('in', ['RX', 'TX', 'RX & TX', 'BOTH']) | list | length) == 0
           - (vid | default(45) | int) >= 1
           - (vid | default(45) | int) <= 4094
           - (tpid | default('0x0021') | string | length) > 0
@@ -78,9 +79,14 @@
           PASSWORD = "{{ ansible_password | default(ansible_ssh_pass | default('')) }}"
 
           DEST_PORT = "{{ mirror_port }}"
-          SOURCE_PORT = "{{ mirrored_port }}"
+          SOURCE_PORT = "{{ mirrored_port | default('') }}"
           MIRROR_TYPE = "{{ mirror_type | default('port-based') }}"
           MIRROR_MODE = "{{ mirror_mode | default('TX') | upper }}"
+          # Several source ports: sources=[{"port": "g0/1", "mode": "TX"}, ...].
+          # Without it, the single mirrored_port / mirror_mode pair is used.
+          SOURCES = json.loads({{ sources | default([]) | to_json | to_json }}) or [
+              {"port": SOURCE_PORT, "mode": MIRROR_MODE}
+          ]
           VID = "{{ vid | default(45) }}"
           TPID = "{{ tpid | default('0x0021') }}"
           TYPE_KEYWORD = {{ (portmirror_type_keyword | default(false) | bool) }}
@@ -139,6 +145,7 @@
                   "destination_port": DEST_PORT,
                   "source_port": SOURCE_PORT,
                   "source_mode": MIRROR_MODE,
+                  "sources": SOURCES,
                   "rspan_vlan": VID,
                   "tpid": TPID,
                   "type_keyword_enabled": TYPE_KEYWORD,
@@ -208,7 +215,6 @@
                           )
 
                   dest_port = normalize_port(DEST_PORT)
-                  source_port = normalize_port(SOURCE_PORT)
 
                   type_keyword = (
                       "flowbased" if MIRROR_TYPE == "flow-based"
@@ -264,20 +270,24 @@
                       "BOTH": "both"
                   }
 
-                  source_mode = mode_map[MIRROR_MODE]
-                  source_command = (
-                      "mirror session 1 source interface "
-                      + source_port + " " + source_mode
-                  )
+                  for source in SOURCES:
+                      source_port = normalize_port(source["port"])
+                      source_mode = mode_map[str(source["mode"]).upper()]
+                      source_command = (
+                          "mirror session 1 source interface "
+                          + source_port + " " + source_mode
+                      )
 
-                  source_output = run_command(channel, source_command, 3)
-                  results.append({
-                      "command": source_command,
-                      "output": source_output.strip()
-                  })
+                      source_output = run_command(channel, source_command, 3)
+                      results.append({
+                          "command": source_command,
+                          "output": source_output.strip()
+                      })
 
-                  if has_cli_error(source_output):
-                      raise RuntimeError("Source command failed.")
+                      if has_cli_error(source_output):
+                          raise RuntimeError(
+                              "Source command failed for " + source_port + "."
+                          )
 
                   status = "success"
 

@@ -85,6 +85,13 @@ Route::prefix('v0')->group(function () {
         Route::post('portconfig/set/{hostname}', [App\Api\Controllers\KunalApiController::class, 'setportconfiguration'])->name('portconfig.set');
         Route::get('ratelimit/show/{hostname}', [App\Api\Controllers\KunalApiController::class, 'getratelimit'])->name('ratelimit.show');
         Route::post('ratelimit/set/{hostname}', [App\Api\Controllers\KunalApiController::class, 'setratelimit'])->name('ratelimit.set');
+        Route::get('portmirror/show/{hostname}', [App\Api\Controllers\KunalApiController::class, 'getportmirror'])->name('portmirror.show');
+        Route::post('portmirror/set/{hostname}', [App\Api\Controllers\KunalApiController::class, 'setportmirror'])->name('portmirror.set');
+        Route::get('keepalive/show/{hostname}', [App\Api\Controllers\KunalApiController::class, 'getkeepalive'])->name('keepalive.show');
+        Route::post('keepalive/set/{hostname}', [App\Api\Controllers\KunalApiController::class, 'setkeepalive'])->name('keepalive.set');
+        Route::get('portprotect/show/{hostname}', [App\Api\Controllers\KunalApiController::class, 'getportprotect'])->name('portprotect.show');
+        Route::post('portprotect/group/set/{hostname}', [App\Api\Controllers\KunalApiController::class, 'setportprotectgroup'])->name('portprotect.group.set');
+        Route::post('portprotect/interface/set/{hostname}', [App\Api\Controllers\KunalApiController::class, 'setportprotectinterface'])->name('portprotect.interface.set');
         Route::get('gvrp/show/{hostname}', [App\Api\Controllers\KunalApiController::class, 'getgvrp'])->name('gvrp.show');
         Route::post('gvrp/set/{hostname}', [App\Api\Controllers\KunalApiController::class, 'setgvrp'])->name('gvrp.set');
         Route::get('gvrp/global/show/{hostname}', [App\Api\Controllers\KunalApiController::class, 'getgvrpglobal'])->name('gvrp.global.show');
