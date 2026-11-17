@@ -1,0 +1,348 @@
+
+---
+# ============================================================================
+# File        : setportattribute.yml
+#
+# Feature     : Port Attribute - SET
+#
+# Purpose:
+#   Configure Port Attributes for TG, WG and CG interfaces.
+#
+#   Status            : enable / disable
+#   Speed             : 100 / 1000 / 10000 / 25000 / 100000
+#   Duplex            : full
+#   Flow Control      : on / off
+#   Fiber Auto        : enable / disable
+#   Auto Negotiation  : enable / disable
+#   Description       : Interface description
+#
+# Output:
+#   /home/gayatri/ansible/ABOSS/playbooks/output/
+#
+# Example:
+#
+# ansible-playbook -i inventory/10.10.10.1.yml playbooks/100G/portconfig/portattribute/setportattribute.yml -e "interface=tg0/0/4 status=disable speed=10000 duplex=full flow_control=on fiber_auto=enable auto_nego=disable description='Uplink Port to Core Switch'"
+#
+# ansible-playbook -i inventory/10.10.10.1.yml playbooks/100G/portconfig/portattribute/setportattribute.yml -e "interface=wg0/0/1 status=enable speed=25000 duplex=full flow_control=off fiber_auto=enable auto_nego=disable"
+#
+# ansible-playbook -i inventory/10.10.10.1.yml playbooks/100G/portconfig/portattribute/setportattribute.yml -e "interface=cg0/0/1 status=enable speed=100000 duplex=full flow_control=off fiber_auto=enable auto_nego=disable"
+# ============================================================================
+
+- name: Set Port Attribute
+  hosts: all
+  gather_facts: no
+
+  vars:
+    device_ip: "{{ ansible_host | default(inventory_hostname) }}"
+    temp_script: "{{ inventory_dir }}/../tmp/set_port_attribute_100g.py"
+    output_dir: "{{ inventory_dir }}/../output"
+    # Its own file - writing the GET file would replace the port list with this result
+    output_file: "{{ output_dir }}/{{ device_ip }}_port_configuration_set.yml"
+
+  tasks:
+    # ========================================================================
+    # VALIDATE REQUIRED INTERFACE
+    # ========================================================================
+
+    - name: Validate interface
+      ansible.builtin.assert:
+        that:
+          - interface is defined
+          - interface | length > 0
+          - interface is match('(?i)^(tg|wg|cg)\d+/\d+/\d+$')
+        fail_msg: "A valid interface is required (example: tg0/0/2, wg0/0/1 or cg0/0/1)"
+
+    # ========================================================================
+    # VALIDATE ATTRIBUTES
+    # ========================================================================
+
+    - name: Validate status
+      ansible.builtin.assert:
+        that:
+          - status is not defined or status in ['enable', 'disable']
+        fail_msg: "status must be enable or disable"
+
+    - name: Validate speed
+      ansible.builtin.assert:
+        that:
+          - speed is not defined or speed in ['100', '1000', '10000', '25000', '100000']
+        fail_msg: "speed must be 100, 1000, 10000, 25000 or 100000"
+
+    - name: Validate duplex
+      ansible.builtin.assert:
+        that:
+          - duplex is not defined or duplex == 'full'
+        fail_msg: "duplex supports only full"
+
+    - name: Validate flow control
+      ansible.builtin.assert:
+        that:
+          - flow_control is not defined or flow_control in ['on', 'off']
+        fail_msg: "flow_control must be on or off"
+
+    - name: Validate fiber auto
+      ansible.builtin.assert:
+        that:
+          - fiber_auto is not defined or fiber_auto in ['enable', 'disable']
+        fail_msg: "fiber_auto must be enable or disable"
+
+    - name: Validate auto negotiation
+      ansible.builtin.assert:
+        that:
+          - auto_nego is not defined or auto_nego in ['enable', 'disable']
+        fail_msg: "auto_nego must be enable or disable"
+
+    - name: Validate description
+      ansible.builtin.assert:
+        that:
+          - description is not defined or description | length > 0
+        fail_msg: "description must not be empty"
+
+    - name: Validate at least one attribute
+      ansible.builtin.assert:
+        that:
+          - >-
+            (status is defined) or
+            (speed is defined) or
+            (duplex is defined) or
+            (flow_control is defined) or
+            (fiber_auto is defined) or
+            (auto_nego is defined) or
+            (description is defined)
+        fail_msg: "Provide at least one port attribute to configure"
+
+    # ========================================================================
+    # CREATE OUTPUT DIRECTORY
+    # ========================================================================
+
+    - name: Create output directory
+      ansible.builtin.file:
+        path: "{{ output_dir }}"
+        state: directory
+        mode: "0755"
+      delegate_to: localhost
+
+    # ========================================================================
+    # CREATE PYTHON SCRIPT
+    # ========================================================================
+
+    - name: Create Port Attribute SET script
+      ansible.builtin.copy:
+        dest: "{{ temp_script }}"
+        mode: "0755"
+        content: |
+          #!/usr/bin/env python3
+
+          import paramiko
+          import time
+          import json
+          import re
+          import sys
+
+          HOST = "{{ device_ip }}"
+          USER = "{{ ansible_user | default('admin') }}"
+          PASS = "{{ ansible_password | default('admin') }}"
+
+          INTERFACE = "{{ interface }}"
+          STATUS = "{{ status | default('') }}"
+          SPEED = "{{ speed | default('') }}"
+          DUPLEX = "{{ duplex | default('') }}"
+          FLOW = "{{ flow_control | default('') }}"
+          FIBER = "{{ fiber_auto | default('') }}"
+          AUTO_NEGO = "{{ auto_nego | default('') }}"
+          DESCRIPTION = {{ description | default('') | to_json }}
+
+          def clean_output(data):
+              data = re.sub(
+                  r'\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])',
+                  '',
+                  data
+              )
+              return data.replace('\r', '')
+
+          def read_output(shell, timeout=8):
+              buffer = ""
+              end_time = time.time() + timeout
+              last_data = time.time()
+
+              while time.time() < end_time:
+                  if shell.recv_ready():
+                      data = shell.recv(65535).decode(errors="ignore")
+                      buffer += data
+                      last_data = time.time()
+
+                      if re.search(r'--\s*more\s*--', buffer, re.IGNORECASE):
+                          shell.send(" ")
+
+                  else:
+                      if buffer and time.time() - last_data > 1:
+                          break
+                      time.sleep(0.1)
+
+              return clean_output(buffer)
+
+          def cmd(shell, command):
+              while shell.recv_ready():
+                  shell.recv(65535)
+              shell.send(command + "\n")
+              return read_output(shell)
+
+          def check_error(output):
+              patterns = [
+                  r"Unknown command", r"unknown command",
+                  r"Invalid command", r"invalid input",
+                  r"Invalid input", r"Incomplete command",
+                  r"incomplete command",
+                  r"Current interface can't excute the command",
+                  r"can't excute", r"Error:", r"% ?Error",
+                  r"% ?Invalid"
+              ]
+              return any(
+                  re.search(pattern, output, re.IGNORECASE)
+                  for pattern in patterns
+              )
+
+          ssh = paramiko.SSHClient()
+          ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+
+          try:
+              ssh.connect(
+                  HOST,
+                  username=USER,
+                  password=PASS,
+                  look_for_keys=False,
+                  allow_agent=False,
+                  timeout=10
+              )
+
+              shell = ssh.invoke_shell()
+              time.sleep(1)
+
+              while shell.recv_ready():
+                  shell.recv(65535)
+
+              cmd(shell, "enable")
+
+              output = cmd(shell, "config")
+              if check_error(output):
+                  raise Exception(
+                      "Failed to enter configuration mode: " + output
+                  )
+
+              output = cmd(shell, "interface " + INTERFACE)
+              if check_error(output):
+                  raise Exception(
+                      "Failed to enter interface " + INTERFACE + ": " + output
+                  )
+
+              commands = []
+
+              if STATUS == "enable":
+                  commands.append("no shutdown")
+              elif STATUS == "disable":
+                  commands.append("shutdown")
+
+              if SPEED:
+                  commands.append("speed " + SPEED)
+
+              if DUPLEX:
+                  commands.append("duplex " + DUPLEX)
+
+              if FLOW:
+                  commands.append("flow-control " + FLOW)
+
+              if FIBER:
+                  commands.append("fiber-auto " + FIBER)
+
+              if AUTO_NEGO:
+                  commands.append("auto-nego " + AUTO_NEGO)
+
+              if DESCRIPTION:
+                  commands.append("description " + DESCRIPTION)
+
+              applied = []
+
+              for command in commands:
+                  output = cmd(shell, command)
+                  if check_error(output):
+                      raise Exception(
+                          "Failed to execute '" + command + "': " + output
+                      )
+                  applied.append(command)
+
+              result = {
+                  "device_ip": HOST,
+                  "interface": INTERFACE,
+                  "status": "success",
+                  "applied_commands": applied,
+                  "message": "Port Attribute SET configuration successful"
+              }
+
+              print(json.dumps(result, indent=4))
+              sys.exit(0)
+
+          except Exception as e:
+              result = {
+                  "device_ip": HOST,
+                  "interface": INTERFACE,
+                  "status": "failure",
+                  "message": "Port Attribute SET configuration failed",
+                  "error": str(e)
+              }
+              print(json.dumps(result, indent=4))
+              sys.exit(1)
+
+          finally:
+              try:
+                  ssh.close()
+              except:
+                  pass
+
+    # ========================================================================
+    # EXECUTE SCRIPT
+    # ========================================================================
+
+    - name: Execute Port Attribute SET
+      ansible.builtin.command:
+        cmd: "python3 {{ temp_script }}"
+      register: port_set
+      changed_when: true
+      delegate_to: localhost
+
+    # ========================================================================
+    # FAIL IF CONFIGURATION FAILED
+    # ========================================================================
+
+    - name: Fail if configuration failed
+      ansible.builtin.fail:
+        msg: "{{ port_set.stdout | default(port_set.stderr) }}"
+      when: port_set.rc != 0
+
+    # ========================================================================
+    # SAVE SUCCESS OUTPUT
+    # ========================================================================
+
+    - name: Save Port Attribute SET output
+      ansible.builtin.copy:
+        dest: "{{ output_file }}"
+        mode: "0644"
+        content: |
+          device_ip: "{{ device_ip }}"
+          interface: "{{ interface }}"
+          status: "success"
+          message: "Port Attribute SET configuration successful"
+      delegate_to: localhost
+
+    # ========================================================================
+    # DISPLAY RESULT
+    # ========================================================================
+
+    - name: Display result
+      ansible.builtin.debug:
+        msg:
+          device_ip: "{{ device_ip }}"
+          interface: "{{ interface }}"
+          status: "success"
+          message: "Port Attribute SET configuration successful"
+          output_file: "{{ output_file }}"
+

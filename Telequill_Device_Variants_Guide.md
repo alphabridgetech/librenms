@@ -220,6 +220,17 @@ Example: `playbooks/static_route_l3/switchv1alphabridge/10g/getstaticroute.yml`.
 | VLAN Interface IPv6 | `vlan_IPv6_L3` |
 | Static Route | `static_route_l3` |
 | IPv6 Route | `ipv6routel3` |
+| Port Configuration | `port_configuration` |
+
+Port Configuration reads its GET output from
+`output/<ip>_port_configuration.yml`. It understands two shapes:
+- The common `{<interface>: {status, speed, ...}}` shape.
+- The `interfaces: [ {port, port_desc, enable, auto_nego, ...} ]` list shape used by
+  `switchv1alphabridge/100g/`.
+
+The page shows the columns and edit fields of whichever shape the switch
+returns. A variant's SET playbook must write to its own file, not the GET
+file. Example: `<ip>_port_configuration_set.yml`.
 
 Other modules (STP, VLAN, DHCP snooping ...) always run their common playbook
 for now. A variant file placed in their folders is **not used** until those

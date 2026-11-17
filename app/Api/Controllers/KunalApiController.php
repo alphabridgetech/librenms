@@ -764,7 +764,7 @@ public function getmtu($hostname)
     #------------------------------------------------------------
     public function getportconfiguration($hostname)
     {
-        $playbook = "{$this->pluginPath}/playbooks/port_configuration/getportconfigurationinterfacedata.yml";
+        $playbook = $this->devicePlaybook('port_configuration/getportconfigurationinterfacedata.yml', $hostname);
         $hosts    = "{$this->pluginPath}/hosts/{$hostname}.yml";
         $yamlFile = "{$this->pluginPath}/output/{$hostname}_port_configuration.yml";
 
@@ -783,9 +783,10 @@ public function getmtu($hostname)
                 $this->runAnsibleAsync($playbook, $hosts);
 
                 return $this->success([
-                    "ip"         => $cached['IP'] ?? $hostname,
+                    "ip"         => $cached['IP'] ?? $cached['device_ip'] ?? $hostname,
                     "interfaces" => $interfaces,
                     "cached"     => true,
+                    "playbook"   => $this->playbookName($playbook),
                 ]);
             }
         }
@@ -805,9 +806,10 @@ public function getmtu($hostname)
         }
 
         return $this->success([
-            "ip"         => $data['IP'] ?? $hostname,
+            "ip"         => $data['IP'] ?? $data['device_ip'] ?? $hostname,
             "interfaces" => $interfaces,
             "cached"     => false,
+            "playbook"   => $this->playbookName($playbook),
         ]);
     }
 
@@ -822,6 +824,12 @@ public function getmtu($hostname)
     {
         if (!is_array($data)) {
             return [];
+        }
+
+        // List shape (e.g. switchv1alphabridge/100g playbook):
+        //   interfaces: [ {port: tg0/0/1, port_desc, enable, auto_nego, fiber_auto, speed: 10000Mb, duplex, flow_control} ]
+        if (isset($data['interfaces']) && is_array($data['interfaces'])) {
+            return $this->formatPortAttributeList($data['interfaces']);
         }
 
         $interfaces = [];
@@ -851,6 +859,45 @@ public function getmtu($hostname)
         }
 
         return $interfaces;
+    }
+
+    /**
+     * Rows of the list-shaped output. "format" => "attribute" tells the page
+     * which fields/editor to show; type is the port's speed class from its
+     * name prefix (tg = 10G, wg = 25G, cg = 100G).
+     */
+    private function formatPortAttributeList(array $list): array
+    {
+        $classes = ['tg' => '10G', 'wg' => '25G', 'cg' => '100G'];
+        $rows    = [];
+
+        foreach ($list as $p) {
+            if (!is_array($p) || empty($p['port'])) {
+                continue;
+            }
+
+            $port   = (string) $p['port'];
+            $prefix = strtolower(preg_replace('/\d.*$/', '', $port));
+            $speed  = $p['speed'] ?? null;
+            if (is_string($speed) && preg_match('/^(\d+)\s*mb?$/i', $speed, $m)) {
+                $speed = $m[1];                 // "10000Mb" -> "10000", the value the SET playbook takes
+            }
+
+            $rows[] = [
+                'format'       => 'attribute',
+                'interface'    => $port,
+                'type'         => $classes[$prefix] ?? 'Other',
+                'description'  => ($p['port_desc'] ?? '') !== '' ? (string) $p['port_desc'] : null,
+                'status'       => $this->normalizePortConfigWord($p['enable'] ?? null),
+                'speed'        => $speed !== null && $speed !== 'unknown' ? (string) $speed : null,
+                'duplex'       => $this->normalizePortConfigWord($p['duplex'] ?? null),
+                'flow_control' => $this->normalizePortConfigWord($p['flow_control'] ?? null),
+                'fiber_auto'   => $this->normalizePortConfigWord($p['fiber_auto'] ?? null),
+                'auto_nego'    => $this->normalizePortConfigWord($p['auto_nego'] ?? null),
+            ];
+        }
+
+        return $rows;
     }
 
     /**
@@ -971,16 +1018,34 @@ public function getmtu($hostname)
     #------------------------------------------------------------
     public function setportconfiguration(Request $request, $hostname)
     {
-        $data = $request->validate([
-            'interface'    => 'required|string',
+        $common   = "{$this->pluginPath}/playbooks/port_configuration/setportconfigurationinterfacedata.yml";
+        $playbook = $this->devicePlaybook('port_configuration/setportconfigurationinterfacedata.yml', $hostname);
+
+        // The interface and description end up in a shell command and on the
+        // switch CLI - letters, digits and / only (description: a few more).
+        $rules = [
+            'interface'    => ['required', 'string', 'max:32', 'regex:/^[A-Za-z]+[0-9\/]+$/'],
             'status'       => 'nullable|in:enable,disable',
             'speed'        => 'nullable|in:10M,100M,1000M,10G,auto',
             'duplex'       => 'nullable|in:full,half,auto',
             'flow_control' => 'nullable|in:on,off,auto',
             'fiber_auto'   => 'nullable|in:on,off',
-        ]);
+        ];
 
-        $playbook = "{$this->pluginPath}/playbooks/port_configuration/setportconfigurationinterfacedata.yml";
+        // A family/speed variant playbook takes its own values and checks
+        // them itself (see its "Validate ..." tasks); keep only the shape here.
+        if ($playbook !== $common) {
+            $rules = array_merge($rules, [
+                'speed'        => 'nullable|string|regex:/^\d{2,6}$/',
+                'duplex'       => 'nullable|in:full,half',
+                'flow_control' => 'nullable|in:on,off',
+                'fiber_auto'   => 'nullable|in:enable,disable',
+                'auto_nego'    => 'nullable|in:enable,disable',
+                'description'  => ['nullable', 'string', 'max:64', 'regex:/^[A-Za-z0-9 _.,:\/-]+$/'],
+            ]);
+        }
+
+        $data = $request->validate($rules);
         $hosts    = "{$this->pluginPath}/hosts/{$hostname}.yml";
 
         $extraVars = array_filter([
@@ -990,6 +1055,8 @@ public function getmtu($hostname)
             'duplex'       => $data['duplex'] ?? null,
             'flow_control' => $data['flow_control'] ?? null,
             'fiber_auto'   => $data['fiber_auto'] ?? null,
+            'auto_nego'    => $data['auto_nego'] ?? null,
+            'description'  => $data['description'] ?? null,
         ], fn ($value) => $value !== null && $value !== '');
 
         $output = $this->runAnsiblejs($playbook, $hosts, $extraVars);
@@ -998,7 +1065,7 @@ public function getmtu($hostname)
         // reloads right after this call already reflects the change,
         // instead of showing stale data until the next background refresh.
         $this->runAnsible(
-            "{$this->pluginPath}/playbooks/port_configuration/getportconfigurationinterfacedata.yml",
+            $this->devicePlaybook('port_configuration/getportconfigurationinterfacedata.yml', $hostname),
             $hosts
         );
 
@@ -5546,6 +5613,12 @@ public function getvlan($hostname)
         $m = self::L3_MODULES[$module];
 
         return $this->devicePlaybook("{$m['dir']}/{$m[$which]}.yml", $hostname);
+    }
+
+    /** Path of a playbook relative to playbooks/ - e.g. "port_configuration/switchv1alphabridge/100g/getportconfigurationinterfacedata.yml". */
+    private function playbookName(string $path): string
+    {
+        return substr($path, strlen("{$this->pluginPath}/playbooks/"));
     }
 
     /** The playbook $hostname gets, relative to playbooks/ - e.g. "static_route_l3/switchv1alphabridge/10g/getstaticroute.yml". */

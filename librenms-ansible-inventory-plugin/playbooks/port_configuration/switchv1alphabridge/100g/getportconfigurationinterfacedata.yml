@@ -1,0 +1,458 @@
+
+---
+# ============================================================================
+# File        : getportattribute.yml
+#
+# Feature     : Port Attribute - GET
+#
+# Purpose:
+#   Retrieve Port Attributes dynamically for TG, WG and CG interfaces.
+#
+#   Attributes:
+#   Port               : Interface name
+#   Port Desc          : Interface description
+#   Enable             : enable / disable
+#   Auto-Nego          : enable / disable
+#   Fiber-Auto         : enable / disable
+#   Speed              : Interface speed
+#   Duplex             : full / half
+#   Flow Control       : on / off
+#
+#   Configuration is retrieved from show running-config.
+#   Interfaces are discovered dynamically using show interface.
+#
+#   Default Values:
+#   Enable             : enable
+#   Auto-Nego          : disable
+#   Fiber-Auto         : enable
+#   TG Speed           : 10000Mb
+#   WG Speed           : 25000Mb
+#   CG Speed           : 100000Mb
+#   Duplex             : full
+#   Flow Control       : off
+#
+# Output:
+#   /home/gayatri/ansible/ABOSS/playbooks/output/
+#
+# ============================================================================
+
+- name: Get Port Attribute
+  hosts: all
+  gather_facts: no
+
+  vars:
+    device_ip: "{{ ansible_host | default(inventory_hostname) }}"
+    temp_script: "/opt/librenms/librenms-ansible-inventory-plugin/tmp/get_port_attribute.py"
+    output_dir: "/opt/librenms/librenms-ansible-inventory-plugin/output"
+    # Same file name as the common playbook - the API reads <ip>_port_configuration.yml
+    output_file: "{{ output_dir }}/{{ device_ip }}_port_configuration.yml"
+
+  tasks:
+
+    # ========================================================================
+    # CREATE OUTPUT DIRECTORY
+    # ========================================================================
+
+    - name: Create output directory
+      ansible.builtin.file:
+        path: "{{ output_dir }}"
+        state: directory
+        mode: "0755"
+      delegate_to: localhost
+
+    # ========================================================================
+    # CREATE PYTHON SCRIPT
+    # ========================================================================
+
+    - name: Create Port Attribute GET script
+      ansible.builtin.copy:
+        dest: "{{ temp_script }}"
+        mode: "0755"
+        content: |
+          #!/usr/bin/env python3
+
+          import paramiko
+          import time
+          import json
+          import re
+          import sys
+
+          HOST = "{{ device_ip }}"
+          USER = "{{ ansible_user | default('admin') }}"
+          PASS = "{{ ansible_password | default('admin') }}"
+
+          def clean_output(data):
+
+              data = re.sub(
+                  r'\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])',
+                  '',
+                  data
+              )
+
+              data = re.sub(
+                  r'--\s*more\s*--',
+                  '',
+                  data,
+                  flags=re.IGNORECASE
+              )
+
+              data = data.replace('\r', '')
+              data = data.replace('\x08', '')
+
+              return data
+
+          def read_output(shell, timeout=120):
+
+              buffer = ""
+              end_time = time.time() + timeout
+              last_data = time.time()
+              pages_sent = 0
+
+              while time.time() < end_time:
+
+                  if shell.recv_ready():
+
+                      data = shell.recv(65535).decode(
+                          errors="ignore"
+                      )
+
+                      buffer += data
+                      last_data = time.time()
+
+                      page_count = len(
+                          re.findall(
+                              r'--\s*more\s*--',
+                              buffer,
+                              re.IGNORECASE
+                          )
+                      )
+
+                      if page_count > pages_sent:
+                          shell.send(" ")
+                          pages_sent = page_count
+
+                  else:
+
+                      if buffer and time.time() - last_data > 1.5:
+                          break
+
+                      time.sleep(0.1)
+
+              return clean_output(buffer)
+
+          def cmd(shell, command):
+
+              while shell.recv_ready():
+                  shell.recv(65535)
+
+              shell.send(command + "\n")
+
+              return read_output(shell)
+
+          def discover_interfaces(output):
+
+              interfaces = re.findall(
+                  r'(?im)^\s*((?:tg|wg|cg)\d+/\d+/\d+)\s+is\s+'
+                  r'(?:administratively\s+)?(?:up|down)\b',
+                  output
+              )
+
+              return list(dict.fromkeys(
+                  interface.lower() for interface in interfaces
+              ))
+
+          def parse_running_config(output):
+
+              interface_configs = {}
+
+              matches = list(
+                  re.finditer(
+                      r'(?im)^\s*interface\s+((?:tg|wg|cg)\d+/\d+/\d+)\s*$',
+                      output
+                  )
+              )
+
+              for index, match in enumerate(matches):
+
+                  interface = match.group(1).lower()
+                  start = match.end()
+
+                  if index + 1 < len(matches):
+                      end = matches[index + 1].start()
+                  else:
+                      end = len(output)
+
+                  block = output[start:end]
+
+                  block = re.split(
+                      r'(?m)^\s*!\s*$',
+                      block,
+                      maxsplit=1
+                  )[0]
+
+                  interface_configs[interface] = block
+
+              return interface_configs
+
+          def get_enable(config):
+
+              if re.search(
+                  r'(?im)^\s*shutdown\s*$',
+                  config
+              ):
+                  return "disable"
+
+              return "enable"
+
+          def get_description(config):
+
+              match = re.search(
+                  r'(?im)^\s*description\s+(.+?)\s*$',
+                  config
+              )
+
+              return match.group(1).strip() if match else ""
+
+          def get_auto_negotiation(config):
+
+              match = re.search(
+                  r'(?im)^\s*auto-nego\s+(enable|disable)\b',
+                  config
+              )
+
+              if match:
+                  return match.group(1).lower()
+
+              return "disable"
+
+          def get_fiber_auto(config):
+
+              match = re.search(
+                  r'(?im)^\s*fiber-auto\s+(enable|disable)\s*$',
+                  config
+              )
+
+              if match:
+                  return match.group(1).lower()
+
+              return "enable"
+
+          def get_speed(interface, config):
+
+              # Read explicitly configured speed.
+              match = re.search(
+                  r'(?im)^\s*(?:auto-nego\s+(?:enable|disable)\s+)?speed\s+(\d+)\b',
+                  config
+              )
+
+              if match:
+                  return match.group(1) + "Mb"
+
+              # Use default speed according to interface type.
+              if interface.startswith("tg"):
+                  return "10000Mb"
+
+              if interface.startswith("wg"):
+                  return "25000Mb"
+
+              if interface.startswith("cg"):
+                  return "100000Mb"
+
+              return "unknown"
+
+          def get_duplex(config):
+
+              match = re.search(
+                  r'(?im)^\s*(?:auto-nego\s+(?:enable|disable)\s+.*)?duplex\s+(full|half)\b',
+                  config
+              )
+
+              if match:
+                  return match.group(1).lower()
+
+              return "full"
+
+          def get_flow_control(config):
+
+              match = re.search(
+                  r'(?im)^\s*flow-control\s+(on|off)\s*$',
+                  config
+              )
+
+              if match:
+                  return match.group(1).lower()
+
+              return "off"
+
+          ssh = paramiko.SSHClient()
+
+          ssh.set_missing_host_key_policy(
+              paramiko.AutoAddPolicy()
+          )
+
+          try:
+
+              ssh.connect(
+                  HOST,
+                  username=USER,
+                  password=PASS,
+                  look_for_keys=False,
+                  allow_agent=False,
+                  timeout=15,
+                  banner_timeout=30,
+                  auth_timeout=30
+              )
+
+              shell = ssh.invoke_shell()
+
+              time.sleep(1)
+
+              while shell.recv_ready():
+                  shell.recv(65535)
+
+              cmd(shell, "enable")
+
+              # Discover all TG, WG and CG interfaces dynamically.
+              all_interface_output = cmd(
+                  shell,
+                  "show interface"
+              )
+
+              interfaces = discover_interfaces(
+                  all_interface_output
+              )
+
+              if not interfaces:
+
+                  raise Exception(
+                      "No TG, WG or CG interfaces found in "
+                      "show interface output. Output received: " +
+                      all_interface_output[:2000]
+                  )
+
+              # Retrieve complete running configuration.
+              running_config = cmd(
+                  shell,
+                  "show running-config"
+              )
+
+              interface_configs = parse_running_config(
+                  running_config
+              )
+
+              results = []
+
+              # Retrieve attributes for every discovered interface.
+              for interface in interfaces:
+
+                  config = interface_configs.get(interface, "")
+
+                  results.append({
+
+                      "port": interface,
+
+                      "port_desc": get_description(config),
+
+                      "enable": get_enable(config),
+
+                      "auto_nego": get_auto_negotiation(config),
+
+                      "fiber_auto": get_fiber_auto(config),
+
+                      "speed": get_speed(interface, config),
+
+                      "duplex": get_duplex(config),
+
+                      "flow_control": get_flow_control(config)
+
+                  })
+
+              result = {
+
+                  "device_ip": HOST,
+
+                  "feature": "Port Attribute",
+
+                  "status": "success",
+
+                  "total_interfaces": len(results),
+
+                  "interfaces": results
+
+              }
+
+              print(json.dumps(result, indent=4))
+
+              sys.exit(0)
+
+          except Exception as e:
+
+              result = {
+
+                  "device_ip": HOST,
+
+                  "feature": "Port Attribute",
+
+                  "status": "failure",
+
+                  "message": "Port Attribute GET failed",
+
+                  "error": str(e)
+
+              }
+
+              print(json.dumps(result, indent=4))
+
+              sys.exit(1)
+
+          finally:
+
+              try:
+                  ssh.close()
+              except:
+                  pass
+
+    # ========================================================================
+    # EXECUTE SCRIPT
+    # ========================================================================
+
+    - name: Execute Port Attribute GET
+      ansible.builtin.command:
+        cmd: "python3 {{ temp_script }}"
+      register: port_get
+      changed_when: false
+      delegate_to: localhost
+
+    # ========================================================================
+    # FAIL IF RETRIEVAL FAILED
+    # ========================================================================
+
+    - name: Fail if retrieval failed
+      ansible.builtin.fail:
+        msg: "{{ port_get.stdout | default(port_get.stderr) }}"
+      when: port_get.rc != 0
+
+    # ========================================================================
+    # SAVE GET OUTPUT
+    # ========================================================================
+
+    - name: Save Port Attribute GET output
+      ansible.builtin.copy:
+        dest: "{{ output_file }}"
+        mode: "0644"
+        content: "{{ port_get.stdout | from_json | to_nice_yaml }}"
+      delegate_to: localhost
+
+    # ========================================================================
+    # DISPLAY RESULT
+    # ========================================================================
+
+    - name: Display result
+      ansible.builtin.debug:
+        msg:
+          device_ip: "{{ device_ip }}"
+          status: "success"
+          output_file: "{{ output_file }}"
+          result: "{{ port_get.stdout | from_json }}"
+      delegate_to: localhost
+
