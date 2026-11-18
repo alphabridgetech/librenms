@@ -1,0 +1,259 @@
+---
+# ============================================================
+# Set Static MAC Filtration Mode
+#
+# Configures Static MAC Filtration Mode on the specified
+# switch interface.
+# Supports Accept, Reject and Disable modes.
+# Saves the execution report in the output directory.
+#
+# Required Parameters:
+# - interface: Switch interface (e.g. tg0/0/4)
+# - mode: accept, reject or disable
+# Ansible command:
+#  ansible-playbook playbooks/portsecurity/switchv1alphabridge/100g/setstaticmacfiltrationmode.yml -i hosts/10.10.10.1.yml -e "interface=tg0/0/3 mode=reject"
+# ============================================================
+
+- name: Set Static MAC Filtration Mode
+  hosts: alphabridge_devices
+  gather_facts: false
+  connection: local
+
+  vars:
+    output_dir: "/opt/librenms/librenms-ansible-inventory-plugin/output"
+    tmp_dir: "/opt/librenms/librenms-ansible-inventory-plugin/tmp"
+    script_path: "{{ tmp_dir }}/set_staticmacfiltrationmode_{{ inventory_hostname | regex_replace('[^A-Za-z0-9_.-]', '_') }}.py"
+
+  tasks:
+    - name: Validate required parameters
+      ansible.builtin.assert:
+        that:
+          - interface is defined
+          - interface | string | length > 0
+          - mode is defined
+          - mode | lower in ['accept', 'reject', 'disable']
+        fail_msg: "Provide interface and mode (accept, reject or disable)."
+
+    - name: Create temporary and output directories
+      ansible.builtin.file:
+        path: "{{ item }}"
+        state: directory
+        mode: "0755"
+      loop:
+        - "{{ tmp_dir }}"
+        - "{{ output_dir }}"
+
+    - name: Create Static MAC Filtration SET script
+      ansible.builtin.copy:
+        dest: "{{ script_path }}"
+        mode: "0755"
+        content: |
+          import os
+          import re
+          import json
+          import time
+          import paramiko
+
+          HOST = os.environ["SWITCH_HOST"]
+          USERNAME = os.environ["SWITCH_USERNAME"]
+          PASSWORD = os.environ["SWITCH_PASSWORD"]
+          INTERFACE = os.environ["SWITCH_INTERFACE"]
+          MODE = os.environ["SWITCH_MODE"].lower()
+
+          ANSI_RE = re.compile(
+              r'\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])'
+          )
+          PAGER_RE = re.compile(
+              r'--\s*More\s*--',
+              re.IGNORECASE
+          )
+          PROMPT_RE = re.compile(
+              r'^[^\r\n]*[>#][ \t]*$'
+          )
+
+          def clean_output(value):
+              value = ANSI_RE.sub("", value)
+              value = value.replace("\r", "")
+              cleaned = []
+
+              for char in value:
+                  if char == "\b":
+                      if cleaned:
+                          cleaned.pop()
+                  else:
+                      cleaned.append(char)
+
+              return "".join(cleaned)
+
+          def read_until_prompt(channel, timeout=300):
+              output = ""
+              pending = ""
+              deadline = time.time() + timeout
+
+              while time.time() < deadline:
+                  if channel.recv_ready():
+                      data = channel.recv(65535).decode(
+                          "utf-8", errors="ignore"
+                      )
+                      pending += data
+                      cleaned_pending = clean_output(pending)
+
+                      pager_match = PAGER_RE.search(cleaned_pending)
+
+                      if pager_match:
+                          before_pager = cleaned_pending[:pager_match.start()]
+                          after_pager = cleaned_pending[pager_match.end():]
+                          output += before_pager
+                          pending = after_pager
+                          channel.send(" ")
+                          time.sleep(0.15)
+                          continue
+
+                      lines = cleaned_pending.splitlines()
+                      non_empty_lines = [
+                          line for line in lines if line.strip()
+                      ]
+
+                      if non_empty_lines:
+                          last_line = non_empty_lines[-1].strip()
+
+                          if PROMPT_RE.fullmatch(last_line):
+                              output += cleaned_pending
+                              return clean_output(output)
+                  else:
+                      time.sleep(0.05)
+
+              raise Exception(
+                  "Timeout waiting for switch prompt. Received output:\n"
+                  + clean_output(output + pending)[-5000:]
+              )
+
+          def run_command(channel, command, timeout=300):
+              channel.send(command + "\n")
+              return read_until_prompt(channel, timeout=timeout)
+
+          client = None
+          channel = None
+
+          try:
+              if MODE not in ("accept", "reject", "disable"):
+                  raise Exception("Invalid mode: " + MODE)
+
+              if not re.fullmatch(r'[A-Za-z0-9/_.-]+', INTERFACE):
+                  raise Exception("Invalid interface name: " + INTERFACE)
+
+              client = paramiko.SSHClient()
+              client.set_missing_host_key_policy(
+                  paramiko.AutoAddPolicy()
+              )
+
+              client.connect(
+                  hostname=HOST,
+                  port=22,
+                  username=USERNAME,
+                  password=PASSWORD,
+                  timeout=15,
+                  banner_timeout=20,
+                  auth_timeout=15,
+                  look_for_keys=False,
+                  allow_agent=False
+              )
+
+              channel = client.invoke_shell()
+              channel.settimeout(2)
+              time.sleep(1)
+
+              initial_output = ""
+              while channel.recv_ready():
+                  initial_output += channel.recv(65535).decode(
+                      "utf-8", errors="ignore"
+                  )
+
+              run_command(channel, "enable", timeout=20)
+
+              running_config = run_command(
+                  channel,
+                  "show running-config",
+                  timeout=300
+              )
+
+              interface_pattern = re.compile(
+                  r'^\s*interface\s+' + re.escape(INTERFACE) + r'\s*$',
+                  re.MULTILINE | re.IGNORECASE
+              )
+
+              if not interface_pattern.search(running_config):
+                  raise Exception(
+                      "Interface " + INTERFACE +
+                      " was not found in running configuration."
+                  )
+
+              run_command(channel, "config", timeout=30)
+              run_command(channel, "interface " + INTERFACE, timeout=30)
+
+              if MODE == "disable":
+                  command = "no switchport port-security mode static"
+              else:
+                  command = (
+                      "switchport port-security mode static " + MODE
+                  )
+
+              command_output = run_command(
+                  channel,
+                  command,
+                  timeout=30
+              )
+
+              run_command(channel, "end", timeout=30)
+
+              result = {
+                  "status": "SUCCESS",
+                  "interface": INTERFACE,
+                  "static_mac_filtration_mode": MODE.capitalize(),
+                  "command": command,
+                  "message": "Static MAC Filtration Mode configured successfully."
+              }
+
+              print(json.dumps(result))
+
+          except Exception as error:
+              print(json.dumps({
+                  "status": "FAILED",
+                  "interface": INTERFACE,
+                  "mode": MODE,
+                  "message": str(error)
+              }))
+              raise
+
+          finally:
+              if channel:
+                  channel.close()
+              if client:
+                  client.close()
+
+    - name: Execute Static MAC Filtration SET
+      ansible.builtin.command:
+        cmd: python3 "{{ script_path }}"
+      environment:
+        SWITCH_HOST: "{{ ansible_host | default(inventory_hostname) }}"
+        SWITCH_USERNAME: "{{ ansible_user }}"
+        SWITCH_PASSWORD: "{{ ansible_password }}"
+        SWITCH_INTERFACE: "{{ interface }}"
+        SWITCH_MODE: "{{ mode | lower }}"
+      register: static_mac_set
+      changed_when: "'SUCCESS' in static_mac_set.stdout"
+      no_log: true
+
+    - name: Parse Static MAC Filtration result
+      ansible.builtin.set_fact:
+        static_mac_result: "{{ static_mac_set.stdout | from_json }}"
+
+    - name: Save Static MAC Filtration report
+      ansible.builtin.copy:
+        content: "{{ static_mac_result | to_nice_yaml }}"
+        dest: "{{ output_dir }}/{{ ansible_host | default(inventory_hostname) }}_staticmacfiltrationmode_set.yml"
+        mode: "0644"
+
+    - name: Display Static MAC Filtration result
+      ansible.builtin.debug:
+        var: static_mac_result

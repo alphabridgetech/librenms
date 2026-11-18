@@ -1,0 +1,258 @@
+
+---
+# ============================================================
+# Get Port Mirror Configuration
+#
+# Retrieves Port Mirror session, destination interface,
+# source interfaces, and traffic direction from running-config.
+# Expands interface ranges into individual interfaces.
+# Saves structured data to the output directory.
+# ansible-playbook playbooks/portmirror/switchv1alphabridge/100g/getportmirror.yml -i hosts/10.10.10.1.yml
+# ============================================================
+
+- name: Get Port Mirror Configuration
+  hosts: alphabridge_devices
+  gather_facts: false
+  connection: local
+
+  vars:
+    temp_script: "/opt/librenms/librenms-ansible-inventory-plugin/tmp/getportmirror_{{ inventory_hostname | regex_replace('[^A-Za-z0-9_.-]', '_') }}.py"
+    output_dir: "/opt/librenms/librenms-ansible-inventory-plugin/output"
+
+  tasks:
+
+    - name: Create Port Mirror GET script
+      ansible.builtin.copy:
+        dest: "{{ temp_script }}"
+        mode: '0700'
+        content: |
+          import paramiko
+          import time
+          import re
+          import os
+          import yaml
+
+          HOST = {{ ansible_host | default(inventory_hostname) | to_json }}
+          USER = {{ ansible_user | to_json }}
+          PASSWORD = {{ ansible_password | to_json }}
+          OUTPUT_DIR = {{ output_dir | to_json }}
+
+          def clean_output(data):
+              data = data.replace('\r', '')
+              data = re.sub(r'\x1b\[[0-9;]*[A-Za-z]', '', data)
+              return data
+
+          def read_output(channel, wait=2, timeout=30):
+              output = ""
+              start = time.time()
+              last_data = time.time()
+
+              while time.time() - start < timeout:
+                  if channel.recv_ready():
+                      data = channel.recv(65535).decode(
+                          'utf-8', errors='ignore'
+                      )
+                      output += data
+                      last_data = time.time()
+
+                      if '--More--' in output or '--more--' in output:
+                          channel.send(' ')
+                          output = output.replace('--More--', '')
+                          output = output.replace('--more--', '')
+
+                  elif time.time() - last_data >= wait:
+                      break
+
+                  time.sleep(0.2)
+
+              return clean_output(output)
+
+          def send_command(channel, command):
+              channel.send(command + '\n')
+              return read_output(channel)
+
+          def expand_interfaces(interface):
+              range_match = re.fullmatch(
+                  r'((?:tg|wg|cg)\d+/\d+/)(\d+)-(\d+)',
+                  interface,
+                  re.IGNORECASE
+              )
+
+              if range_match:
+                  prefix = range_match.group(1)
+                  start = int(range_match.group(2))
+                  end = int(range_match.group(3))
+
+                  if end < start:
+                      raise ValueError(
+                          "Invalid interface range: " + interface
+                      )
+
+                  return [
+                      prefix + str(number)
+                      for number in range(start, end + 1)
+                  ]
+
+              if re.fullmatch(
+                  r'(?:tg|wg|cg)\d+/\d+/\d+',
+                  interface,
+                  re.IGNORECASE
+              ):
+                  return [interface]
+
+              raise ValueError(
+                  "Unsupported mirror interface format: " + interface
+              )
+
+          ssh = paramiko.SSHClient()
+          ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+
+          try:
+              ssh.connect(
+                  hostname=HOST,
+                  username=USER,
+                  password=PASSWORD,
+                  look_for_keys=False,
+                  allow_agent=False,
+                  timeout=10
+              )
+
+              channel = ssh.invoke_shell()
+              time.sleep(1)
+              read_output(channel)
+
+              send_command(channel, 'enable')
+              send_command(channel, 'config')
+
+              running_config = send_command(
+                  channel,
+                  'show running-config'
+              )
+
+              if 'Current configuration:' not in running_config:
+                  raise Exception(
+                      "Unable to retrieve running configuration:\n"
+                      + running_config
+                  )
+
+              sessions = {}
+
+              destination_pattern = re.compile(
+                  r'^\s*mirror\s+session\s+(\d+)\s+'
+                  r'destination\s+interface\s+(\S+)'
+                  r'(?:\s+RSPAN\s+(\S+))?\s*$',
+                  re.IGNORECASE
+              )
+
+              source_pattern = re.compile(
+                  r'^\s*mirror\s+session\s+(\d+)\s+'
+                  r'source\s+interface\s+(\S+)\s+'
+                  r'(rx|tx|both)\s*$',
+                  re.IGNORECASE
+              )
+
+              for line in running_config.splitlines():
+
+                  destination_match = destination_pattern.match(line)
+
+                  if destination_match:
+                      session_id = int(destination_match.group(1))
+
+                      session = sessions.setdefault(
+                          session_id,
+                          {
+                              'session_id': session_id,
+                              'destination_interface': None,
+                              'rspan_vlan': None,
+                              'source_interfaces': []
+                          }
+                      )
+
+                      session['destination_interface'] = (
+                          destination_match.group(2)
+                      )
+
+                      if destination_match.group(3):
+                          session['rspan_vlan'] = (
+                              destination_match.group(3)
+                          )
+
+                      continue
+
+                  source_match = source_pattern.match(line)
+
+                  if source_match:
+                      session_id = int(source_match.group(1))
+                      interface = source_match.group(2)
+                      direction = source_match.group(3).lower()
+
+                      session = sessions.setdefault(
+                          session_id,
+                          {
+                              'session_id': session_id,
+                              'destination_interface': None,
+                              'rspan_vlan': None,
+                              'source_interfaces': []
+                          }
+                      )
+
+                      for expanded_interface in expand_interfaces(
+                          interface
+                      ):
+                          session['source_interfaces'].append({
+                              'interface': expanded_interface,
+                              'direction': direction
+                          })
+
+              # No mirror sessions is a valid state: save an empty list
+              # so the caller can show port mirroring as not configured.
+              result = {
+                  'device_ip': HOST,
+                  'port_mirror_sessions': [
+                      sessions[key] for key in sorted(sessions)
+                  ]
+              }
+
+              os.makedirs(OUTPUT_DIR, exist_ok=True)
+
+              output_file = os.path.join(
+                  OUTPUT_DIR,
+                  '{}_port_mirror.yml'.format(HOST)
+              )
+
+              with open(output_file, 'w') as file:
+                  yaml.safe_dump(
+                      result,
+                      file,
+                      default_flow_style=False,
+                      sort_keys=False
+                  )
+
+              print("Port Mirror configuration retrieved successfully.")
+              print("Output saved to: " + output_file)
+              print(yaml.safe_dump(
+                  result,
+                  default_flow_style=False,
+                  sort_keys=False
+              ))
+
+          except Exception as error:
+              print("PORT MIRROR GET FAILED")
+              print(str(error))
+              raise
+
+          finally:
+              ssh.close()
+
+    - name: Retrieve Port Mirror configuration
+      ansible.builtin.command:
+        cmd: "python3 {{ temp_script }}"
+      delegate_to: localhost
+      register: mirror_result
+      changed_when: false
+      failed_when: mirror_result.rc != 0
+
+    - name: Display Port Mirror configuration
+      ansible.builtin.debug:
+        var: mirror_result.stdout_lines
+

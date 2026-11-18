@@ -1,0 +1,427 @@
+---
+# ============================================================
+# Configure Static MAC Filtration Item
+#
+# Adds or deletes a static MAC address on the specified
+# switch interface.
+# Validates interface, MAC address and action.
+# Verifies the configuration using show running-config.
+# Saves the execution report in the output directory.
+#
+# Required Parameters:
+# - interface: Switch interface (e.g. tg0/0/3)
+# - mac_address: MAC address (e.g. AA:BB:CC:DD:EE:FF)
+# - action: add or delete
+#
+# Command-:
+# ansible-playbook -i hosts/10.10.10.1.yml playbooks/portsecurity/switchv1alphabridge/100g/setstaticmacfiltration.yml -e '{"interface":"cg0/0/8","mac_address":"AA:BB:CC:DD:dE:Fd","action":"add"}
+# ============================================================
+
+- name: Configure Static MAC Filtration Item
+  hosts: alphabridge_devices
+  gather_facts: false
+  connection: local
+
+  vars:
+    output_dir: "/opt/librenms/librenms-ansible-inventory-plugin/output"
+    tmp_dir: "/opt/librenms/librenms-ansible-inventory-plugin/tmp"
+    script_path: "{{ tmp_dir }}/set_staticmacfiltration_{{ inventory_hostname | regex_replace('[^A-Za-z0-9_.-]', '_') }}.py"
+    report_file: "{{ output_dir }}/{{ ansible_host | default(inventory_hostname) }}_staticmacfiltration_set.yml"
+
+  tasks:
+    - name: Validate required parameters
+      ansible.builtin.assert:
+        that:
+          - interface is defined
+          - mac_address is defined
+          - action is defined
+          - interface | lower is match('^(tg|wg|cg)[0-9]+/[0-9]+/[0-9]+$')
+          - mac_address is match('(?i)^([0-9a-f]{2}:){5}[0-9a-f]{2}$')
+          - action | lower in ['add', 'delete']
+        fail_msg: "Provide a valid physical interface, MAC address and action (add/delete)."
+
+    - name: Create temporary and output directories
+      ansible.builtin.file:
+        path: "{{ item }}"
+        state: directory
+        mode: '0755'
+      loop:
+        - "{{ tmp_dir }}"
+        - "{{ output_dir }}"
+
+    - name: Create Static MAC Filtration SET script
+      ansible.builtin.copy:
+        dest: "{{ script_path }}"
+        mode: '0755'
+        content: |
+          import os
+          import re
+          import json
+          import time
+          import paramiko
+
+          HOST = os.environ["SWITCH_HOST"]
+          USERNAME = os.environ["SWITCH_USERNAME"]
+          PASSWORD = os.environ["SWITCH_PASSWORD"]
+          INTERFACE = os.environ["INTERFACE"].lower()
+          MAC_ADDRESS = os.environ["MAC_ADDRESS"].lower()
+          ACTION = os.environ["ACTION"].lower()
+          REPORT_FILE = os.environ["REPORT_FILE"]
+
+          ANSI_RE = re.compile(r'\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])')
+          PAGER_RE = re.compile(r'--\s*More\s*--', re.IGNORECASE)
+          PROMPT_RE = re.compile(r'^[^\r\n]*[>#][ \t]*$')
+          ERROR_RE = re.compile(
+              r'unknown command|command incomplete|invalid input|'
+              r'invalid command|ambiguous command|error:',
+              re.IGNORECASE
+          )
+
+          def clean_output(value):
+              value = ANSI_RE.sub("", value)
+              value = value.replace("\r", "")
+              cleaned = []
+              for char in value:
+                  if char == "\b":
+                      if cleaned:
+                          cleaned.pop()
+                  else:
+                      cleaned.append(char)
+              return "".join(cleaned)
+
+          def read_until_prompt(channel, timeout=300):
+              output = ""
+              pending = ""
+              deadline = time.time() + timeout
+
+              while time.time() < deadline:
+                  if channel.recv_ready():
+                      data = channel.recv(65535).decode(
+                          "utf-8", errors="ignore"
+                      )
+                      pending += data
+                      cleaned_pending = clean_output(pending)
+
+                      pager_match = PAGER_RE.search(cleaned_pending)
+                      if pager_match:
+                          output += cleaned_pending[:pager_match.start()]
+                          pending = cleaned_pending[pager_match.end():]
+                          channel.send(" ")
+                          time.sleep(0.15)
+                          continue
+
+                      lines = cleaned_pending.splitlines()
+                      non_empty_lines = [
+                          line for line in lines if line.strip()
+                      ]
+
+                      if non_empty_lines:
+                          last_line = non_empty_lines[-1].strip()
+                          if PROMPT_RE.fullmatch(last_line):
+                              output += cleaned_pending
+                              return clean_output(output)
+
+                  else:
+                      time.sleep(0.05)
+
+              raise Exception(
+                  "Timeout waiting for switch prompt. Received output:\n"
+                  + clean_output(output + pending)[-5000:]
+              )
+
+          def get_prompt(output):
+              lines = [
+                  line.strip()
+                  for line in clean_output(output).splitlines()
+                  if line.strip()
+              ]
+              if not lines:
+                  raise Exception("Unable to identify switch prompt.")
+              prompt = lines[-1]
+              if not PROMPT_RE.fullmatch(prompt):
+                  raise Exception("Invalid switch prompt: " + prompt)
+              return prompt
+
+          def run_command(channel, command, timeout=300):
+              channel.send(command + "\n")
+              output = read_until_prompt(channel, timeout)
+              return output, get_prompt(output)
+
+          def check_cli_error(output):
+              cleaned = clean_output(output)
+              if ERROR_RE.search(cleaned):
+                  raise Exception(
+                      "Switch rejected the command. CLI output:\n" + cleaned
+                  )
+
+          def is_config_prompt(prompt):
+              return bool(
+                  re.search(r'\(config(?:-[^)]+)?\)#$', prompt, re.I)
+                  or re.search(r'_config(?:_[^#]*)?#$', prompt, re.I)
+              )
+
+          def is_interface_prompt(prompt):
+              return bool(
+                  re.search(r'\(config-[^)]+\)#$', prompt, re.I)
+                  or re.search(
+                      r'_config_(?:tg|wg|cg)\d+/\d+/\d+#$',
+                      prompt,
+                      re.I
+                  )
+              )
+
+          def prompt_interface(prompt):
+              match = re.search(
+                  r'(?:\(config-|_config_)'
+                  r'((?:tg|wg|cg)\d+/\d+/\d+)',
+                  prompt,
+                  re.I
+              )
+              return match.group(1).lower() if match else None
+
+          def get_interface_block(config, interface):
+              current_interface = None
+              block = []
+
+              for line in config.splitlines():
+                  match = re.match(
+                      r'^\s*interface\s+(\S+)',
+                      line,
+                      re.I
+                  )
+
+                  if match:
+                      if current_interface == interface:
+                          return block
+                      current_interface = match.group(1).lower()
+                      block = []
+                      continue
+
+                  if current_interface == interface:
+                      if line.strip() == "!":
+                          return block
+                      block.append(line)
+
+              return block if current_interface == interface else None
+
+          def main():
+              client = paramiko.SSHClient()
+              client.set_missing_host_key_policy(
+                  paramiko.AutoAddPolicy()
+              )
+
+              result = {
+                  "status": "FAILED",
+                  "interface": INTERFACE,
+                  "mac_address": MAC_ADDRESS,
+                  "action": ACTION
+              }
+
+              try:
+                  client.connect(
+                      hostname=HOST,
+                      port=22,
+                      username=USERNAME,
+                      password=PASSWORD,
+                      timeout=15,
+                      banner_timeout=20,
+                      auth_timeout=15,
+                      look_for_keys=False,
+                      allow_agent=False
+                  )
+
+                  channel = client.invoke_shell()
+                  channel.settimeout(2)
+                  time.sleep(1)
+
+                  initial_output = read_until_prompt(channel, 30)
+                  prompt = get_prompt(initial_output)
+
+                  # Enter privileged mode only when required.
+                  if prompt.endswith(">"):
+                      output, prompt = run_command(
+                          channel, "enable", timeout=30
+                      )
+                      check_cli_error(output)
+
+                  # Move to global configuration mode only when needed.
+                  if is_interface_prompt(prompt):
+                      if prompt_interface(prompt) != INTERFACE:
+                          output, prompt = run_command(
+                              channel, "exit", timeout=30
+                          )
+                          check_cli_error(output)
+
+                  if not is_config_prompt(prompt):
+                      output, prompt = run_command(
+                          channel, "config", timeout=30
+                      )
+                      check_cli_error(output)
+
+                  if not is_config_prompt(prompt):
+                      raise Exception(
+                          "Unable to enter configuration mode. "
+                          "Current prompt: " + prompt
+                      )
+
+                  # Enter the requested interface.
+                  if not (
+                      is_interface_prompt(prompt)
+                      and prompt_interface(prompt) == INTERFACE
+                  ):
+                      output, prompt = run_command(
+                          channel, "interface " + INTERFACE, timeout=30
+                      )
+                      check_cli_error(output)
+
+                  if not is_interface_prompt(prompt):
+                      raise Exception(
+                          "Unable to enter interface configuration mode. "
+                          "Current prompt: " + prompt
+                      )
+
+                  # Configure or remove the static MAC address.
+                  if ACTION == "add":
+                      command = (
+                          "switchport port-security static mac-address "
+                          + MAC_ADDRESS
+                      )
+                  else:
+                      command = (
+                          "no switchport port-security static mac-address "
+                          + MAC_ADDRESS
+                      )
+
+                  output, prompt = run_command(
+                      channel, command, timeout=30
+                  )
+                  check_cli_error(output)
+
+                  # Verify the actual running configuration.
+                  output, prompt = run_command(
+                      channel, "show running-config", timeout=300
+                  )
+                  check_cli_error(output)
+
+                  config = clean_output(output)
+                  block = get_interface_block(config, INTERFACE)
+
+                  if block is None:
+                      raise Exception(
+                          "Interface not found in running configuration: "
+                          + INTERFACE
+                      )
+
+                  configured_macs = re.findall(
+                      r'^\s*switchport\s+port-security\s+static\s+'
+                      r'mac-address\s+([0-9a-f:.-]+)',
+                      "\n".join(block),
+                      re.I | re.M
+                  )
+                  configured_macs = [
+                      mac.lower() for mac in configured_macs
+                  ]
+
+                  exists = MAC_ADDRESS in configured_macs
+
+                  if ACTION == "add" and not exists:
+                      # The switch silently refuses a static MAC that
+                      # is already configured on another port
+                      other_ports = []
+                      current = None
+                      for line in config.splitlines():
+                          match = re.match(r'^\s*interface\s+(\S+)', line, re.I)
+                          if match:
+                              current = match.group(1).lower()
+                              continue
+                          mac_match = re.match(
+                              r'^\s*switchport\s+port-security\s+static\s+'
+                              r'mac-address\s+([0-9a-f:.-]+)',
+                              line,
+                              re.I
+                          )
+                          if (
+                              current
+                              and current != INTERFACE
+                              and mac_match
+                              and mac_match.group(1).lower() == MAC_ADDRESS
+                          ):
+                              other_ports.append(current)
+
+                      if other_ports:
+                          raise Exception(
+                              "MAC address " + MAC_ADDRESS
+                              + " is already a static MAC on "
+                              + ", ".join(other_ports)
+                              + ". The switch allows a static MAC on "
+                              "one port only - delete it there first."
+                          )
+
+                      raise Exception(
+                          "MAC address was not found in running-config "
+                          "after add command."
+                      )
+
+                  if ACTION == "delete" and exists:
+                      raise Exception(
+                          "MAC address is still present in running-config "
+                          "after delete command."
+                      )
+
+                  result.update({
+                      "status": "SUCCESS",
+                      "command": command,
+                      "configured_mac_addresses": configured_macs,
+                      "message": (
+                          "Static MAC address added and verified successfully."
+                          if ACTION == "add"
+                          else "Static MAC address deleted and verified successfully."
+                      )
+                  })
+
+              except Exception as exc:
+                  result["status"] = "FAILED"
+                  result["message"] = str(exc)
+
+              finally:
+                  try:
+                      client.close()
+                  except Exception:
+                      pass
+
+                  os.makedirs(
+                      os.path.dirname(REPORT_FILE),
+                      exist_ok=True
+                  )
+
+                  with open(REPORT_FILE, "w") as report:
+                      json.dump(result, report, indent=4)
+
+                  print(json.dumps(result, indent=4))
+
+                  if result["status"] != "SUCCESS":
+                      raise SystemExit(1)
+
+          if __name__ == "__main__":
+              main()
+
+    - name: Execute Static MAC Filtration SET
+      ansible.builtin.command:
+        argv:
+          - python3
+          - "{{ script_path }}"
+      environment:
+        SWITCH_HOST: "{{ ansible_host }}"
+        SWITCH_USERNAME: "{{ ansible_user }}"
+        SWITCH_PASSWORD: "{{ ansible_password | default(ansible_ssh_pass | default('')) }}"
+        INTERFACE: "{{ interface }}"
+        MAC_ADDRESS: "{{ mac_address | lower }}"
+        ACTION: "{{ action | lower }}"
+        REPORT_FILE: "{{ report_file }}"
+      register: set_result
+      changed_when: "'SUCCESS' in set_result.stdout"
+      failed_when: set_result.rc != 0
+
+    - name: Display Static MAC Filtration SET result
+      ansible.builtin.debug:
+        msg: "{{ set_result.stdout }}"

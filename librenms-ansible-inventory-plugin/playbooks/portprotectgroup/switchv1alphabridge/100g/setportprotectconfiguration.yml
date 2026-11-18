@@ -1,0 +1,563 @@
+---
+# ============================================================
+# Set Port Protect Group on 100G Interface
+#
+# Checks that the requested port-protected group exists in the
+# global section of show running-config before assigning it to
+# the selected interface.
+# Dynamically resolves the interface name from running-config.
+# Saves only the switch IP and operation result.
+#
+# Required Parameters:
+# - target_interface: Interface (e.g. tg0/0/2)
+# - group_id: Existing Port Protect Group ID (1-28)
+#
+# Ansible command:
+# ansible-playbook -i hosts/10.10.10.1.yml playbooks/portprotectgroup/switchv1alphabridge/100g/setportprotectconfiguration.yml -e '{"target_interface":"tg0/0/2","group_id":23}'
+# ============================================================
+
+- name: Set Port Protect Group on 100G Interface
+  hosts: alphabridge_devices
+  gather_facts: false
+  connection: local
+
+  vars:
+    output_dir: "/opt/librenms/librenms-ansible-inventory-plugin/output"
+    temp_script: "/opt/librenms/librenms-ansible-inventory-plugin/tmp/set_portprotectconfiguration_{{ inventory_hostname | regex_replace('[^A-Za-z0-9_.-]', '_') }}.py"
+
+  tasks:
+    - name: Validate Port Protect Group parameters
+      ansible.builtin.assert:
+        that:
+          - target_interface is defined
+          - (target_interface | string | length) > 0
+          - group_id is defined
+          - (group_id | int) >= 1
+          - (group_id | int) <= 28
+        fail_msg: "Provide target_interface and a group_id between 1 and 28. The group must already exist in the global running configuration."
+        success_msg: "Port Protect Group parameters validated."
+
+    - name: Create output directory
+      ansible.builtin.file:
+        path: "{{ output_dir }}"
+        state: directory
+        mode: "0755"
+
+    - name: Create temporary directory
+      ansible.builtin.file:
+        path: "{{ temp_script | dirname }}"
+        state: directory
+        mode: "0755"
+
+    - name: Generate Port Protect Group configuration script
+      ansible.builtin.copy:
+        dest: "{{ temp_script }}"
+        mode: "0755"
+        content: |
+          import sys
+          import time
+          import json
+          import re
+          import paramiko
+
+          HOST = "{{ ansible_host | default(inventory_hostname) }}"
+          SSH_PORT = int("{{ ansible_port | default(22) }}")
+          USERNAME = "{{ ansible_user | default(ansible_ssh_user | default('admin')) }}"
+          PASSWORD = "{{ ansible_password | default(ansible_ssh_pass | default('')) }}"
+          TARGET_INTERFACE = "{{ target_interface }}"
+          GROUP_ID = int("{{ group_id }}")
+          OUTPUT_FILE = "{{ output_dir }}/{{ ansible_host | default(inventory_hostname) }}_portprotectconfiguration_set.yml"
+
+          def clean_output(text):
+              text = text.replace("\x1bE", "\n")
+              text = re.sub(r"\x1b\[[0-?]*[ -/]*[@-~]", "", text)
+              text = re.sub(r"\x1b[()][A-Z0-9]", "", text)
+              text = text.replace("\x08", "").replace("\r", "")
+              return text
+
+          def run_command(channel, command, timeout=60):
+              channel.send(command + "\n")
+              output = ""
+              deadline = time.time() + timeout
+
+              while time.time() < deadline:
+                  if channel.recv_ready():
+                      data = channel.recv(65535).decode(
+                          "utf-8", errors="ignore"
+                      )
+                      output += data
+                      cleaned = clean_output(output)
+
+                      if re.search(
+                          r"--More--|Press any key|Press <SPACE>",
+                          cleaned,
+                          re.I
+                      ):
+                          channel.send(" ")
+                          output = re.sub(
+                              r"--More--|Press any key|Press <SPACE>",
+                              "",
+                              output,
+                              flags=re.I
+                          )
+
+                      lines = [
+                          line.strip()
+                          for line in clean_output(output).splitlines()
+                          if line.strip()
+                      ]
+
+                      if lines and re.search(r"[>#]\s*$", lines[-1]):
+                          time.sleep(0.3)
+
+                          while channel.recv_ready():
+                              output += channel.recv(65535).decode(
+                                  "utf-8", errors="ignore"
+                              )
+
+                          return clean_output(output)
+
+                  else:
+                      time.sleep(0.15)
+
+              raise TimeoutError(
+                  "Timeout waiting for prompt after command: " + command
+                  + ". Output: " + clean_output(output)[-1000:]
+              )
+
+          def has_cli_error(output):
+              patterns = [
+                  r"Unknown command",
+                  r"Invalid command",
+                  r"invalid input",
+                  r"Incomplete command",
+                  r"% Error",
+                  r"% Invalid",
+                  r"command failed",
+                  r"configuration failed",
+                  r"Bad parameter"
+              ]
+
+              return any(
+                  re.search(pattern, output, re.I)
+                  for pattern in patterns
+              )
+
+          def normalize_interface(name):
+              name = name.strip()
+
+              patterns = [
+                  (r"TGigaEthernet\s*(\d+)\s*/\s*(\d+)\s*/\s*(\d+)", "tg"),
+                  (r"TenGigabitEthernet\s*(\d+)\s*/\s*(\d+)\s*/\s*(\d+)", "tg"),
+                  (r"GigaEthernet\s*(\d+)\s*/\s*(\d+)\s*/\s*(\d+)", "g"),
+                  (r"FastEthernet\s*(\d+)\s*/\s*(\d+)\s*/\s*(\d+)", "fe"),
+                  (r"Ethernet\s*(\d+)\s*/\s*(\d+)\s*/\s*(\d+)", "e"),
+                  (r"tg\s*(\d+)\s*/\s*(\d+)\s*/\s*(\d+)", "tg"),
+                  (r"g\s*(\d+)\s*/\s*(\d+)\s*/\s*(\d+)", "g"),
+                  (r"ge\s*(\d+)\s*/\s*(\d+)\s*/\s*(\d+)", "g"),
+                  (r"fe\s*(\d+)\s*/\s*(\d+)\s*/\s*(\d+)", "fe"),
+                  (r"e\s*(\d+)\s*/\s*(\d+)\s*/\s*(\d+)", "e"),
+                  (r"cg\s*(\d+)\s*/\s*(\d+)\s*/\s*(\d+)", "cg"),
+                  (r"wg\s*(\d+)\s*/\s*(\d+)\s*/\s*(\d+)", "wg"),
+                  (r"TGigaEthernet\s*(\d+)\s*/\s*(\d+)", "tg"),
+                  (r"TenGigabitEthernet\s*(\d+)\s*/\s*(\d+)", "tg"),
+                  (r"GigaEthernet\s*(\d+)\s*/\s*(\d+)", "g"),
+                  (r"FastEthernet\s*(\d+)\s*/\s*(\d+)", "fe"),
+                  (r"Ethernet\s*(\d+)\s*/\s*(\d+)", "e"),
+                  (r"tg\s*(\d+)\s*/\s*(\d+)", "tg"),
+                  (r"ge\s*(\d+)\s*/\s*(\d+)", "g"),
+                  (r"g\s*(\d+)\s*/\s*(\d+)", "g"),
+                  (r"fe\s*(\d+)\s*/\s*(\d+)", "fe"),
+                  (r"e\s*(\d+)\s*/\s*(\d+)", "e"),
+                  (r"cg\s*(\d+)\s*/\s*(\d+)", "cg"),
+                  (r"wg\s*(\d+)\s*/\s*(\d+)", "wg")
+              ]
+
+              for pattern, prefix in patterns:
+                  match = re.fullmatch(pattern, name, re.I)
+
+                  if match:
+                      return prefix + "/".join(match.groups())
+
+              return re.sub(r"\s+", "", name).lower()
+
+          def global_protect_groups(config):
+              config = clean_output(config)
+              groups = set()
+              in_interface = False
+
+              for raw_line in config.splitlines():
+                  line = raw_line.strip()
+
+                  if not line:
+                      continue
+
+                  if re.match(r"^interface\s+", line, re.I):
+                      in_interface = True
+                      continue
+
+                  if line == "!":
+                      in_interface = False
+                      continue
+
+                  if raw_line and not raw_line[0].isspace():
+                      in_interface = False
+
+                  match = re.fullmatch(
+                      r"port-protected\s+(\d+)",
+                      line,
+                      re.I
+                  )
+
+                  if not in_interface and match:
+                      groups.add(int(match.group(1)))
+
+              return groups
+
+          def discover_interfaces(config):
+              config = clean_output(config)
+              found = []
+
+              for raw_line in config.splitlines():
+                  match = re.match(
+                      r"^\s*interface\s+(.+?)\s*$",
+                      raw_line,
+                      re.I
+                  )
+
+                  if not match:
+                      continue
+
+                  name = match.group(1).strip()
+                  normalized = normalize_interface(name)
+
+                  if re.fullmatch(
+                      r"(?:tg|g|ge|fe|e|cg|wg)\d+/\d+(?:/\d+)?",
+                      normalized,
+                      re.I
+                  ):
+                      found.append({
+                          "interface": name,
+                          "normalized": normalized
+                      })
+
+              return found
+
+          def interface_group(config, target_interface):
+              current_interface = None
+
+              for raw_line in clean_output(config).splitlines():
+                  line = raw_line.strip()
+
+                  match = re.match(
+                      r"^interface\s+(.+?)\s*$",
+                      line,
+                      re.I
+                  )
+
+                  if match:
+                      current_interface = normalize_interface(
+                          match.group(1)
+                      )
+                      continue
+
+                  if (
+                      current_interface
+                      and current_interface.lower() == target_interface.lower()
+                  ):
+                      match = re.fullmatch(
+                          r"switchport\s+protected\s+(\d+)",
+                          line,
+                          re.I
+                      )
+
+                      if match:
+                          return int(match.group(1))
+
+              return None
+
+          def write_report(message):
+              report = {
+                  "ip": HOST,
+                  "message": message
+              }
+
+              with open(OUTPUT_FILE, "w") as report_file:
+                  json.dump(report, report_file, indent=2)
+                  report_file.write("\n")
+
+              print(json.dumps(report, indent=2))
+
+          def main():
+              client = None
+
+              try:
+                  wanted_interface = normalize_interface(TARGET_INTERFACE)
+
+                  client = paramiko.SSHClient()
+                  client.set_missing_host_key_policy(
+                      paramiko.AutoAddPolicy()
+                  )
+
+                  client.connect(
+                      hostname=HOST,
+                      port=SSH_PORT,
+                      username=USERNAME,
+                      password=PASSWORD,
+                      look_for_keys=False,
+                      allow_agent=False,
+                      timeout=15,
+                      banner_timeout=15,
+                      auth_timeout=15
+                  )
+
+                  channel = client.invoke_shell()
+                  time.sleep(2)
+
+                  initial = ""
+
+                  while channel.recv_ready():
+                      initial += channel.recv(65535).decode(
+                          "utf-8", errors="ignore"
+                      )
+
+                  initial = clean_output(initial)
+
+                  if not initial.strip():
+                      channel.send("\n")
+                      initial = run_command(channel, "", 10)
+
+                  lines = [
+                      line.strip()
+                      for line in initial.splitlines()
+                      if line.strip()
+                  ]
+
+                  prompt = lines[-1] if lines else ""
+
+                  if not prompt:
+                      raise RuntimeError(
+                          "Could not read the switch prompt."
+                      )
+
+                  if prompt.endswith(">"):
+                      output = run_command(channel, "enable", 10)
+
+                      if has_cli_error(output):
+                          raise RuntimeError(
+                              "Could not enter privileged EXEC mode. "
+                              + output.strip()
+                          )
+
+                      lines = [
+                          line.strip()
+                          for line in output.splitlines()
+                          if line.strip()
+                      ]
+
+                      prompt = lines[-1] if lines else ""
+
+                      if not prompt.endswith("#"):
+                          raise RuntimeError(
+                              "Could not enter privileged EXEC mode."
+                          )
+
+                  # Read the complete running configuration.
+                  config = run_command(
+                      channel,
+                      "show running-config",
+                      120
+                  )
+
+                  if has_cli_error(config):
+                      raise RuntimeError(
+                          "Switch rejected show running-config: "
+                          + config[-1000:]
+                      )
+
+                  # Check that the requested group exists globally.
+                  groups = global_protect_groups(config)
+
+                  if GROUP_ID not in groups:
+                      raise RuntimeError(
+                          "Port Protect Group " + str(GROUP_ID)
+                          + " does not exist in the global running "
+                          "configuration. Available groups: "
+                          + ", ".join(str(group) for group in sorted(groups))
+                      )
+
+                  # Dynamically discover the requested interface.
+                  interfaces = discover_interfaces(config)
+
+                  selected = next(
+                      (
+                          item for item in interfaces
+                          if item["normalized"].lower()
+                          == wanted_interface.lower()
+                      ),
+                      None
+                  )
+
+                  if not selected:
+                      raise RuntimeError(
+                          "Interface " + TARGET_INTERFACE
+                          + " was not found in show running-config."
+                      )
+
+                  # Read the current group from the selected interface.
+                  current_group = interface_group(
+                      config,
+                      selected["normalized"]
+                  )
+
+                  # Skip configuration if the requested group is already assigned.
+                  if current_group == GROUP_ID:
+                      write_report(
+                          "Port Protect Group " + str(GROUP_ID)
+                          + " is already configured on "
+                          + selected["interface"] + "."
+                      )
+                      return
+
+                  # Enter global configuration mode.
+                  output = run_command(
+                      channel,
+                      "config",
+                      10
+                  )
+
+                  if has_cli_error(output):
+                      raise RuntimeError(
+                          "Could not enter configuration mode: "
+                          + output.strip()
+                      )
+
+                  # Select the dynamically discovered interface.
+                  output = run_command(
+                      channel,
+                      "interface " + selected["interface"],
+                      10
+                  )
+
+                  if has_cli_error(output):
+                      raise RuntimeError(
+                          "Could not select interface "
+                          + selected["interface"] + ": "
+                          + output.strip()
+                      )
+
+                  # Remove the existing Port Protect Group if configured.
+                  if current_group is not None:
+                      output = run_command(
+                          channel,
+                          "no switchport protected",
+                          10
+                      )
+
+                      if has_cli_error(output):
+                          raise RuntimeError(
+                              "Could not remove existing Port Protect Group "
+                              + str(current_group) + ": "
+                              + output.strip()
+                          )
+
+                  # Apply the requested Port Protect Group.
+                  # Do not use 'no switchport protected <group_id>'.
+                  command = "switchport protected " + str(GROUP_ID)
+
+                  output = run_command(
+                      channel,
+                      command,
+                      10
+                  )
+
+                  if has_cli_error(output):
+                      raise RuntimeError(
+                          "Switch rejected command: "
+                          + command + ". Response: "
+                          + output.strip()
+                      )
+
+                  # Exit interface and configuration modes.
+                  run_command(channel, "exit", 10)
+                  run_command(channel, "exit", 10)
+
+                  time.sleep(1)
+
+                  # Verify the applied configuration.
+                  verify_config = run_command(
+                      channel,
+                      "show running-config",
+                      120
+                  )
+
+                  if has_cli_error(verify_config):
+                      raise RuntimeError(
+                          "Could not verify the configuration: "
+                          + verify_config[-1000:]
+                      )
+
+                  verified_group = interface_group(
+                      verify_config,
+                      selected["normalized"]
+                  )
+
+                  if verified_group != GROUP_ID:
+                      raise RuntimeError(
+                          "Port Protect Group verification failed on "
+                          + selected["interface"]
+                          + ". Expected group "
+                          + str(GROUP_ID)
+                          + ", found "
+                          + str(verified_group)
+                      )
+
+                  write_report(
+                      "Port Protect Group configured successfully."
+                  )
+
+              except Exception as exc:
+                  print(
+                      "Port Protect Group error: " + str(exc),
+                      file=sys.stderr
+                  )
+
+                  write_report(
+                      "Port Protect Group configuration failed."
+                  )
+
+                  sys.exit(1)
+
+              finally:
+                  if client:
+                      client.close()
+
+          if __name__ == "__main__":
+              main()
+
+    - name: Execute Port Protect Group configuration
+      ansible.builtin.command:
+        argv:
+          - python3
+          - "{{ temp_script }}"
+      register: port_protect_result
+      changed_when:
+        - port_protect_result.rc == 0
+        - "'already configured' not in port_protect_result.stdout"
+      failed_when: false
+      timeout: 300
+
+    - name: Display Port Protect Group result
+      ansible.builtin.debug:
+        msg:
+          - "OUTPUT: {{ port_protect_result.stdout | default('') }}"
+          - "ERROR: {{ port_protect_result.stderr | default('') }}"
+          - "RETURN CODE: {{ port_protect_result.rc | default('unknown') }}"
+
+    - name: Fail if configuration was unsuccessful
+      ansible.builtin.fail:
+        msg: >-
+          {{ port_protect_result.stderr
+             | default(port_protect_result.stdout)
+             | default('Port Protect Group configuration failed.') }}
+      when: port_protect_result.rc != 0

@@ -77,7 +77,7 @@
             . '<option value="">All</option><option value="g">g (GigaEthernet)</option><option value="tg">tg (TGigaEthernet)</option>'
             . '</select></span>'
             . '<span><label>Slot Num:</label><select class="form-control input-sm ps-filter-slot"><option value="">All</option></select></span>'
-            . '<span><label>Name(s):</label><input type="text" class="form-control input-sm ps-filter-name" style="width:180px;" placeholder="e.g. g0/1, tg0/2"></span>'
+            . '<span><label>Name(s):</label><input type="text" class="form-control input-sm ps-filter-name" style="width:180px;" placeholder="e.g. g0/1, tg0/0/2"></span>'
             . '</div>';
     };
 @endphp
@@ -117,7 +117,7 @@
                 </div>
             </div>
             <div class="panel-footer">
-                Help: click Detail to see, add or delete the IP-MAC bindings of a port. MAC format: aabb.ccdd.eeff or aabbccddeeff.
+                Help: click Detail to see, add or delete the IP-MAC bindings of a port. MAC format: aabb.ccdd.eeff, aabbccddeeff or AA:BB:CC:DD:EE:FF.
             </div>
         </div>
     </div>
@@ -187,7 +187,7 @@
                 <div id="ps_static_error" class="text-danger" style="display:none; margin-top:8px;"></div>
             </div>
             <div class="panel-footer">
-                Help: these MAC addresses are used by ports in Static MAC Filtration Mode Accept or Reject. MAC format: aabb.ccdd.eeff or aabbccddeeff.
+                Help: these MAC addresses are used by ports in Static MAC Filtration Mode Accept or Reject. MAC format: aabb.ccdd.eeff, aabbccddeeff or AA:BB:CC:DD:EE:FF.
             </div>
         </div>
     </div>
@@ -239,6 +239,7 @@
                     <thead>
                         <tr>
                             <th>No.</th>
+                            <th class="ps-vlan-only" style="display:none;">VLAN</th>
                             <th>IP Address</th>
                             <th>MAC Address</th>
                             <th>Actions</th>
@@ -249,8 +250,9 @@
 
                 <h5><strong>Add Binding</strong></h5>
                 <form class="ps-add-binding" onsubmit="return false;">
+                    <input type="number" id="ps_ipmac_vlan" class="form-control input-sm ps-vlan-only" style="display:none; width:110px;" min="1" max="4094" placeholder="VLAN 1-4094">
                     <input type="text" id="ps_ipmac_ip" class="form-control input-sm" placeholder="IP, e.g. 192.168.10.11">
-                    <input type="text" id="ps_ipmac_mac" class="form-control input-sm" placeholder="MAC, e.g. aabb.ccdd.eeff">
+                    <input type="text" id="ps_ipmac_mac" class="form-control input-sm" placeholder="MAC, e.g. AA:BB:CC:DD:EE:FF">
                     <button type="button" id="psSaveIpMacBtn" class="btn btn-sm btn-primary">
                         <span class="spinner-border" style="display:none;"></span> Add
                     </button>
@@ -374,12 +376,13 @@
 <script>
     const PS_DEVICE_IP = "{{ $device->hostname }}";
     const PS_API_TOKEN = "{{ $data['api_token'] }}";
-    const PS_MAC_RE = /^([0-9a-f]{4}\.[0-9a-f]{4}\.[0-9a-f]{4}|[0-9a-f]{12})$/i;
+    const PS_MAC_RE = /^([0-9a-f]{4}\.[0-9a-f]{4}\.[0-9a-f]{4}|[0-9a-f]{12}|([0-9a-f]{2}[:-]){5}[0-9a-f]{2})$/i;
     const PS_IP_RE = /^((25[0-5]|2[0-4]\d|1?\d?\d)\.){3}(25[0-5]|2[0-4]\d|1?\d?\d)$/;
 
     let psPorts = [];     // [{interface, mode, dynamic_maximum}]
-    let psIpMac = [];     // [{interface, ip_address, mac_address}]
+    let psIpMac = [];     // [{interface, ip_address, mac_address}] (+ vlan on 100G)
     let psDetailPort = null;
+    let psIpMacVlan = false;  // 100G: IP-MAC bindings carry a VLAN
 
     function psShow(id, msg) {
         const el = document.getElementById(id);
@@ -404,18 +407,20 @@
         table.ajax.reload(null, false);
     }
 
-    // "tg0/3" -> {type: "tg", slot: "0", num: 3}
+    const PS_TYPE_ORDER = { g: 0, ge: 0, tg: 1, wg: 2, cg: 3 };
+    const PS_TYPE_LABELS = { g: 'GigaEthernet', tg: 'TGigaEthernet', wg: '25G', cg: '100G' };
+
+    // "tg0/3" -> {type: "tg", slot: "0", num: 3}; "cg0/0/4" -> {type: "cg", slot: "0/0", num: 4}
     function psParsePort(port) {
-        const m = /^([a-z]+)(\d+)\/(\d+)$/i.exec(port) || [];
+        const m = /^([a-z]+)(\d+(?:\/\d+)*)\/(\d+)$/i.exec(port) || [];
         return { type: (m[1] || '').toLowerCase(), slot: m[2] || '', num: parseInt(m[3] || '0', 10) };
     }
 
-    // g ports before tg, then by slot/number: g0/1 ... g0/8, tg0/1 ...
+    // g ports before tg (then wg, cg on 100G), then by slot/number: g0/1 ... g0/8, tg0/1 ...
     function psComparePorts(a, b) {
-        const order = { g: 0, ge: 0, tg: 1 };
         const pa = psParsePort(a), pb = psParsePort(b);
-        return ((order[pa.type] ?? 9) - (order[pb.type] ?? 9))
-            || (parseInt(pa.slot, 10) - parseInt(pb.slot, 10))
+        return ((PS_TYPE_ORDER[pa.type] ?? 9) - (PS_TYPE_ORDER[pb.type] ?? 9))
+            || pa.slot.localeCompare(pb.slot, undefined, { numeric: true })
             || (pa.num - pb.num);
     }
 
@@ -554,18 +559,19 @@
         const bindings = psBindingsOf(psDetailPort);
 
         if (!bindings.length) {
-            $body.append('<tr><td colspan="4" class="text-muted">No IP-MAC bindings on this port</td></tr>');
+            $body.append('<tr><td colspan="' + (psIpMacVlan ? 5 : 4) + '" class="text-muted">No IP-MAC bindings on this port</td></tr>');
             return;
         }
 
         bindings.forEach(function (b, i) {
             $body.append($('<tr>').append(
                 $('<td>').text(i + 1),
+                psIpMacVlan ? $('<td>').text(b.vlan ?? '') : null,
                 $('<td>').text(b.ip_address),
                 $('<td>').text(b.mac_address),
                 $('<td>').append(
                     $('<button type="button" class="btn btn-xs btn-danger btn-delete-ipmac">')
-                        .attr({ 'data-ip': b.ip_address, 'data-mac': b.mac_address })
+                        .attr({ 'data-ip': b.ip_address, 'data-mac': b.mac_address, 'data-vlan': b.vlan ?? '' })
                         .append('<span class="spinner-border" style="display:none;"></span> Delete')
                 )
             ));
@@ -592,6 +598,8 @@
 
                 psPorts = (json.ports || []).slice().sort((a, b) => psComparePorts(a.interface, b.interface));
                 psIpMac = json.ip_mac || [];
+                psIpMacVlan = !!json.ipmac_vlan;
+                $('.ps-vlan-only').toggle(psIpMacVlan);
 
                 const portNames = psPorts.map(p => p.interface);
                 $('.ps-port-select').each(function () {
@@ -599,7 +607,18 @@
                     portNames.forEach(port => $select.append($('<option>').val(port).text(port)));
                 });
 
-                const slots = [...new Set(portNames.map(p => psParsePort(p).slot))].sort();
+                // Port Type choices from the ports this switch has (g/tg, or tg/wg/cg on 100G)
+                const types = [...new Set(portNames.map(p => psParsePort(p).type))]
+                    .sort((a, b) => (PS_TYPE_ORDER[a] ?? 9) - (PS_TYPE_ORDER[b] ?? 9));
+                $('.ps-filter-type').each(function () {
+                    const current = $(this).val();
+                    $(this).empty().append($('<option>').val('').text('All'));
+                    types.forEach(t => $(this).append($('<option>').val(t).text(t + (PS_TYPE_LABELS[t] ? ' (' + PS_TYPE_LABELS[t] + ')' : ''))));
+                    $(this).val(types.indexOf(current) !== -1 ? current : '');
+                });
+
+                const slots = [...new Set(portNames.map(p => psParsePort(p).slot))]
+                    .sort((a, b) => a.localeCompare(b, undefined, { numeric: true }));
                 $('.ps-filter-slot').each(function () {
                     const current = $(this).val();
                     $(this).empty().append($('<option>').val('').text('All'));
@@ -653,6 +672,7 @@
         $('#ps_ipmac_port_label').text(psDetailPort);
         $('#ps_ipmac_ip').val('');
         $('#ps_ipmac_mac').val('');
+        $('#ps_ipmac_vlan').val('');
         psShow('ps_ipmac_error', '');
         psRenderDetail();
         $('#psIpMacDetailModal').modal('show');
@@ -675,13 +695,21 @@
             return;
         }
         if (!PS_MAC_RE.test(payload.mac_address)) {
-            psShow('ps_ipmac_error', 'MAC address must look like aabb.ccdd.eeff or aabbccddeeff.');
+            psShow('ps_ipmac_error', 'MAC address must look like aabb.ccdd.eeff, aabbccddeeff or AA:BB:CC:DD:EE:FF.');
             return;
+        }
+        if (psIpMacVlan) {
+            payload.vlan = $.trim($('#ps_ipmac_vlan').val());
+            if (!/^\d+$/.test(payload.vlan) || payload.vlan < 1 || payload.vlan > 4094) {
+                psShow('ps_ipmac_error', 'VLAN must be between 1 and 4094.');
+                return;
+            }
         }
 
         psPost('ipmac/set', payload, $(this), 'ps_ipmac_error', function () {
             $('#ps_ipmac_ip').val('');
             $('#ps_ipmac_mac').val('');
+            $('#ps_ipmac_vlan').val('');
         });
     });
 
@@ -691,7 +719,11 @@
         if (!confirm('Delete IP-MAC binding ' + ip + ' / ' + mac + ' from ' + psDetailPort + '?')) {
             return;
         }
-        psPost('ipmac/set', { operation: 'delete', interface: psDetailPort, ip_address: ip, mac_address: mac }, $(this), 'ps_ipmac_error');
+        const payload = { operation: 'delete', interface: psDetailPort, ip_address: ip, mac_address: mac };
+        if (psIpMacVlan) {
+            payload.vlan = $(this).attr('data-vlan');
+        }
+        psPost('ipmac/set', payload, $(this), 'ps_ipmac_error');
     });
 
     // Static MAC Filtration Mode
@@ -729,7 +761,15 @@
         };
 
         if (!PS_MAC_RE.test(payload.mac_address)) {
-            psShow('ps_static_add_error', 'MAC address must look like aabb.ccdd.eeff or aabbccddeeff.');
+            psShow('ps_static_add_error', 'MAC address must look like aabb.ccdd.eeff, aabbccddeeff or AA:BB:CC:DD:EE:FF.');
+            return;
+        }
+
+        // The switch keeps a static MAC on one port only and silently refuses a second one
+        const hex = mac => mac.replace(/[^0-9a-f]/gi, '').toLowerCase();
+        const taken = psStaticTable.rows().data().find(row => hex(row.mac_address) === hex(payload.mac_address));
+        if (taken) {
+            psShow('ps_static_add_error', 'MAC ' + taken.mac_address + ' is already a static MAC on ' + taken.interface + '. A static MAC can be on one port only - delete it there first.');
             return;
         }
 

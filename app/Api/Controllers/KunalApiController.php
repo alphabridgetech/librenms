@@ -1103,7 +1103,7 @@ public function getmtu($hostname)
 
         $ports = $this->getEligibleRateLimitPorts($hostname);
         if (empty($ports)) {
-            return $this->error("No GigaEthernet/TGigaEthernet ports found for this device in LibreNMS");
+            return $this->error("No GigaEthernet/TGigaEthernet ports found for this device in Telequill");
         }
 
         $playbook = "{$this->pluginPath}/playbooks/rate_limit/rate_limit_details.yml";
@@ -1281,14 +1281,28 @@ public function getmtu($hostname)
      */
     public function getportmirror($hostname)
     {
-        $ports = array_map([$this, 'shortPortMirrorName'], $this->getEligibleRateLimitPorts($hostname));
-        if (empty($ports)) {
-            return $this->error("No GigaEthernet/TGigaEthernet ports found for this device in LibreNMS");
+        $playbook    = $this->devicePlaybook('portmirror/getportmirror.yml', $hostname);
+        $sessionMode = $this->portMirrorUsesSessions($playbook);
+
+        if ($sessionMode) {
+            $ports = $this->getSessionPortMirrorPorts($hostname);
+            if (empty($ports)) {
+                return $this->error("No tg/wg/cg ports found for this device in Telequill");
+            }
+        } else {
+            $ports = array_map([$this, 'shortPortMirrorName'], $this->getEligibleRateLimitPorts($hostname));
+            if (empty($ports)) {
+                return $this->error("No GigaEthernet/TGigaEthernet ports found for this device in Telequill");
+            }
         }
 
-        $playbook = "{$this->pluginPath}/playbooks/portmirror/getportmirror.yml";
         $hosts    = "{$this->pluginPath}/hosts/{$hostname}.yml";
-        $yamlFile = "{$this->pluginPath}/output/{$hostname}_portmirror_get.yml";
+        $yamlFile = $sessionMode
+            ? "{$this->pluginPath}/output/{$hostname}_port_mirror.yml"
+            : "{$this->pluginPath}/output/{$hostname}_portmirror_get.yml";
+        $parse = fn () => $sessionMode
+            ? $this->parseSessionPortMirrorFile($yamlFile)
+            : $this->parsePortMirrorFile($yamlFile, $hostname);
 
         // Serve the last result straight away and refresh it in the
         // background, as Rate Limit does.
@@ -1296,29 +1310,91 @@ public function getmtu($hostname)
             $this->runAnsibleAsync($playbook, $hosts);
 
             return $this->success([
-                "ports"  => $ports,
-                "mirror" => $this->parsePortMirrorFile($yamlFile, $hostname),
-                "cached" => true,
+                "ports"        => $ports,
+                "mirror"       => $parse(),
+                "session_mode" => $sessionMode,
+                "cached"       => true,
             ]);
         }
 
         $output = $this->runAnsiblejs($playbook, $hosts);
 
         if (!file_exists($yamlFile)) {
-            return $this->error("Port Mirror output file not found", $output);
+            $reason = $this->extractPortConfigFailureReason($output);
+            return $this->error($reason ?: "Port Mirror output file not found", $output);
         }
 
-        $mirror = $this->parsePortMirrorFile($yamlFile, $hostname);
+        $mirror = $parse();
         if ($mirror === null) {
             $reason = $this->extractPortConfigFailureReason($output);
             return $this->error($reason ?: "Port Mirror GET failed", $output);
         }
 
         return $this->success([
-            "ports"  => $ports,
-            "mirror" => $mirror,
-            "cached" => false,
+            "ports"        => $ports,
+            "mirror"       => $mirror,
+            "session_mode" => $sessionMode,
+            "cached"       => false,
         ]);
+    }
+
+    /**
+     * 100G switches (switchv1alphabridge/100g playbooks) configure mirroring
+     * as numbered sessions with a destination and rx/tx/both sources,
+     * instead of one mirror port with vid/tpid.
+     */
+    private function portMirrorUsesSessions(string $playbook): bool
+    {
+        return basename(dirname($playbook)) === '100g';
+    }
+
+    /** tg/wg/cg ports from LibreNMS's `ports` table, already in the switch's short form (tg0/0/1). */
+    private function getSessionPortMirrorPorts(string $hostname): array
+    {
+        $device = Device::where('hostname', $hostname)->first();
+        if (!$device) {
+            return [];
+        }
+
+        return $device->ports()
+            ->pluck('ifName')
+            ->filter(fn ($name) => is_string($name) && preg_match('#^(tg|wg|cg)\d+/\d+/\d+$#i', $name))
+            ->map(fn ($name) => strtolower($name))
+            ->values()
+            ->all();
+    }
+
+    /**
+     * The 100g getportmirror.yml writes
+     *   port_mirror_sessions: [ {session_id, destination_interface, rspan_vlan,
+     *                            source_interfaces: [ {interface, direction: rx|tx|both} ]} ]
+     * Returns the sessions with sources as port => RX / TX / RX & TX, the
+     * same modes the 1G page uses, or null when the file can't be read.
+     */
+    private function parseSessionPortMirrorFile(string $path): ?array
+    {
+        $data = $this->parseYamlSafely($path);
+        if ($data === null || !array_key_exists('port_mirror_sessions', $data)) {
+            return null;
+        }
+
+        $modes = ['rx' => 'RX', 'tx' => 'TX', 'both' => 'RX & TX'];
+        $sessions = [];
+        foreach ($data['port_mirror_sessions'] ?: [] as $session) {
+            $sources = [];
+            foreach ($session['source_interfaces'] ?? [] as $source) {
+                $sources[strtolower($source['interface'])] = $modes[strtolower($source['direction'] ?? '')] ?? '';
+            }
+
+            $sessions[] = [
+                'session_id'  => (int) $session['session_id'],
+                'mirror_port' => strtolower((string) ($session['destination_interface'] ?? '')),
+                'rspan_vlan'  => $session['rspan_vlan'] ?? null,
+                'sources'     => (object) $sources,
+            ];
+        }
+
+        return ['sessions' => $sessions];
     }
 
     /**
@@ -1374,6 +1450,13 @@ public function getmtu($hostname)
     #------------------------------------------------------------
     public function setportmirror(Request $request, $hostname)
     {
+        $playbook    = $this->devicePlaybook('portmirror/setportmirror.yml', $hostname);
+        $getPlaybook = $this->devicePlaybook('portmirror/getportmirror.yml', $hostname);
+
+        if ($this->portMirrorUsesSessions($playbook)) {
+            return $this->setSessionPortMirror($request, $hostname, $playbook, $getPlaybook);
+        }
+
         $portRule = 'regex:/^t?g\d+\/\d+$/i';
         $data = $request->validate([
             'mirror_port'     => ['required', 'string', $portRule],
@@ -1393,7 +1476,6 @@ public function getmtu($hostname)
             }
         }
 
-        $playbook = "{$this->pluginPath}/playbooks/portmirror/setportmirror.yml";
         $hosts    = "{$this->pluginPath}/hosts/{$hostname}.yml";
 
         $extraVars = [
@@ -1411,7 +1493,7 @@ public function getmtu($hostname)
         $output = $this->runAnsiblejs($playbook, $hosts, $extraVars);
 
         // Refresh the GET result so the page reloads with the new values.
-        $this->runAnsiblejs("{$this->pluginPath}/playbooks/portmirror/getportmirror.yml", $hosts);
+        $this->runAnsiblejs($getPlaybook, $hosts);
 
         if (stripos($output, 'FAILED!') !== false || stripos($output, '"status": "failed"') !== false) {
             $reason = $this->extractPortConfigFailureReason($output);
@@ -1422,6 +1504,71 @@ public function getmtu($hostname)
 
         return $this->success([
             "message" => "Port mirroring set: {$list} -> {$data['mirror_port']}",
+            "raw"     => $output,
+        ]);
+    }
+
+    /**
+     * 100G: the playbook removes the session and writes it again with the
+     * given sources and destination, so the request carries the whole
+     * session. No sources removes the session.
+     */
+    private function setSessionPortMirror(Request $request, string $hostname, string $playbook, string $getPlaybook)
+    {
+        $portRule = 'regex:#^(tg|wg|cg)\d+/\d+/\d+$#i';
+        $data = $request->validate([
+            'session_id'     => 'required|integer|min:1|max:4',
+            'mirror_port'    => ['nullable', 'string', $portRule],
+            'sources'        => 'sometimes|array',
+            'sources.*.port' => ['required', 'string', $portRule, 'distinct'],
+            'sources.*.mode' => 'required|in:RX,TX,RX & TX',
+        ]);
+
+        $sessionId = (int) $data['session_id'];
+        $sources = array_values($data['sources'] ?? []);
+        $mirrorPort = empty($sources) ? '' : strtolower($data['mirror_port'] ?? '');
+
+        if (!empty($sources) && $mirrorPort === '') {
+            return $this->error("Select the mirror port");
+        }
+        foreach ($sources as $source) {
+            if (strcasecmp($source['port'], $mirrorPort) === 0) {
+                return $this->error("The mirror port {$mirrorPort} can't also be a mirrored port");
+            }
+        }
+
+        $directions = ['RX' => 'rx', 'TX' => 'tx', 'RX & TX' => 'both'];
+        $extraVars = [
+            'session_id'            => $sessionId,
+            'destination_interface' => $mirrorPort,
+            'source_interfaces'     => array_map(fn ($s) => [
+                'interface'             => strtolower($s['port']),
+                $directions[$s['mode']] => true,
+            ], $sources),
+        ];
+
+        $hosts  = "{$this->pluginPath}/hosts/{$hostname}.yml";
+        $output = $this->runAnsiblejs($playbook, $hosts, $extraVars);
+
+        // Refresh the GET result so the page reloads with the new values.
+        $this->runAnsiblejs($getPlaybook, $hosts);
+
+        if (stripos($output, 'FAILED!') !== false || stripos($output, '"status": "failed"') !== false) {
+            $reason = $this->extractPortConfigFailureReason($output);
+            return $this->error($reason ?: "Port Mirror SET failed", $output);
+        }
+
+        if (empty($sources)) {
+            return $this->success([
+                "message" => "Port mirror session {$sessionId} removed",
+                "raw"     => $output,
+            ]);
+        }
+
+        $list = implode(', ', array_map(fn ($s) => "{$s['port']} ({$s['mode']})", $sources));
+
+        return $this->success([
+            "message" => "Port mirror session {$sessionId} set: {$list} -> {$mirrorPort}",
             "raw"     => $output,
         ]);
     }
@@ -1437,9 +1584,9 @@ public function getmtu($hostname)
      */
     public function getkeepalive($hostname)
     {
-        $playbook = "{$this->pluginPath}/playbooks/keepalive/getkeepalive.yml";
+        $playbook = $this->keepalivePlaybook('get', $hostname);
         $hosts    = "{$this->pluginPath}/hosts/{$hostname}.yml";
-        $jsonFile = "{$this->pluginPath}/output/{$hostname}_keepalive.yml";
+        $jsonFile = $this->keepaliveFile($playbook, $hostname);
 
         // Serve the last result straight away and refresh it in the
         // background, as Rate Limit does.
@@ -1454,7 +1601,7 @@ public function getmtu($hostname)
 
         $output = $this->runAnsiblejs($playbook, $hosts);
 
-        // getkeepalive.yml only writes the file on success
+        // Both GET playbooks only write the file on success
         if (!file_exists($jsonFile)) {
             $reason = $this->extractPortConfigFailureReason($output);
             return $this->error($reason ?: "Keepalive GET failed", $output);
@@ -1466,9 +1613,55 @@ public function getmtu($hostname)
         ]);
     }
 
-    /** getkeepalive.yml's output file is JSON: {"interfaces": [{interface, status, period}, ...]}. */
+    /**
+     * 100G switches use switchv1alphabridge/100g/{get,set}keepalivedetection.yml,
+     * everything else keepalive/{get,set}keepalive.yml.
+     */
+    private function keepalivePlaybook(string $which, string $hostname): string
+    {
+        $detection = $this->devicePlaybook("keepalive/{$which}keepalivedetection.yml", $hostname);
+
+        return is_file($detection) ? $detection : "{$this->pluginPath}/playbooks/keepalive/{$which}keepalive.yml";
+    }
+
+    private function keepaliveIsDetection(string $playbook): bool
+    {
+        return str_ends_with($playbook, 'keepalivedetection.yml');
+    }
+
+    private function keepaliveFile(string $playbook, string $hostname): string
+    {
+        return $this->keepaliveIsDetection($playbook)
+            ? "{$this->pluginPath}/output/{$hostname}_keepalive_detection.yml"
+            : "{$this->pluginPath}/output/{$hostname}_keepalive.yml";
+    }
+
+    /**
+     * Rows of {interface, status, period} for the page, from either
+     * getkeepalive.yml's JSON {"interfaces": [...]} or getkeepalivedetection.yml's
+     * YAML {keepalive_detection: [{interface, keepalive_status, keepalive_period}]}.
+     * The 100G list also has p3, g0/0/0 and VLANs - only tg/wg/cg ports can
+     * be set, so only those are shown.
+     */
     private function readKeepaliveFile(string $path): array
     {
+        if (str_ends_with($path, '_keepalive_detection.yml')) {
+            $rows = [];
+            foreach ($this->parseYamlSafely($path)['keepalive_detection'] ?? [] as $row) {
+                if (!preg_match('#^(tg|wg|cg)\d+/\d+/\d+$#i', (string) ($row['interface'] ?? ''))) {
+                    continue;
+                }
+                $enabled = strcasecmp((string) ($row['keepalive_status'] ?? ''), 'Enable') === 0;
+                $rows[] = [
+                    'interface' => $row['interface'],
+                    'status'    => $enabled ? 'Enable' : 'Disable',
+                    'period'    => $enabled ? (int) $row['keepalive_period'] : 0,
+                ];
+            }
+
+            return $rows;
+        }
+
         $data = json_decode((string) file_get_contents($path), true);
 
         return is_array($data['interfaces'] ?? null) ? $data['interfaces'] : [];
@@ -1479,18 +1672,27 @@ public function getmtu($hostname)
     #------------------------------------------------------------
     public function setkeepalive(Request $request, $hostname)
     {
+        $playbook  = $this->keepalivePlaybook('set', $hostname);
+        $detection = $this->keepaliveIsDetection($playbook);
+
         $data = $request->validate([
-            'interface' => ['required', 'string', 'regex:/^T?GigaEthernet\d+\/\d+$/'],
+            'interface' => ['required', 'string', $detection ? 'regex:#^(tg|wg|cg)\d+/\d+/\d+$#i' : 'regex:/^T?GigaEthernet\d+\/\d+$/'],
             'status'    => 'required|in:Enable,Disable',
             'period'    => 'required_if:status,Enable|nullable|integer|min:0|max:32767',
         ]);
 
-        $playbook = "{$this->pluginPath}/playbooks/keepalive/setkeepalive.yml";
-        $hosts    = "{$this->pluginPath}/hosts/{$hostname}.yml";
+        $hosts = "{$this->pluginPath}/hosts/{$hostname}.yml";
 
-        $extraVars = ['interface' => $data['interface'], 'status' => $data['status']];
-        if ($data['status'] === 'Enable') {
-            $extraVars['period'] = (int) $data['period'];
+        if ($detection) {
+            $extraVars = ['interface' => $data['interface'], 'keepalive_status' => $data['status']];
+            if ($data['status'] === 'Enable') {
+                $extraVars['keepalive_period'] = (int) $data['period'];
+            }
+        } else {
+            $extraVars = ['interface' => $data['interface'], 'status' => $data['status']];
+            if ($data['status'] === 'Enable') {
+                $extraVars['period'] = (int) $data['period'];
+            }
         }
 
         $output = $this->runAnsiblejs($playbook, $hosts, $extraVars);
@@ -1502,20 +1704,36 @@ public function getmtu($hostname)
 
         // A full re-read takes one command per port, so update this port in
         // the saved result now and refresh the rest in the background.
-        $jsonFile = "{$this->pluginPath}/output/{$hostname}_keepalive.yml";
-        $saved = file_exists($jsonFile) ? json_decode((string) file_get_contents($jsonFile), true) : null;
-        if (is_array($saved) && is_array($saved['interfaces'] ?? null)) {
-            foreach ($saved['interfaces'] as &$row) {
-                if (($row['interface'] ?? null) === $data['interface']) {
-                    $row['status'] = $data['status'];
-                    $row['period'] = $data['status'] === 'Enable' ? (int) $data['period'] : 0;
+        $getPlaybook = $this->keepalivePlaybook('get', $hostname);
+        $jsonFile = $this->keepaliveFile($getPlaybook, $hostname);
+        if ($detection) {
+            $saved = $this->parseYamlSafely($jsonFile);
+            if (is_array($saved['keepalive_detection'] ?? null)) {
+                foreach ($saved['keepalive_detection'] as &$row) {
+                    if (strcasecmp((string) ($row['interface'] ?? ''), $data['interface']) === 0) {
+                        $row['keepalive_status'] = $data['status'];
+                        $row['keepalive_period'] = $data['status'] === 'Enable' ? (int) $data['period'] : null;
+                    }
                 }
+                unset($row);
+                // Not fatal if unwritable - the background refresh catches up
+                @file_put_contents($jsonFile, yaml_emit($saved));
             }
-            unset($row);
-            // Not fatal if unwritable - the background refresh catches up
-            @file_put_contents($jsonFile, json_encode($saved, JSON_PRETTY_PRINT) . "\n");
+        } else {
+            $saved = file_exists($jsonFile) ? json_decode((string) file_get_contents($jsonFile), true) : null;
+            if (is_array($saved) && is_array($saved['interfaces'] ?? null)) {
+                foreach ($saved['interfaces'] as &$row) {
+                    if (($row['interface'] ?? null) === $data['interface']) {
+                        $row['status'] = $data['status'];
+                        $row['period'] = $data['status'] === 'Enable' ? (int) $data['period'] : 0;
+                    }
+                }
+                unset($row);
+                // Not fatal if unwritable - the background refresh catches up
+                @file_put_contents($jsonFile, json_encode($saved, JSON_PRETTY_PRINT) . "\n");
+            }
         }
-        $this->runAnsibleAsync("{$this->pluginPath}/playbooks/keepalive/getkeepalive.yml", $hosts);
+        $this->runAnsibleAsync($getPlaybook, $hosts);
 
         $message = $data['status'] === 'Enable'
             ? "Keepalive enabled on {$data['interface']} ({$data['period']} s)"
@@ -1572,8 +1790,8 @@ public function getmtu($hostname)
     public function getportprotect($hostname)
     {
         $hosts = "{$this->pluginPath}/hosts/{$hostname}.yml";
-        $groupPlaybook = "{$this->pluginPath}/playbooks/portprotectgroup/getportprotectgroup.yml";
-        $portPlaybook  = "{$this->pluginPath}/playbooks/portprotectgroup/getportprotectconfiguration.yml";
+        $groupPlaybook = $this->devicePlaybook('portprotectgroup/getportprotectgroup.yml', $hostname);
+        $portPlaybook  = $this->devicePlaybook('portprotectgroup/getportprotectconfiguration.yml', $hostname);
         $groupFile = "{$this->pluginPath}/output/{$hostname}_portprotectgroup.yml";
         $portFile  = "{$this->pluginPath}/output/{$hostname}_portprotectconfiguration.yml";
 
@@ -1641,7 +1859,7 @@ public function getmtu($hostname)
         $raw = '';
         foreach ($ids as $id) {
             $output = $this->runLocked('portprotect',
-                "{$this->pluginPath}/playbooks/portprotectgroup/setportprotectgroup.yml",
+                $this->devicePlaybook('portprotectgroup/setportprotectgroup.yml', $hostname),
                 $hosts,
                 ['operation' => $data['operation'], 'group_id' => $id]
             );
@@ -1655,9 +1873,9 @@ public function getmtu($hostname)
         }
 
         // Refresh the saved lists so the page reloads with the change.
-        $this->runLocked('portprotect', "{$this->pluginPath}/playbooks/portprotectgroup/getportprotectgroup.yml", $hosts);
+        $this->runLocked('portprotect', $this->devicePlaybook('portprotectgroup/getportprotectgroup.yml', $hostname), $hosts);
         if ($data['operation'] === 'delete') {
-            $this->runLocked('portprotect', "{$this->pluginPath}/playbooks/portprotectgroup/getportprotectconfiguration.yml", $hosts);
+            $this->runLocked('portprotect', $this->devicePlaybook('portprotectgroup/getportprotectconfiguration.yml', $hostname), $hosts);
         }
 
         $verb = $data['operation'] === 'set' ? 'created' : 'deleted';
@@ -1679,18 +1897,19 @@ public function getmtu($hostname)
     public function setportprotectinterface(Request $request, $hostname)
     {
         $data = $request->validate([
-            'interface' => ['required', 'string', 'regex:/^(tg|g|ge|fe|e)\d+\/\d+$/i'],
+            // g0/1, tg0/1 - or tg0/0/1, wg0/0/1, cg0/0/1 on 100G switches
+            'interface' => ['required', 'string', 'regex:/^((tg|g|ge|fe|e)\d+\/\d+|(tg|wg|cg)\d+\/\d+\/\d+)$/i'],
             'group_id'  => 'required|integer|min:1|max:28',
         ]);
 
         $hosts = "{$this->pluginPath}/hosts/{$hostname}.yml";
         $output = $this->runLocked('portprotect',
-            "{$this->pluginPath}/playbooks/portprotectgroup/setportprotectconfiguration.yml",
+            $this->devicePlaybook('portprotectgroup/setportprotectconfiguration.yml', $hostname),
             $hosts,
             ['target_interface' => $data['interface'], 'group_id' => (int) $data['group_id']]
         );
 
-        $this->runLocked('portprotect', "{$this->pluginPath}/playbooks/portprotectgroup/getportprotectconfiguration.yml", $hosts);
+        $this->runLocked('portprotect', $this->devicePlaybook('portprotectgroup/getportprotectconfiguration.yml', $hostname), $hosts);
 
         if (stripos($output, 'FAILED!') !== false) {
             return $this->error($this->portProtectFailureReason($output, "Port Protect Group assignment failed"), $output);
@@ -1717,12 +1936,16 @@ public function getmtu($hostname)
         $hosts = "{$this->pluginPath}/hosts/{$hostname}.yml";
         $reads = $this->portSecurityReads($hostname);
 
+        $is100g = $this->portSecurityIs100g($hostname);
+        // 100G IP-MAC bindings are per VLAN - the page then asks for one
+        $extra = ["ipmac_vlan" => $is100g];
+
         // Serve the last result straight away and refresh it in the
         // background, as Rate Limit does.
         if (count(array_filter(array_map('file_exists', $reads))) === count($reads)) {
             $this->refreshLockedAsync('portsecurity', $hosts, array_keys($reads));
 
-            return $this->success($this->readPortSecurityFiles($reads) + ["cached" => true]);
+            return $this->success($this->readPortSecurityFiles($reads, $is100g) + $extra + ["cached" => true]);
         }
 
         foreach (array_keys($reads) as $playbook) {
@@ -1732,24 +1955,106 @@ public function getmtu($hostname)
             }
         }
 
-        return $this->success($this->readPortSecurityFiles($reads) + ["cached" => false]);
+        return $this->success($this->readPortSecurityFiles($reads, $is100g) + $extra + ["cached" => false]);
     }
 
-    /** Read playbook => the JSON file it writes. */
+    /** 100G switches use portsecurity/switchv1alphabridge/100g, where dynamic mode has its own playbook. */
+    private function portSecurityIs100g(string $hostname): bool
+    {
+        return basename(dirname($this->devicePlaybook('portsecurity/getstaticmacfiltrationmode.yml', $hostname))) === '100g';
+    }
+
+    /** Read playbook => the file it writes (mode, static MAC, IP-MAC, then 100G's dynamic mode). */
     private function portSecurityReads(string $hostname): array
     {
-        $dir = "{$this->pluginPath}/playbooks/portsecurity";
         $out = "{$this->pluginPath}/output/{$hostname}";
 
-        return [
-            "{$dir}/getstaticmacfiltrationmode.yml" => "{$out}_staticmacfiltrationmode.yml",
-            "{$dir}/getstaticmacfiltration.yml"     => "{$out}_staticmacfiltration.yml",
-            "{$dir}/getipmacbinding.yml"            => "{$out}_ipmacbinding.yml",
+        $reads = [
+            $this->devicePlaybook('portsecurity/getstaticmacfiltrationmode.yml', $hostname) => "{$out}_staticmacfiltrationmode.yml",
+            $this->devicePlaybook('portsecurity/getstaticmacfiltration.yml', $hostname)     => "{$out}_staticmacfiltration.yml",
+            $this->devicePlaybook('portsecurity/getipmacbinding.yml', $hostname)            => "{$out}_ipmacbinding.yml",
         ];
+        if ($this->portSecurityIs100g($hostname)) {
+            $reads[$this->devicePlaybook('portsecurity/getdynamicmacfiltrationmode.yml', $hostname)] = "{$out}_dynamicmacfiltrationmode.yml";
+        }
+
+        return $reads;
     }
 
-    private function readPortSecurityFiles(array $reads): array
+    /** "AA:BB:CC:DD:EE:FF", "aabb.ccdd.eeff" or "aabbccddeeff" -> "aabb.ccdd.eeff", as the page shows MACs. */
+    private function portSecurityDottedMac(string $mac): string
     {
+        $hex = strtolower(preg_replace('/[^0-9a-f]/i', '', $mac));
+
+        return strlen($hex) === 12 ? implode('.', str_split($hex, 4)) : strtolower($mac);
+    }
+
+    /** "AA:BB:CC:DD:EE:FF" / "AA-BB-..." -> "aabb.ccdd.eeff"; aabb.ccdd.eeff and aabbccddeeff are passed on as before. */
+    private function portSecurityInputMac(string $mac): string
+    {
+        return preg_match('/^([0-9a-f]{2}[:-]){5}[0-9a-f]{2}$/i', $mac) ? $this->portSecurityDottedMac($mac) : strtolower($mac);
+    }
+
+    /**
+     * The 100G get playbooks write YAML (or JSON) with their own keys:
+     *   static_mac_filtration: [{interface, static_mac_filtration_mode: Disable|Accept|Reject}]
+     *   dynamic_mac_filtration: [{interface, mode: enable|disable, max_mac_address}]
+     *   static_mac_filtration: [{interface, static_mac_addresses: [...]}]
+     *   ipmac_bindings: [{interface, vlan, ip_address, mac_address}]
+     * Turned into the same ports / static_macs / ip_mac the 1G files give.
+     */
+    private function readPortSecurity100gFiles(array $reads): array
+    {
+        [$modeFile, $staticFile, $ipMacFile, $dynamicFile] = array_values($reads);
+        $read = fn ($file) => $this->parseYamlSafely($file) ?? [];
+
+        $dynamic = [];
+        foreach ($read($dynamicFile)['dynamic_mac_filtration'] ?? [] as $row) {
+            if (strtolower((string) ($row['mode'] ?? '')) === 'enable') {
+                $dynamic[strtolower((string) $row['interface'])] = $row['max_mac_address'] ?? null;
+            }
+        }
+
+        $ports = [];
+        foreach ($read($modeFile)['static_mac_filtration'] ?? [] as $row) {
+            $port = strtolower((string) ($row['interface'] ?? ''));
+            $isDynamic = array_key_exists($port, $dynamic);
+            $ports[] = [
+                'interface'       => $port,
+                'mode'            => $isDynamic ? 'Dynamic' : ($row['static_mac_filtration_mode'] ?? 'Disable'),
+                'dynamic_maximum' => $isDynamic ? $dynamic[$port] : null,
+            ];
+        }
+
+        $staticMacs = [];
+        foreach ($read($staticFile)['static_mac_filtration'] ?? [] as $row) {
+            foreach ($row['static_mac_addresses'] ?? [] as $mac) {
+                $staticMacs[] = [
+                    'interface'   => strtolower((string) $row['interface']),
+                    'mac_address' => $this->portSecurityDottedMac((string) $mac),
+                ];
+            }
+        }
+
+        $ipMac = [];
+        foreach ($read($ipMacFile)['ipmac_bindings'] ?? [] as $row) {
+            $ipMac[] = [
+                'interface'   => strtolower((string) ($row['interface'] ?? '')),
+                'vlan'        => $row['vlan'] ?? null,
+                'ip_address'  => $row['ip_address'] ?? '',
+                'mac_address' => $this->portSecurityDottedMac((string) ($row['mac_address'] ?? '')),
+            ];
+        }
+
+        return ["ports" => $ports, "static_macs" => $staticMacs, "ip_mac" => $ipMac];
+    }
+
+    private function readPortSecurityFiles(array $reads, bool $is100g = false): array
+    {
+        if ($is100g) {
+            return $this->readPortSecurity100gFiles($reads);
+        }
+
         [$modeFile, $staticFile, $ipMacFile] = array_values($reads);
         $json = fn ($file) => json_decode((string) @file_get_contents($file), true) ?: [];
 
@@ -1805,6 +2110,10 @@ public function getmtu($hostname)
 
             $report = json_decode((string) ($decoded['stdout'] ?? ''), true);
             $errors = $report['errors'] ?? $report['error'] ?? null;
+            // 100G static MAC SET: {"status": "FAILED", "message": "..."}
+            if ($errors === null && strtoupper((string) ($report['status'] ?? '')) === 'FAILED') {
+                $errors = $report['message'] ?? null;
+            }
             if (is_array($errors) && $errors) {
                 return (string) end($errors);
             }
@@ -1829,6 +2138,10 @@ public function getmtu($hostname)
     #------------------------------------------------------------
     public function setportsecuritymode(Request $request, $hostname)
     {
+        if ($this->portSecurityIs100g($hostname)) {
+            return $this->setPortSecurityMode100g($request, $hostname);
+        }
+
         $data = $request->validate([
             'interface'       => ['required', 'string', 'regex:/^t?g\d+\/\d+$/i'],
             'mode'            => 'required|in:Disable,Accept,Reject,Dynamic',
@@ -1872,27 +2185,91 @@ public function getmtu($hostname)
         ]);
     }
 
+    /**
+     * 100G: Accept/Reject use setstaticmacfiltrationmode.yml, Dynamic uses
+     * setdynamicmacfiltrationmode.yml, and Disable uses the dynamic one's
+     * disable ("no switchport port-security mode"), which turns off a static
+     * or a dynamic mode alike.
+     */
+    private function setPortSecurityMode100g(Request $request, string $hostname)
+    {
+        $data = $request->validate([
+            'interface'       => ['required', 'string', 'regex:#^(tg|wg|cg)\d+/\d+/\d+$#i'],
+            'mode'            => 'required|in:Disable,Accept,Reject,Dynamic',
+            'dynamic_maximum' => 'required_if:mode,Dynamic|nullable|integer|min:1|max:2048',
+        ]);
+
+        $hosts = "{$this->pluginPath}/hosts/{$hostname}.yml";
+        $port = strtolower($data['interface']);
+
+        if ($data['mode'] === 'Accept' || $data['mode'] === 'Reject') {
+            $output = $this->runLocked('portsecurity', $this->devicePlaybook('portsecurity/setstaticmacfiltrationmode.yml', $hostname), $hosts, [
+                'interface' => $port,
+                'mode'      => strtolower($data['mode']),
+            ]);
+        } else {
+            $vars = ['mode' => $data['mode'] === 'Dynamic' ? 'enable' : 'disable', 'target_interface' => $port];
+            if ($data['mode'] === 'Dynamic') {
+                $vars['max_mac_address'] = (int) $data['dynamic_maximum'];
+            }
+            $output = $this->runLocked('portsecurity', $this->devicePlaybook('portsecurity/setdynamicmacfiltrationmode.yml', $hostname), $hosts, $vars);
+        }
+
+        // A mode change can move a port between the static and dynamic lists
+        $this->runLocked('portsecurity', $this->devicePlaybook('portsecurity/getstaticmacfiltrationmode.yml', $hostname), $hosts);
+        $this->runLocked('portsecurity', $this->devicePlaybook('portsecurity/getdynamicmacfiltrationmode.yml', $hostname), $hosts);
+
+        if (stripos($output, 'FAILED!') !== false) {
+            return $this->error($this->portSecurityFailureReason($output, "Port Security mode change failed"), $output);
+        }
+
+        $label = match ($data['mode']) {
+            'Accept'  => 'Static Accept',
+            'Reject'  => 'Static Reject',
+            'Dynamic' => "Dynamic (maximum {$data['dynamic_maximum']} MAC)",
+            default   => 'Disable',
+        };
+
+        return $this->success([
+            "message" => "Port Security on {$port} set to {$label}",
+            "raw"     => $output,
+        ]);
+    }
+
     #------------------------------------------------------------
     #                    STATIC MAC FILTRATION (SET / DELETE)
     #------------------------------------------------------------
     public function setportsecuritystaticmac(Request $request, $hostname)
     {
+        $is100g = $this->portSecurityIs100g($hostname);
+
         $data = $request->validate([
             'operation'   => 'required|in:set,delete',
-            'interface'   => ['required', 'string', 'regex:/^t?g\d+\/\d+$/i'],
-            'mac_address' => ['required', 'string', 'regex:/^([0-9a-f]{4}\.[0-9a-f]{4}\.[0-9a-f]{4}|[0-9a-f]{12})$/i'],
+            'interface'   => ['required', 'string', $is100g ? 'regex:#^(tg|wg|cg)\d+/\d+/\d+$#i' : 'regex:/^t?g\d+\/\d+$/i'],
+            'mac_address' => ['required', 'string', 'regex:/^([0-9a-f]{4}\.[0-9a-f]{4}\.[0-9a-f]{4}|[0-9a-f]{12}|([0-9a-f]{2}[:-]){5}[0-9a-f]{2})$/i'],
         ]);
 
-        $dir = "{$this->pluginPath}/playbooks/portsecurity";
         $hosts = "{$this->pluginPath}/hosts/{$hostname}.yml";
 
-        $output = $this->runLocked('portsecurity', "{$dir}/setstaticmacfiltration.yml", $hosts, [
-            'operation'        => $data['operation'],
-            'target_interface' => $data['interface'],
-            'mac_address'      => strtolower($data['mac_address']),
-        ]);
+        if ($is100g) {
+            // The 100G playbook takes add/delete and only AA:BB:CC:DD:EE:FF
+            $hex = strtolower(preg_replace('/[^0-9a-f]/i', '', $data['mac_address']));
+            $vars = [
+                'interface'   => strtolower($data['interface']),
+                'mac_address' => implode(':', str_split($hex, 2)),
+                'action'      => $data['operation'] === 'set' ? 'add' : 'delete',
+            ];
+        } else {
+            $vars = [
+                'operation'        => $data['operation'],
+                'target_interface' => $data['interface'],
+                'mac_address'      => $this->portSecurityInputMac($data['mac_address']),
+            ];
+        }
 
-        $this->runLocked('portsecurity', "{$dir}/getstaticmacfiltration.yml", $hosts);
+        $output = $this->runLocked('portsecurity', $this->devicePlaybook('portsecurity/setstaticmacfiltration.yml', $hostname), $hosts, $vars);
+
+        $this->runLocked('portsecurity', $this->devicePlaybook('portsecurity/getstaticmacfiltration.yml', $hostname), $hosts);
 
         if (stripos($output, 'FAILED!') !== false) {
             return $this->error($this->portSecurityFailureReason($output, "Static MAC Filtration {$data['operation']} failed"), $output);
@@ -1911,24 +2288,38 @@ public function getmtu($hostname)
     #------------------------------------------------------------
     public function setportsecurityipmac(Request $request, $hostname)
     {
+        $is100g = $this->portSecurityIs100g($hostname);
+
         $data = $request->validate([
             'operation'   => 'required|in:set,delete',
-            'interface'   => ['required', 'string', 'regex:/^t?g\d+\/\d+$/i'],
+            'interface'   => ['required', 'string', $is100g ? 'regex:#^(tg|wg|cg)\d+/\d+/\d+$#i' : 'regex:/^t?g\d+\/\d+$/i'],
             'ip_address'  => 'required|ipv4',
-            'mac_address' => ['required', 'string', 'regex:/^([0-9a-f]{4}\.[0-9a-f]{4}\.[0-9a-f]{4}|[0-9a-f]{12})$/i'],
+            'mac_address' => ['required', 'string', 'regex:/^([0-9a-f]{4}\.[0-9a-f]{4}\.[0-9a-f]{4}|[0-9a-f]{12}|([0-9a-f]{2}[:-]){5}[0-9a-f]{2})$/i'],
+            // 100G binds per VLAN
+            'vlan'        => $is100g ? 'required|integer|min:1|max:4094' : 'nullable',
         ]);
 
-        $dir = "{$this->pluginPath}/playbooks/portsecurity";
         $hosts = "{$this->pluginPath}/hosts/{$hostname}.yml";
 
-        $output = $this->runLocked('portsecurity', "{$dir}/setipmacbinding.yml", $hosts, [
-            'operation'   => $data['operation'],
-            'port'        => $data['interface'],
-            'ip_address'  => $data['ip_address'],
-            'mac_address' => strtolower($data['mac_address']),
-        ]);
+        $vars = $is100g
+            ? [
+                'operation'   => $data['operation'],
+                'interface'   => strtolower($data['interface']),
+                'vlan'        => (int) $data['vlan'],
+                'ip_address'  => $data['ip_address'],
+                // The 100G switch only accepts AA:BB:CC:DD:EE:FF
+                'mac_address' => strtoupper(implode(':', str_split(preg_replace('/[^0-9a-f]/i', '', $data['mac_address']), 2))),
+            ]
+            : [
+                'operation'   => $data['operation'],
+                'port'        => $data['interface'],
+                'ip_address'  => $data['ip_address'],
+                'mac_address' => $this->portSecurityInputMac($data['mac_address']),
+            ];
 
-        $this->runLocked('portsecurity', "{$dir}/getipmacbinding.yml", $hosts);
+        $output = $this->runLocked('portsecurity', $this->devicePlaybook('portsecurity/setipmacbinding.yml', $hostname), $hosts, $vars);
+
+        $this->runLocked('portsecurity', $this->devicePlaybook('portsecurity/getipmacbinding.yml', $hostname), $hosts);
 
         if (stripos($output, 'FAILED!') !== false) {
             return $this->error($this->portSecurityFailureReason($output, "IP-MAC Binding {$data['operation']} failed"), $output);
@@ -1954,7 +2345,7 @@ public function getmtu($hostname)
 
         $ports = $this->getEligibleGvrpPorts($hostname);
         if (empty($ports)) {
-            return $this->error("No GigaEthernet/TGigaEthernet ports found for this device in LibreNMS");
+            return $this->error("No GigaEthernet/TGigaEthernet ports found for this device in Telequill");
         }
 
         $playbook = "{$this->pluginPath}/playbooks/gvrp/gvrp_interface_config_show.yml";

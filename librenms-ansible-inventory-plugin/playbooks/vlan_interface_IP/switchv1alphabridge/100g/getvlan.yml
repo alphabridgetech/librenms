@@ -1,0 +1,335 @@
+
+---
+# ------------------------------------------------------------
+# Playbook Name: getvlan.yml
+# Description: Get L3 VLAN interface configuration
+# CLI: show running-config
+# ansible-playbook -i inventory/10.10.10.1.yml playbooks/100G/l3config/vlaninterface/getvlan.yml
+# ------------------------------------------------------------
+
+- name: Get L3 VLAN Configuration
+  hosts: alphabridge_devices
+  gather_facts: no
+  connection: local
+
+  vars:
+    output_dir: "{{ playbook_dir }}/../../../../output"
+    tmp_dir: "{{ playbook_dir }}/../../../../tmp"
+
+  tasks:
+
+    - name: Create output and temporary directories
+      file:
+        path: "{{ item }}"
+        state: directory
+        mode: '0755'
+      loop:
+        - "{{ output_dir }}"
+        - "{{ tmp_dir }}"
+
+    - name: Generate Paramiko SSH script
+      copy:
+        dest: "{{ tmp_dir }}/getl3vlan.py"
+        mode: '0700'
+        content: |
+          import paramiko
+          import json
+          import time
+          import sys
+          import re
+
+          host = {{ ansible_host | to_json }}
+          username = {{ ansible_user | to_json }}
+          password = {{ ansible_password | to_json }}
+          port = {{ ansible_port | default(22) | int }}
+
+          transcript = []
+
+          def clean_output(data):
+              data = re.sub(
+                  r'\x1b\[[0-?]*[ -/]*[@-~]', '', data
+              )
+              data = data.replace('\x1bE', '')
+              data = data.replace('\r', '')
+              return data
+
+          def read_output(channel, timeout=12):
+              data = ''
+              start = time.time()
+              last_data = time.time()
+
+              while time.time() - start < timeout:
+                  if channel.recv_ready():
+                      chunk = channel.recv(65535)
+                      data += chunk.decode(
+                          'utf-8', errors='replace'
+                      )
+                      last_data = time.time()
+                  elif data and time.time() - last_data >= 1:
+                      break
+                  else:
+                      time.sleep(0.1)
+
+              return data
+
+          def send_command(channel, cmd):
+              channel.send(cmd + '\n')
+              time.sleep(0.5)
+
+              output = read_output(channel)
+
+              transcript.append(
+                  '\nCOMMAND: ' + cmd + '\n' + output
+              )
+
+              errors = [
+                  'Bad parameter',
+                  'Command incomplete',
+                  'Unknown command',
+                  '% Invalid'
+              ]
+
+              clean = clean_output(output)
+
+              if any(error.lower() in clean.lower()
+                     for error in errors):
+                  raise Exception(
+                      'CLI command failed: ' + cmd + '\n' + clean
+                  )
+
+              return clean
+
+          def send_paged_command(channel, cmd, timeout=120):
+              channel.send(cmd + '\n')
+
+              output = ''
+              start = time.time()
+              handled_pages = 0
+              prompt_found = False
+
+              while time.time() - start < timeout:
+
+                  if channel.recv_ready():
+                      chunk = channel.recv(65535)
+                      output += chunk.decode(
+                          'utf-8', errors='replace'
+                      )
+
+                      clean = clean_output(output)
+
+                      pages = len(re.findall(
+                          r'--more--', clean, re.IGNORECASE
+                      ))
+
+                      if pages > handled_pages:
+                          channel.send(' ')
+                          handled_pages = pages
+                          time.sleep(0.2)
+                          continue
+
+                      if re.search(
+                          r'(?m)^[^\n]*\(config\)#\s*$',
+                          clean
+                      ):
+                          time.sleep(0.5)
+
+                          while channel.recv_ready():
+                              chunk = channel.recv(65535)
+                              output += chunk.decode(
+                                  'utf-8', errors='replace'
+                              )
+
+                          prompt_found = True
+                          break
+
+                  else:
+                      time.sleep(0.1)
+
+              clean = clean_output(output)
+
+              transcript.append(
+                  '\nCOMMAND: ' + cmd + '\n' + clean
+              )
+
+              if not prompt_found:
+                  raise Exception(
+                      'Timed out waiting for complete command output. '
+                      'Pagination or configuration prompt not completed.'
+                  )
+
+              errors = [
+                  'Bad parameter',
+                  'Command incomplete',
+                  'Unknown command',
+                  '% Invalid'
+              ]
+
+              if any(error.lower() in clean.lower()
+                     for error in errors):
+                  raise Exception(
+                      'CLI command failed: ' + cmd + '\n' + clean
+                  )
+
+              return clean
+
+          client = None
+
+          try:
+              client = paramiko.SSHClient()
+              client.set_missing_host_key_policy(
+                  paramiko.AutoAddPolicy()
+              )
+
+              client.connect(
+                  hostname=host,
+                  port=port,
+                  username=username,
+                  password=password,
+                  look_for_keys=False,
+                  allow_agent=False,
+                  timeout=20,
+                  banner_timeout=30,
+                  auth_timeout=20
+              )
+
+              channel = client.invoke_shell()
+              time.sleep(1)
+
+              initial = read_output(channel)
+              transcript.append(initial)
+
+              send_command(channel, 'enable')
+              send_command(channel, 'config')
+
+              running_config = send_paged_command(
+                  channel, 'show running-config'
+              )
+
+              vlans = []
+              current_vlan = None
+              current_block = []
+
+              def save_vlan(vlan_id, block):
+                  ip_match = re.search(
+                      r'(?m)^\s*ip address\s+'
+                      r'(\d{1,3}(?:\.\d{1,3}){3})\s+'
+                      r'(\d{1,3}(?:\.\d{1,3}){3})',
+                      block
+                  )
+
+                  vlans.append({
+                      'vlan_id': int(vlan_id),
+                      'interface': 'vlan' + str(vlan_id),
+                      'ip_address': (
+                          ip_match.group(1) if ip_match else ''
+                      ),
+                      'subnet_mask': (
+                          ip_match.group(2) if ip_match else ''
+                      ),
+                      'ip_configured': bool(ip_match)
+                  })
+
+              for line in running_config.splitlines():
+
+                  vlan_match = re.match(
+                      r'^\s*interface\s+vlan\s*(\d+)\s*$',
+                      line,
+                      re.IGNORECASE
+                  )
+
+                  if vlan_match:
+                      if current_vlan is not None:
+                          save_vlan(
+                              current_vlan,
+                              '\n'.join(current_block)
+                          )
+
+                      current_vlan = vlan_match.group(1)
+                      current_block = []
+                      continue
+
+                  if current_vlan is not None:
+
+                      if line.strip() == '!':
+                          save_vlan(
+                              current_vlan,
+                              '\n'.join(current_block)
+                          )
+                          current_vlan = None
+                          current_block = []
+                          continue
+
+                      current_block.append(line)
+
+              if current_vlan is not None:
+                  save_vlan(
+                      current_vlan,
+                      '\n'.join(current_block)
+                  )
+
+              response = {
+                  'status': 'SUCCESS',
+                  'host': host,
+                  'total_vlans': len(vlans),
+                  'vlans': vlans,
+                  'message': (
+                      'L3 VLAN configuration retrieved successfully.'
+                  ),
+                  'cli_output': '\n'.join(transcript)
+              }
+
+              print(json.dumps(response))
+
+          except Exception as e:
+              response = {
+                  'status': 'FAILED',
+                  'host': host,
+                  'message': str(e),
+                  'cli_output': '\n'.join(transcript)
+              }
+
+              print(json.dumps(response))
+              sys.exit(1)
+
+          finally:
+              if client:
+                  client.close()
+
+    - name: Execute L3 VLAN GET
+      command:
+        argv:
+          - python3
+          - "{{ tmp_dir }}/getl3vlan.py"
+      register: vlan_result
+      changed_when: false
+      failed_when: false
+
+    - name: Parse L3 VLAN result
+      set_fact:
+        vlan_config_result: "{{ vlan_result.stdout | from_json }}"
+      when: vlan_result.stdout | length > 0
+
+    - name: Save L3 VLAN output YAML
+      copy:
+        content: "{{ vlan_config_result | to_nice_yaml }}"
+        dest: "{{ output_dir }}/{{ ansible_host }}_l3vlan.yml"
+        mode: '0644'
+      when: vlan_config_result is defined
+
+    - name: Save L3 VLAN execution log
+      copy:
+        content: "{{ vlan_config_result.cli_output | default(vlan_config_result.message) }}"
+        dest: "{{ output_dir }}/{{ ansible_host }}_l3vlan.log"
+        mode: '0644'
+      when: vlan_config_result is defined
+
+    - name: Display L3 VLAN result
+      debug:
+        var: vlan_config_result.vlans
+      when: vlan_config_result is defined
+
+    - name: Fail if L3 VLAN GET failed
+      fail:
+        msg: "{{ vlan_config_result.message | default('SSH execution failed') }}"
+      when: vlan_config_result.status | default('FAILED') != 'SUCCESS'
+

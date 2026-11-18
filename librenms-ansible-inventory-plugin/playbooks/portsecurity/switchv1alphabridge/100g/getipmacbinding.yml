@@ -1,0 +1,514 @@
+
+---
+# ============================================================
+# Get IP-MAC Binding Configuration
+#
+# Retrieves IP-MAC Binding configuration from the running
+# configuration of TG, WG and CG interfaces.
+#
+# Extracts:
+#   Interface
+#   VLAN ID
+#   IP Address
+#   MAC Address
+#
+# Output:
+#   output/<device-ip>_ipmacbinding.yml
+#
+# Ansible command:
+#
+# ansible-playbook playbooks/portsecurity/switchv1alphabridge/100g/getipmacbinding.yml -i hosts/10.10.10.1.yml
+# ============================================================
+
+- name: Get IP-MAC Binding Configuration
+  hosts: alphabridge_devices
+  gather_facts: false
+  connection: local
+
+  vars:
+    output_dir: "/opt/librenms/librenms-ansible-inventory-plugin/output"
+    tmp_dir: "/opt/librenms/librenms-ansible-inventory-plugin/tmp"
+
+  tasks:
+
+    - name: Create output directory
+      ansible.builtin.file:
+        path: "{{ output_dir }}"
+        state: directory
+        mode: "0755"
+      delegate_to: localhost
+
+    - name: Create temporary directory
+      ansible.builtin.file:
+        path: "{{ tmp_dir }}"
+        state: directory
+        mode: "0755"
+      delegate_to: localhost
+
+    - name: Create IP-MAC Binding GET script
+      ansible.builtin.copy:
+        dest: "{{ tmp_dir }}/get_ipmacbinding_{{ inventory_hostname | regex_replace('[^A-Za-z0-9_.-]', '_') }}.py"
+        mode: "0755"
+        content: |
+          #!/usr/bin/env python3
+
+          import sys
+          import time
+          import re
+          import json
+          import paramiko
+
+          HOST = "{{ ansible_host | default(inventory_hostname) }}"
+          USERNAME = "{{ ansible_user }}"
+          PASSWORD = "{{ ansible_password }}"
+
+          SSH_PORT = 22
+          OUTPUT_PREFIX = "IPMAC_RESULT="
+
+          # ==================================================================
+          # CLEAN TERMINAL OUTPUT
+          # ==================================================================
+
+          ANSI_RE = re.compile(
+              r'\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])'
+          )
+
+          PAGER_RE = re.compile(
+              r'--\s*More\s*--',
+              re.IGNORECASE
+          )
+
+          PROMPT_RE = re.compile(
+              r'^[^\r\n]*[>#][ \t]*$'
+          )
+
+          def clean_output(value):
+
+              value = ANSI_RE.sub("", value)
+              value = value.replace("\r", "")
+
+              cleaned = []
+
+              for char in value:
+
+                  if char == "\b":
+
+                      if cleaned:
+                          cleaned.pop()
+
+                  else:
+                      cleaned.append(char)
+
+              return "".join(cleaned)
+
+          # ==================================================================
+          # READ COMPLETE COMMAND OUTPUT WITH PAGINATION
+          # ==================================================================
+
+          def read_until_prompt(channel, timeout=300):
+
+              output = ""
+              pending = ""
+
+              deadline = time.time() + timeout
+
+              while time.time() < deadline:
+
+                  if channel.recv_ready():
+
+                      data = channel.recv(65535).decode(
+                          "utf-8",
+                          errors="ignore"
+                      )
+
+                      pending += data
+
+                      cleaned_pending = clean_output(pending)
+
+                      # ------------------------------------------------------
+                      # Detect pager and request the next page.
+                      # ------------------------------------------------------
+
+                      pager_match = PAGER_RE.search(cleaned_pending)
+
+                      if pager_match:
+
+                          before_pager = cleaned_pending[
+                              :pager_match.start()
+                          ]
+
+                          after_pager = cleaned_pending[
+                              pager_match.end():
+                          ]
+
+                          output += before_pager
+
+                          pending = after_pager
+
+                          channel.send(" ")
+                          time.sleep(0.15)
+
+                          continue
+
+                      # ------------------------------------------------------
+                      # Check for the final switch prompt.
+                      # ------------------------------------------------------
+
+                      lines = cleaned_pending.splitlines()
+
+                      non_empty_lines = [
+                          line for line in lines
+                          if line.strip()
+                      ]
+
+                      if non_empty_lines:
+
+                          last_line = non_empty_lines[-1].strip()
+
+                          if PROMPT_RE.fullmatch(last_line):
+
+                              output += cleaned_pending
+
+                              return clean_output(output)
+
+                  else:
+
+                      time.sleep(0.05)
+
+              raise Exception(
+                  "Timeout waiting for switch prompt. "
+                  "Received output:\n" +
+                  clean_output(output + pending)[-5000:]
+              )
+
+          # ==================================================================
+          # EXECUTE COMMAND
+          # ==================================================================
+
+          def run_command(channel, command, timeout=300):
+
+              channel.send(command + "\n")
+
+              return read_until_prompt(
+                  channel,
+                  timeout=timeout
+              )
+
+          # ==================================================================
+          # PARSE IP-MAC BINDING CONFIGURATION
+          # ==================================================================
+
+          def parse_ipmac_bindings(running_config):
+
+              ipmac_bindings = []
+
+              current_interface = None
+              interface_config_lines = []
+
+              def save_interface(interface, config_lines):
+
+                  if interface is None:
+                      return
+
+                  for line in config_lines:
+
+                      stripped_line = line.strip()
+
+                      # ------------------------------------------------------
+                      # Format 1:
+                      # switchport port-security bind vlan 10 ip
+                      # 192.168.10.1 mac aa:bb:cc:dd:ee:ff
+                      # ------------------------------------------------------
+
+                      match = re.fullmatch(
+                          r"switchport\s+port-security\s+bind\s+"
+                          r"vlan\s+(\d+)\s+ip\s+"
+                          r"(\d{1,3}(?:\.\d{1,3}){3})\s+mac\s+"
+                          r"([0-9a-fA-F:.]+)",
+                          stripped_line,
+                          re.IGNORECASE
+                      )
+
+                      # ------------------------------------------------------
+                      # Format 2:
+                      # switchport port-security bind ip
+                      # 192.168.10.1 mac aa:bb:cc:dd:ee:ff vlan 10
+                      # ------------------------------------------------------
+
+                      if not match:
+
+                          match = re.fullmatch(
+                              r"switchport\s+port-security\s+bind\s+"
+                              r"ip\s+(\d{1,3}(?:\.\d{1,3}){3})\s+"
+                              r"mac\s+([0-9a-fA-F:.]+)\s+"
+                              r"vlan\s+(\d+)",
+                              stripped_line,
+                              re.IGNORECASE
+                          )
+
+                          if match:
+
+                              ip_address = match.group(1)
+                              mac_address = match.group(2)
+                              vlan = match.group(3)
+
+                          else:
+                              continue
+
+                      else:
+
+                          vlan = match.group(1)
+                          ip_address = match.group(2)
+                          mac_address = match.group(3)
+
+                      ipmac_bindings.append({
+                          "interface": interface,
+                          "vlan": vlan,
+                          "ip_address": ip_address,
+                          "mac_address": mac_address
+                      })
+
+              # --------------------------------------------------------------
+              # Discover interfaces dynamically from running configuration.
+              # --------------------------------------------------------------
+
+              for line in running_config.splitlines():
+
+                  stripped_line = line.strip()
+
+                  interface_match = re.fullmatch(
+                      r"interface\s+(\S+)",
+                      stripped_line,
+                      re.IGNORECASE
+                  )
+
+                  if interface_match:
+
+                      save_interface(
+                          current_interface,
+                          interface_config_lines
+                      )
+
+                      current_interface = interface_match.group(1).lower()
+
+                      interface_config_lines = []
+
+                      continue
+
+                  if current_interface is not None:
+
+                      if stripped_line == "!":
+
+                          save_interface(
+                              current_interface,
+                              interface_config_lines
+                          )
+
+                          current_interface = None
+                          interface_config_lines = []
+
+                          continue
+
+                      interface_config_lines.append(line)
+
+              # Save the last interface block.
+              save_interface(
+                  current_interface,
+                  interface_config_lines
+              )
+
+              return ipmac_bindings
+
+          # ==================================================================
+          # MAIN
+          # ==================================================================
+
+          client = None
+          channel = None
+
+          try:
+
+              client = paramiko.SSHClient()
+
+              client.set_missing_host_key_policy(
+                  paramiko.AutoAddPolicy()
+              )
+
+              client.connect(
+                  hostname=HOST,
+                  port=SSH_PORT,
+                  username=USERNAME,
+                  password=PASSWORD,
+                  timeout=15,
+                  banner_timeout=20,
+                  auth_timeout=15,
+                  look_for_keys=False,
+                  allow_agent=False
+              )
+
+              channel = client.invoke_shell()
+              channel.settimeout(2)
+
+              time.sleep(1)
+
+              # Clear login banner and initial prompt.
+              initial_output = ""
+
+              while channel.recv_ready():
+
+                  initial_output += channel.recv(
+                      65535
+                  ).decode(
+                      "utf-8",
+                      errors="ignore"
+                  )
+
+              # --------------------------------------------------------------
+              # ENABLE MODE
+              # --------------------------------------------------------------
+
+              enable_output = run_command(
+                  channel,
+                  "enable",
+                  timeout=20
+              )
+
+              # --------------------------------------------------------------
+              # GET RUNNING CONFIGURATION
+              # --------------------------------------------------------------
+
+              running_config = run_command(
+                  channel,
+                  "show running-config",
+                  timeout=300
+              )
+
+              running_config = clean_output(running_config)
+
+              # --------------------------------------------------------------
+              # REMOVE COMMAND ECHO AND PROMPT
+              # --------------------------------------------------------------
+
+              running_config = re.sub(
+                  r"^\s*show running-config\s*",
+                  "",
+                  running_config,
+                  count=1,
+                  flags=re.IGNORECASE
+              )
+
+              if "Current configuration:" not in running_config:
+
+                  raise Exception(
+                      "Current configuration not found in switch output."
+                  )
+
+              running_config = running_config.split(
+                  "Current configuration:",
+                  1
+              )[1]
+
+              # --------------------------------------------------------------
+              # PARSE IP-MAC BINDINGS
+              # --------------------------------------------------------------
+
+              ipmac_bindings = parse_ipmac_bindings(
+                  running_config
+              )
+
+              if not re.search(
+                  r"^\s*interface\s+\S+",
+                  running_config,
+                  re.MULTILINE | re.IGNORECASE
+              ):
+
+                  raise Exception(
+                      "No interface configuration found in running configuration."
+                  )
+
+              # --------------------------------------------------------------
+              # BUILD RESULT
+              # --------------------------------------------------------------
+
+              result = {
+                  "device_ip": HOST,
+                  "status": "SUCCESS",
+                  "feature": "IP-MAC Binding",
+                  "total_bindings": len(ipmac_bindings),
+                  "ipmac_bindings": ipmac_bindings
+              }
+
+              print(
+                  OUTPUT_PREFIX + json.dumps(result)
+              )
+
+              sys.exit(0)
+
+          except Exception as error:
+
+              result = {
+                  "device_ip": HOST,
+                  "status": "FAILED",
+                  "feature": "IP-MAC Binding",
+                  "total_bindings": 0,
+                  "ipmac_bindings": [],
+                  "error": str(error)
+              }
+
+              print(
+                  OUTPUT_PREFIX + json.dumps(result)
+              )
+
+              sys.exit(1)
+
+          finally:
+
+              if channel is not None:
+
+                  try:
+                      channel.close()
+                  except Exception:
+                      pass
+
+              if client is not None:
+
+                  try:
+                      client.close()
+                  except Exception:
+                      pass
+
+      delegate_to: localhost
+
+    - name: Run IP-MAC Binding GET
+      ansible.builtin.command:
+        argv:
+          - python3
+          - "{{ tmp_dir }}/get_ipmacbinding_{{ inventory_hostname | regex_replace('[^A-Za-z0-9_.-]', '_') }}.py"
+      register: ipmac_get_result
+      changed_when: false
+      failed_when: ipmac_get_result.rc != 0
+
+    - name: Extract IP-MAC Binding result
+      ansible.builtin.set_fact:
+        ipmac_data: >-
+          {{
+            (
+              ipmac_get_result.stdout_lines
+              | select('match', '^IPMAC_RESULT=')
+              | list
+              | first
+              | regex_replace('^IPMAC_RESULT=', '')
+            ) | from_json
+          }}
+
+    - name: Save IP-MAC Binding configuration
+      ansible.builtin.copy:
+        dest: "{{ output_dir }}/{{ ansible_host | default(inventory_hostname) }}_ipmacbinding.yml"
+        content: "{{ ipmac_data | to_nice_yaml }}"
+        mode: "0644"
+      delegate_to: localhost
+
+    - name: Display IP-MAC Binding configuration
+      ansible.builtin.debug:
+        var: ipmac_data
+

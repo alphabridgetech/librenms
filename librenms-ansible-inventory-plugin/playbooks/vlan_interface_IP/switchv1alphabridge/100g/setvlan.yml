@@ -1,0 +1,250 @@
+
+---
+# ------------------------------------------------------------
+# Playbook Name: setl3vlan.yml
+# Description: Configure or delete L3 VLAN interface
+# Operations: SET, DELETE
+#
+# SET STATIC:
+#ansible-playbook -i inventory/10.10.10.1.yml playbooks/100G/l3config/vlaninterface/setvlan.yml -e '{"operation":"set","vlan_id":500,"ip_mode":"static","ip_address":"195.168.10.10","subnet_mask":"255.255.255.0"}'
+# SET DHCP:
+# ansible-playbook -i inventory/10.10.10.1.yml playbooks/100G/l3config/vlaninterface/setvlan.yml -e '{"operation":"set","vlan_id":600,"ip_mode":"dhcp"}'
+# DELETE:
+# ansible-playbook -i inventory/10.10.10.1.yml playbooks/100G/l3config/vlaninterface/setvlan.yml -e '{"operation":"delete","vlan_id":500}'
+# ------------------------------------------------------------
+
+- name: Configure or Delete L3 VLAN Interface
+  hosts: alphabridge_devices
+  gather_facts: no
+  connection: local
+
+  vars:
+    output_dir: "{{ playbook_dir }}/../../../../output"
+    tmp_dir: "{{ playbook_dir }}/../../../../tmp"
+
+  tasks:
+
+    - name: Validate L3 VLAN parameters
+      assert:
+        that:
+          - operation is defined
+          - operation in ['set', 'delete']
+          - vlan_id is defined
+          - vlan_id | int >= 1
+          - vlan_id | int <= 4094
+          - operation != 'set' or (ip_mode | default('static')) in ['static', 'dhcp']
+          - operation != 'set' or (ip_mode | default('static')) != 'static' or ip_address is defined
+          - operation != 'set' or (ip_mode | default('static')) != 'static' or subnet_mask is defined
+          - operation != 'set' or (ip_mode | default('static')) != 'static' or (ip_address | default('')) is match('^([0-9]{1,3}\\.){3}[0-9]{1,3}$')
+          - operation != 'set' or (ip_mode | default('static')) != 'static' or (subnet_mask | default('')) is match('^([0-9]{1,3}\\.){3}[0-9]{1,3}$')
+        fail_msg: "Invalid L3 VLAN parameters."
+
+    - name: Create output and temporary directories
+      file:
+        path: "{{ item }}"
+        state: directory
+        mode: '0755'
+      loop:
+        - "{{ output_dir }}"
+        - "{{ tmp_dir }}"
+
+    - name: Generate L3 VLAN CLI commands
+      set_fact:
+        vlan_commands: >-
+          {{
+            ['no interface vlan' ~ (vlan_id | string)]
+            if operation == 'delete'
+            else
+            [
+              'interface vlan' ~ (vlan_id | string),
+              (
+                'ip address dhcp'
+                if (ip_mode | default('static')) == 'dhcp'
+                else 'ip address ' ~ ip_address ~ ' ' ~ subnet_mask
+              )
+            ]
+          }}
+
+    - name: Generate Paramiko SSH script
+      copy:
+        dest: "{{ tmp_dir }}/setl3vlan.py"
+        mode: '0700'
+        content: |
+          import paramiko
+          import json
+          import time
+          import sys
+
+          host = {{ ansible_host | to_json }}
+          username = {{ ansible_user | to_json }}
+          password = {{ ansible_password | to_json }}
+          port = {{ ansible_port | default(22) | int }}
+
+          vlan_id = {{ vlan_id | int }}
+          operation = {{ operation | to_json }}
+          ip_mode = {{ (ip_mode | default('static')) | to_json }}
+          commands = {{ vlan_commands | to_json }}
+
+          ip_address = {{ ip_address | default('') | to_json }}
+          subnet_mask = {{ subnet_mask | default('') | to_json }}
+
+          transcript = []
+
+          def read_output(channel, timeout=12):
+              data = b''
+              start = time.time()
+              last_data = time.time()
+
+              while time.time() - start < timeout:
+                  if channel.recv_ready():
+                      data += channel.recv(65535)
+                      last_data = time.time()
+                  elif data and time.time() - last_data >= 1:
+                      break
+                  else:
+                      time.sleep(0.1)
+
+              return data.decode('utf-8', errors='replace')
+
+          def send_command(channel, cmd):
+              channel.send(cmd + '\n')
+              time.sleep(0.5)
+
+              output = read_output(channel)
+
+              transcript.append(
+                  '\nCOMMAND: ' + cmd + '\n' + output
+              )
+
+              errors = [
+                  'Bad parameter',
+                  'Command incomplete',
+                  'Unknown command',
+                  'not exist!',
+                  '% Invalid'
+              ]
+
+              if any(error.lower() in output.lower() for error in errors):
+                  raise Exception(
+                      'CLI command failed: ' + cmd + '\n' + output
+                  )
+
+              return output
+
+          client = None
+
+          try:
+              client = paramiko.SSHClient()
+              client.set_missing_host_key_policy(
+                  paramiko.AutoAddPolicy()
+              )
+
+              client.connect(
+                  hostname=host,
+                  port=port,
+                  username=username,
+                  password=password,
+                  look_for_keys=False,
+                  allow_agent=False,
+                  timeout=20,
+                  banner_timeout=30,
+                  auth_timeout=20
+              )
+
+              channel = client.invoke_shell()
+              time.sleep(1)
+
+              initial = read_output(channel)
+              transcript.append(initial)
+
+              send_command(channel, 'enable')
+              send_command(channel, 'config')
+
+              for cmd in commands:
+                  send_command(channel, cmd)
+
+              response = {
+                  'status': 'SUCCESS',
+                  'host': host,
+                  'operation': operation,
+                  'vlan_id': vlan_id,
+                  'interface': 'vlan' + str(vlan_id),
+                  'ip_mode': ip_mode,
+                  'ip_address': ip_address,
+                  'subnet_mask': subnet_mask,
+                  'commands': commands,
+                  'message': 'L3 VLAN operation completed successfully.',
+                  'cli_output': '\n'.join(transcript)
+              }
+
+              print(json.dumps(response))
+
+          except Exception as e:
+              response = {
+                  'status': 'FAILED',
+                  'host': host,
+                  'operation': operation,
+                  'vlan_id': vlan_id,
+                  'interface': 'vlan' + str(vlan_id),
+                  'ip_mode': ip_mode,
+                  'ip_address': ip_address,
+                  'subnet_mask': subnet_mask,
+                  'commands': commands,
+                  'message': str(e),
+                  'cli_output': '\n'.join(transcript)
+              }
+
+              print(json.dumps(response))
+              sys.exit(1)
+
+          finally:
+              if client:
+                  client.close()
+
+    - name: Execute L3 VLAN configuration
+      command:
+        argv:
+          - python3
+          - "{{ tmp_dir }}/setl3vlan.py"
+      register: vlan_result
+      changed_when: vlan_result.rc == 0
+      failed_when: false
+
+    - name: Parse L3 VLAN result
+      set_fact:
+        vlan_config_result: "{{ vlan_result.stdout | from_json }}"
+      when: vlan_result.stdout | length > 0
+
+    - name: Save L3 VLAN output YAML
+      copy:
+        content: "{{ vlan_config_result | to_nice_yaml }}"
+        dest: "{{ output_dir }}/{{ ansible_host }}_l3vlan_{{ operation }}.yml"
+        mode: '0644'
+      when: vlan_config_result is defined
+
+    - name: Save L3 VLAN execution log
+      copy:
+        content: "{{ vlan_config_result.cli_output | default(vlan_config_result.message) }}"
+        dest: "{{ output_dir }}/{{ ansible_host }}_l3vlan_{{ operation }}.log"
+        mode: '0644'
+      when: vlan_config_result is defined
+
+    - name: Display L3 VLAN result
+      debug:
+        msg:
+          - "Status: {{ vlan_config_result.status }}"
+          - "Operation: {{ operation }}"
+          - "VLAN ID: {{ vlan_id }}"
+          - "Interface: vlan{{ vlan_id }}"
+          - "IP Mode: {{ vlan_config_result.ip_mode }}"
+          - "IP Address: {{ vlan_config_result.ip_address }}"
+          - "Subnet Mask: {{ vlan_config_result.subnet_mask }}"
+          - "Commands: {{ vlan_config_result.commands }}"
+          - "Message: {{ vlan_config_result.message }}"
+      when: vlan_config_result is defined
+
+    - name: Fail if L3 VLAN operation failed
+      fail:
+        msg: "{{ vlan_config_result.message | default('SSH execution failed') }}"
+      when: vlan_config_result.status | default('FAILED') != 'SUCCESS'
+

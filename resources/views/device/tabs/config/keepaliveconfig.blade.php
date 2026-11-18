@@ -58,7 +58,7 @@
         </div>
     </div>
     <div class="panel-footer">
-        Help: ports are read from the switch (GigaEthernet and TGigaEthernet). Enable requires a period of 0-32767 seconds. Changes are saved to the switch's startup configuration.
+        Help: ports are read from the switch (GigaEthernet and TGigaEthernet, or tg/wg/cg on 100G switches). Enable requires a period of 0-32767 seconds. Changes are saved to the switch's startup configuration.
     </div>
 </div>
 
@@ -194,7 +194,7 @@
         order: [[0, "asc"]],
         lengthMenu: [10, 25, 50, 100],
         language: {
-            emptyTable: "No GigaEthernet/TGigaEthernet ports found on this device"
+            emptyTable: "No keepalive ports found on this device"
         }
     });
 

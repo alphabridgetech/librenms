@@ -1,0 +1,567 @@
+
+# ============================================================
+# Set Port Mirror Configuration
+#
+# Configures Port Mirror sessions with dynamically supplied
+# session ID, destination interface, source interfaces,
+# and traffic directions (RX, TX, BOTH).
+#
+# Interfaces are discovered from show running-config.
+#
+# Ansible command:
+# ansible-playbook playbooks/portmirror/switchv1alphabridge/100g/setportmirror.yml -i hosts/10.10.10.1.yml -e '{"session_id": 3,"destination_interface": "tg0/0/3","source_interfaces": [{"interface": "tg0/0/2","rx": true},{"interface": "tg0/0/8","tx": true},{"interface": "tg0/0/4-5","both": true}]}'
+#
+# Delete commands:
+# ansible-playbook playbooks/portmirror/switchv1alphabridge/100g/setportmirror.yml -i hosts/10.10.10.1.yml -e '{"session_id": 3, "source_interfaces": []}'
+#
+# ============================================================
+
+- name: Set Port Mirror Configuration
+  hosts: alphabridge_devices
+  gather_facts: false
+  connection: local
+
+  vars:
+    temp_script: "/opt/librenms/librenms-ansible-inventory-plugin/tmp/set_portmirror_{{ inventory_hostname | regex_replace('[^A-Za-z0-9_.-]', '_') }}.py"
+    output_dir: "/opt/librenms/librenms-ansible-inventory-plugin/output"
+
+  tasks:
+
+    - name: Validate session ID
+      ansible.builtin.assert:
+        that:
+          - session_id is defined
+          - session_id | string is match('^[1-4]$')
+        fail_msg: "session_id is required and must be between 1 and 4."
+
+    - name: Validate destination interface
+      ansible.builtin.assert:
+        that:
+          - >-
+            destination_interface is not defined or
+            destination_interface == '' or
+            destination_interface is string
+        fail_msg: "Invalid destination interface."
+
+    - name: Validate source interface list
+      ansible.builtin.assert:
+        that:
+          - source_interfaces is not defined or
+            (source_interfaces is sequence and source_interfaces is not string)
+        fail_msg: "source_interfaces must be a list."
+
+    - name: Validate source interfaces and directions
+      ansible.builtin.assert:
+        that:
+          - item.interface is defined
+          - item.interface is string
+          - >-
+            (
+              (item.rx | default(false) | bool | ternary(1, 0)) +
+              (item.tx | default(false) | bool | ternary(1, 0)) +
+              (item.both | default(false) | bool | ternary(1, 0))
+            ) <= 1
+        fail_msg: "Invalid source interface or multiple directions selected."
+      loop: "{{ source_interfaces | default([]) }}"
+
+    - name: Create output directory
+      ansible.builtin.file:
+        path: "{{ output_dir }}"
+        state: directory
+        mode: "0755"
+      delegate_to: localhost
+
+    - name: Create Port Mirror configuration script
+      ansible.builtin.copy:
+        dest: "{{ temp_script }}"
+        mode: "0755"
+        content: |
+          #!/usr/bin/env python3
+
+          import paramiko
+          import time
+          import json
+          import sys
+          import re
+
+          PARAMS = json.loads({{ {
+            'session_id': session_id | int,
+            'destination_interface': destination_interface | default(''),
+            'source_interfaces': source_interfaces | default([])
+          } | to_json | to_json }})
+
+          HOST = {{ (ansible_host | default(inventory_hostname)) | to_json }}
+          USERNAME = {{ ansible_user | to_json }}
+          PASSWORD = {{ ansible_password | to_json }}
+
+          SESSION_ID = PARAMS["session_id"]
+          DESTINATION = PARAMS["destination_interface"]
+          SOURCES = PARAMS["source_interfaces"]
+
+          SSH_PORT = 22
+
+          OUTPUT_PREFIX = "PORTMIRROR_RESULT="
+
+          client = None
+          channel = None
+
+          applied_commands = []
+          command_outputs = []
+
+          # ==============================================================
+          # CLEAN TERMINAL OUTPUT
+          # ==============================================================
+
+          ANSI_RE = re.compile(
+              r'\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])'
+          )
+
+          PAGER_RE = re.compile(
+              r'--\s*More\s*--',
+              re.IGNORECASE
+          )
+
+          PROMPT_RE = re.compile(
+              r'^[^\r\n]*[>#][ \t]*$'
+          )
+
+          def clean_output(value):
+
+              value = ANSI_RE.sub("", value)
+              value = value.replace("\r", "")
+
+              cleaned = []
+
+              for char in value:
+
+                  if char == "\b":
+
+                      if cleaned:
+                          cleaned.pop()
+
+                  else:
+                      cleaned.append(char)
+
+              return "".join(cleaned)
+
+          # ==============================================================
+          # READ COMPLETE SWITCH OUTPUT
+          # ==============================================================
+
+          def read_until_prompt(timeout=300):
+
+              output = ""
+              pending = ""
+
+              deadline = time.time() + timeout
+
+              while time.time() < deadline:
+
+                  if channel.recv_ready():
+
+                      data = channel.recv(65535).decode(
+                          "utf-8",
+                          errors="ignore"
+                      )
+
+                      pending += data
+
+                      cleaned_pending = clean_output(pending)
+
+                      pager_match = PAGER_RE.search(cleaned_pending)
+
+                      if pager_match:
+
+                          output += cleaned_pending[
+                              :pager_match.start()
+                          ]
+
+                          pending = cleaned_pending[
+                              pager_match.end():
+                          ]
+
+                          channel.send(" ")
+                          time.sleep(0.15)
+
+                          continue
+
+                      lines = cleaned_pending.splitlines()
+
+                      non_empty_lines = [
+                          line for line in lines
+                          if line.strip()
+                      ]
+
+                      if non_empty_lines:
+
+                          last_line = non_empty_lines[-1].strip()
+
+                          if PROMPT_RE.fullmatch(last_line):
+
+                              output += cleaned_pending
+
+                              return clean_output(output)
+
+                  else:
+
+                      time.sleep(0.05)
+
+              raise Exception(
+                  "Timeout waiting for switch prompt:\n" +
+                  clean_output(output + pending)[-5000:]
+              )
+
+          # ==============================================================
+          # EXECUTE SWITCH COMMAND
+          # ==============================================================
+
+          def send_command(command, timeout=300):
+
+              channel.send(command + "\n")
+
+              output = read_until_prompt(timeout)
+
+              errors = [
+                  "invalid input",
+                  "invalid command",
+                  "incomplete command",
+                  "ambiguous command",
+                  "unknown command",
+                  "command failed"
+              ]
+
+              if any(
+                  error in output.lower()
+                  for error in errors
+              ):
+
+                  raise Exception(
+                      "Command failed: " +
+                      command + "\n" + output
+                  )
+
+              applied_commands.append(command)
+              command_outputs.append(output.strip())
+
+              return output
+
+          # ==============================================================
+          # DISCOVER INTERFACES FROM RUNNING CONFIGURATION
+          # ==============================================================
+
+          def discover_interfaces(running_config):
+
+              interfaces = set()
+
+              for line in running_config.splitlines():
+
+                  match = re.fullmatch(
+                      r"\s*interface\s+(\S+)\s*",
+                      line,
+                      re.IGNORECASE
+                  )
+
+                  if match:
+
+                      interfaces.add(
+                          match.group(1).lower()
+                      )
+
+              if not interfaces:
+
+                  raise Exception(
+                      "No interfaces found in show running-config."
+                  )
+
+              return interfaces
+
+          # ==============================================================
+          # EXPAND AND VALIDATE INTERFACE OR INTERFACE RANGE
+          # ==============================================================
+
+          def validate_interface(interface, discovered_interfaces):
+
+              interface = interface.strip()
+
+              if not interface:
+
+                  raise Exception(
+                      "Interface cannot be empty."
+                  )
+
+              # ----------------------------------------------------------
+              # Check individual interface.
+              # ----------------------------------------------------------
+
+              if interface.lower() in discovered_interfaces:
+
+                  return interface
+
+              # ----------------------------------------------------------
+              # Expand interface range dynamically.
+              # Example: tg0/0/4-5
+              # ----------------------------------------------------------
+
+              match = re.fullmatch(
+                  r"(.+?)(\d+)-(\d+)",
+                  interface
+              )
+
+              if not match:
+
+                  raise Exception(
+                      "Interface not found in running-config: " +
+                      interface
+                  )
+
+              prefix = match.group(1)
+              start = int(match.group(2))
+              end = int(match.group(3))
+
+              if start > end:
+
+                  raise Exception(
+                      "Invalid interface range: " + interface
+                  )
+
+              expanded_interfaces = [
+                  prefix + str(number)
+                  for number in range(start, end + 1)
+              ]
+
+              missing_interfaces = [
+                  item
+                  for item in expanded_interfaces
+                  if item.lower() not in discovered_interfaces
+              ]
+
+              if missing_interfaces:
+
+                  raise Exception(
+                      "Interfaces not found in running-config: " +
+                      ", ".join(missing_interfaces)
+                  )
+
+              return interface
+
+          # ==============================================================
+          # MAIN
+          # ==============================================================
+
+          try:
+
+              client = paramiko.SSHClient()
+
+              client.set_missing_host_key_policy(
+                  paramiko.AutoAddPolicy()
+              )
+
+              client.connect(
+                  hostname=HOST,
+                  port=SSH_PORT,
+                  username=USERNAME,
+                  password=PASSWORD,
+                  look_for_keys=False,
+                  allow_agent=False,
+                  timeout=20,
+                  banner_timeout=20,
+                  auth_timeout=20
+              )
+
+              channel = client.invoke_shell()
+              channel.settimeout(2)
+
+              time.sleep(1)
+
+              # ----------------------------------------------------------
+              # CLEAR INITIAL PROMPT
+              # ----------------------------------------------------------
+
+              while channel.recv_ready():
+
+                  channel.recv(65535)
+
+              # ----------------------------------------------------------
+              # ENABLE MODE
+              # ----------------------------------------------------------
+
+              send_command("enable", timeout=20)
+
+              # ----------------------------------------------------------
+              # GET RUNNING CONFIGURATION
+              # ----------------------------------------------------------
+
+              running_config = send_command(
+                  "show running-config",
+                  timeout=300
+              )
+
+              # ----------------------------------------------------------
+              # DISCOVER INTERFACES
+              # ----------------------------------------------------------
+
+              discovered_interfaces = discover_interfaces(
+                  running_config
+              )
+
+              # ----------------------------------------------------------
+              # VALIDATE DESTINATION INTERFACE
+              # ----------------------------------------------------------
+
+              if DESTINATION:
+
+                  DESTINATION = validate_interface(
+                      DESTINATION,
+                      discovered_interfaces
+                  )
+
+              # ----------------------------------------------------------
+              # VALIDATE SOURCE INTERFACES
+              # ----------------------------------------------------------
+
+              for source in SOURCES:
+
+                  interface = source["interface"]
+
+                  validate_interface(
+                      interface,
+                      discovered_interfaces
+                  )
+
+              # ----------------------------------------------------------
+              # ENTER CONFIGURATION MODE
+              # ----------------------------------------------------------
+
+              send_command("config")
+
+              # ----------------------------------------------------------
+              # DELETE SELECTED EXISTING MIRROR SESSION
+              # ----------------------------------------------------------
+
+              send_command(
+                  "no mirror session " + str(SESSION_ID)
+              )
+
+              # ----------------------------------------------------------
+              # CONFIGURE SOURCE INTERFACES AND DIRECTIONS
+              # ----------------------------------------------------------
+
+              for source in SOURCES:
+
+                  interface = source["interface"]
+
+                  for direction in ["rx", "tx", "both"]:
+
+                      if source.get(direction, False):
+
+                          command = (
+                              "mirror session " +
+                              str(SESSION_ID) +
+                              " source interface " +
+                              interface +
+                              " " +
+                              direction
+                          )
+
+                          send_command(command)
+
+              # ----------------------------------------------------------
+              # CONFIGURE DESTINATION INTERFACE
+              # ----------------------------------------------------------
+
+              if DESTINATION:
+
+                  command = (
+                      "mirror session " +
+                      str(SESSION_ID) +
+                      " destination interface " +
+                      DESTINATION
+                  )
+
+                  send_command(command)
+
+              # ----------------------------------------------------------
+              # BUILD RESULT
+              # ----------------------------------------------------------
+
+              result = {
+                  "device_ip": HOST,
+                  "session_id": SESSION_ID,
+                  "destination_interface": DESTINATION or None,
+                  "source_interfaces": SOURCES,
+                  "applied_commands": applied_commands,
+                  "command_outputs": command_outputs,
+                  "status": "SUCCESS"
+              }
+
+              print(
+                  OUTPUT_PREFIX + json.dumps(result)
+              )
+
+          except Exception as error:
+
+              result = {
+                  "device_ip": HOST,
+                  "session_id": SESSION_ID,
+                  "applied_commands": applied_commands,
+                  "status": "FAILED",
+                  "error": str(error)
+              }
+
+              print(
+                  OUTPUT_PREFIX + json.dumps(result)
+              )
+
+              sys.exit(1)
+
+          finally:
+
+              if channel is not None:
+
+                  try:
+                      channel.close()
+                  except Exception:
+                      pass
+
+              if client is not None:
+
+                  try:
+                      client.close()
+                  except Exception:
+                      pass
+
+      delegate_to: localhost
+
+    - name: Apply Port Mirror configuration
+      ansible.builtin.command:
+        argv:
+          - python3
+          - "{{ temp_script }}"
+      register: portmirror_result
+      changed_when: portmirror_result.rc == 0
+
+    - name: Extract Port Mirror result
+      ansible.builtin.set_fact:
+        portmirror_data: >-
+          {{
+            (
+              portmirror_result.stdout_lines
+              | select('match', '^PORTMIRROR_RESULT=')
+              | list
+              | first
+              | regex_replace('^PORTMIRROR_RESULT=', '')
+            ) | from_json
+          }}
+
+    - name: Display Port Mirror result
+      ansible.builtin.debug:
+        var: portmirror_data
+
+    - name: Save Port Mirror configuration result
+      ansible.builtin.copy:
+        content: "{{ portmirror_data | to_nice_yaml }}"
+        dest: "{{ output_dir }}/{{ ansible_host | default(inventory_hostname) }}_port_mirror_set.yml"
+        mode: "0644"
+      delegate_to: localhost
+      when: portmirror_data.status == 'SUCCESS'
+

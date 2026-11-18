@@ -1,3 +1,8 @@
+{{-- 100G switches use numbered mirror sessions (switchv1alphabridge/100g playbooks) --}}
+@php($pmCaps = \App\Services\DeviceCapabilities::for($device))
+@if(($pmCaps['family'] ?? null) === 'switchv1alphabridge' && ($pmCaps['speed_slug'] ?? null) === '100g')
+    @include('device.tabs.config.portmirror100gconfig')
+@else
 <style>
     .spinner-border {
         width: 16px;
@@ -387,3 +392,4 @@
 
     loadPortMirror();
 </script>
+@endif

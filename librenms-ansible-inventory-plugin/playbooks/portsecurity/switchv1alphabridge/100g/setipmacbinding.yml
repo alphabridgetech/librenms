@@ -1,0 +1,514 @@
+---
+# ============================================================
+# Set or Delete IP-MAC Binding Configuration
+#
+# Configures or deletes IP-MAC Binding on the specified interface.
+#
+# Parameters:
+#   operation: set / delete
+#   interface
+#   VLAN ID
+#   IP Address
+#   MAC Address
+#
+# Ansible commands:
+#
+# 1. SET:
+# ansible-playbook -i hosts/10.10.10.1.yml playbooks/portsecurity/switchv1alphabridge/100g/setipmacbinding.yml -e '{"operation":"set","interface":"tg0/0/5","vlan":10,"ip_address":"192.168.10.1","mac_address":"AA:BB:CC:DD:EE:FF"}'
+#
+# 2. DELETE:
+# ansible-playbook -i hosts/10.10.10.1.yml playbooks/portsecurity/switchv1alphabridge/100g/setipmacbinding.yml -e '{"operation":"delete","interface":"tg0/0/5","vlan":10,"ip_address":"192.168.10.1","mac_address":"AA:BB:CC:DD:EE:FF"}'
+# ============================================================
+
+- name: Set or Delete IP-MAC Binding Configuration
+  hosts: alphabridge_devices
+  gather_facts: false
+  connection: local
+
+  vars:
+    output_dir: "/opt/librenms/librenms-ansible-inventory-plugin/output"
+    tmp_dir: "/opt/librenms/librenms-ansible-inventory-plugin/tmp"
+    script_file: "{{ tmp_dir }}/set_ipmacbinding_{{ inventory_hostname | regex_replace('[^A-Za-z0-9_.-]', '_') }}.py"
+    output_file: "{{ output_dir }}/{{ ansible_host | default(inventory_hostname) }}_ipmacbinding_set.yml"
+
+  tasks:
+
+    - name: Validate IP-MAC Binding parameters
+      ansible.builtin.assert:
+        that:
+          - operation is defined
+          - operation in ['set', 'delete']
+          - interface is defined
+          - interface | string | length > 0
+          - interface is match('^[a-zA-Z][a-zA-Z0-9/._-]*$')
+          - ip_address is defined
+          - ip_address is match('^([0-9]{1,3}\.){3}[0-9]{1,3}$')
+          - mac_address is defined
+          - mac_address is match('^([0-9a-fA-F]{2}[:-]){5}[0-9a-fA-F]{2}$|^[0-9a-fA-F]{4}(\.[0-9a-fA-F]{4}){2}$|^[0-9a-fA-F]{12}$')
+          - vlan is defined
+          - vlan | int >= 1
+          - vlan | int <= 4094
+        fail_msg: "Invalid IP-MAC Binding parameters."
+
+    - name: Create output directory
+      ansible.builtin.file:
+        path: "{{ output_dir }}"
+        state: directory
+        mode: "0755"
+      delegate_to: localhost
+
+    - name: Create temporary directory
+      ansible.builtin.file:
+        path: "{{ tmp_dir }}"
+        state: directory
+        mode: "0755"
+      delegate_to: localhost
+
+    - name: Create IP-MAC Binding script
+      ansible.builtin.copy:
+        dest: "{{ script_file }}"
+        mode: "0755"
+        content: |
+          #!/usr/bin/env python3
+
+          import sys
+          import time
+          import re
+          import json
+          import ipaddress
+          import paramiko
+
+          HOST = "{{ ansible_host | default(inventory_hostname) }}"
+          USERNAME = "{{ ansible_user }}"
+          PASSWORD = "{{ ansible_password }}"
+
+          INTERFACE = "{{ interface }}"
+          IP_ADDRESS = "{{ ip_address }}"
+          MAC_ADDRESS = "{{ mac_address }}"
+          VLAN = {{ vlan | int }}
+          OPERATION = "{{ operation }}"
+
+          SSH_PORT = 22
+          OUTPUT_PREFIX = "IPMAC_RESULT="
+
+          ANSI_RE = re.compile(
+              r'\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])'
+          )
+
+          PAGER_RE = re.compile(
+              r'--\s*More\s*--',
+              re.IGNORECASE
+          )
+
+          PROMPT_RE = re.compile(
+              r'^[^\r\n]*[>#][ \t]*$'
+          )
+
+          def clean_output(value):
+
+              value = ANSI_RE.sub("", value)
+              value = value.replace("\r", "")
+
+              cleaned = []
+
+              for char in value:
+
+                  if char == "\b":
+
+                      if cleaned:
+                          cleaned.pop()
+
+                  else:
+                      cleaned.append(char)
+
+              return "".join(cleaned)
+
+          def read_until_prompt(channel, timeout=300):
+
+              output = ""
+              pending = ""
+
+              deadline = time.time() + timeout
+
+              while time.time() < deadline:
+
+                  if channel.recv_ready():
+
+                      data = channel.recv(65535).decode(
+                          "utf-8",
+                          errors="ignore"
+                      )
+
+                      pending += data
+                      cleaned_pending = clean_output(pending)
+
+                      pager_match = PAGER_RE.search(cleaned_pending)
+
+                      if pager_match:
+
+                          output += cleaned_pending[:pager_match.start()]
+                          pending = cleaned_pending[pager_match.end():]
+
+                          channel.send(" ")
+                          time.sleep(0.15)
+
+                          continue
+
+                      lines = cleaned_pending.splitlines()
+
+                      non_empty_lines = [
+                          line for line in lines
+                          if line.strip()
+                      ]
+
+                      if non_empty_lines:
+
+                          last_line = non_empty_lines[-1].strip()
+
+                          if PROMPT_RE.fullmatch(last_line):
+
+                              output += cleaned_pending
+
+                              return clean_output(output)
+
+                  else:
+
+                      time.sleep(0.05)
+
+              raise Exception(
+                  "Timeout waiting for switch prompt. Received output: "
+                  + clean_output(output + pending)[-5000:]
+              )
+
+          def run_command(channel, command, timeout=300):
+
+              channel.send(command + "\n")
+
+              return read_until_prompt(
+                  channel,
+                  timeout=timeout
+              )
+
+          def check_command_output(output, command):
+
+              cleaned = clean_output(output)
+
+              # "Bad parameter" is what the switch prints for a MAC
+              # that is not in AA:BB:CC:DD:EE:FF form
+              error_patterns = [
+                  r"Unknown command",
+                  r"Invalid command",
+                  r"Invalid input",
+                  r"Error:",
+                  r"Failed",
+                  r"Unrecognized command",
+                  r"Bad parameter",
+                  r"Incomplete command",
+                  r"Ambiguous command"
+              ]
+
+              for pattern in error_patterns:
+
+                  if re.search(
+                      pattern,
+                      cleaned,
+                      re.IGNORECASE
+                  ):
+
+                      raise Exception(
+                          "Command failed: "
+                          + command
+                          + "\n"
+                          + cleaned[-2000:]
+                      )
+
+          client = None
+          channel = None
+
+          try:
+
+              ipaddress.IPv4Address(IP_ADDRESS)
+
+              if not re.fullmatch(
+                  r"[a-zA-Z][a-zA-Z0-9/._-]*",
+                  INTERFACE
+              ):
+                  raise Exception("Invalid interface name.")
+
+              if not 1 <= VLAN <= 4094:
+                  raise Exception("VLAN must be between 1 and 4094.")
+
+              if OPERATION not in ["set", "delete"]:
+                  raise Exception("Operation must be set or delete.")
+
+              if not re.fullmatch(
+                  r"([0-9a-fA-F]{2}[:-]){5}[0-9a-fA-F]{2}|"
+                  r"[0-9a-fA-F]{4}(\.[0-9a-fA-F]{4}){2}|"
+                  r"[0-9a-fA-F]{12}",
+                  MAC_ADDRESS
+              ):
+                  raise Exception("Invalid MAC address.")
+
+              # The switch only accepts AA:BB:CC:DD:EE:FF - convert
+              # aabb.ccdd.eeff, aabbccddeeff and AA-BB-... to that
+              mac_hex = re.sub(r"[^0-9a-fA-F]", "", MAC_ADDRESS).upper()
+              MAC_ADDRESS = ":".join(
+                  mac_hex[i:i + 2] for i in range(0, 12, 2)
+              )
+
+              binding_command = (
+                  "switchport port-security bind ip "
+                  + IP_ADDRESS
+                  + " mac "
+                  + MAC_ADDRESS
+                  + " vlan "
+                  + str(VLAN)
+              )
+
+              if OPERATION == "delete":
+
+                  binding_command = "no " + binding_command
+
+              client = paramiko.SSHClient()
+
+              client.set_missing_host_key_policy(
+                  paramiko.AutoAddPolicy()
+              )
+
+              client.connect(
+                  hostname=HOST,
+                  port=SSH_PORT,
+                  username=USERNAME,
+                  password=PASSWORD,
+                  timeout=15,
+                  banner_timeout=20,
+                  auth_timeout=15,
+                  look_for_keys=False,
+                  allow_agent=False
+              )
+
+              channel = client.invoke_shell()
+              channel.settimeout(2)
+
+              time.sleep(1)
+
+              while channel.recv_ready():
+
+                  channel.recv(65535)
+
+              # ------------------------------------------------------
+              # ENABLE MODE
+              # ------------------------------------------------------
+
+              output = run_command(
+                  channel,
+                  "enable",
+                  timeout=20
+              )
+
+              check_command_output(output, "enable")
+
+              # ------------------------------------------------------
+              # CONFIGURATION MODE
+              # ------------------------------------------------------
+
+              output = run_command(
+                  channel,
+                  "config",
+                  timeout=20
+              )
+
+              check_command_output(output, "config")
+
+              # ------------------------------------------------------
+              # SELECT INTERFACE
+              # ------------------------------------------------------
+
+              interface_command = "interface " + INTERFACE
+
+              output = run_command(
+                  channel,
+                  interface_command,
+                  timeout=20
+              )
+
+              check_command_output(output, interface_command)
+
+              # ------------------------------------------------------
+              # APPLY IP-MAC BINDING SET / DELETE
+              # ------------------------------------------------------
+
+              output = run_command(
+                  channel,
+                  binding_command,
+                  timeout=30
+              )
+
+              check_command_output(output, binding_command)
+
+              # ------------------------------------------------------
+              # VERIFY RUNNING CONFIGURATION
+              # ------------------------------------------------------
+
+              output = run_command(
+                  channel,
+                  "show running-config",
+                  timeout=300
+              )
+
+              check_command_output(
+                  output,
+                  "show running-config"
+              )
+
+              if "Current configuration:" not in output:
+
+                  raise Exception(
+                      "Current configuration not found in switch output."
+                  )
+
+              running_config = output.split(
+                  "Current configuration:",
+                  1
+              )[1]
+
+              interface_block = re.search(
+                  r"^\s*interface\s+" + re.escape(INTERFACE)
+                  + r"\s*\n(.*?)(?=^\s*!|\Z)",
+                  running_config,
+                  re.MULTILINE | re.IGNORECASE | re.DOTALL
+              )
+
+              if not interface_block:
+
+                  raise Exception(
+                      "Interface not found in running configuration: "
+                      + INTERFACE
+                  )
+
+              # ------------------------------------------------------
+              # VERIFY IP-MAC BINDING
+              # Running configuration format:
+              # switchport port-security bind vlan <vlan>
+              # ip <ip> mac <mac>
+              # ------------------------------------------------------
+
+              # Match vlan / ip / mac in any order and MAC case
+              def has_word(line, word, value):
+                  return re.search(
+                      r"\b" + word + r"\s+" + re.escape(value) + r"(\s|$)",
+                      line,
+                      re.IGNORECASE
+                  )
+
+              binding_exists = any(
+                  re.match(
+                      r"^\s*switchport\s+port-security\s+bind\s",
+                      line,
+                      re.IGNORECASE
+                  )
+                  and has_word(line, "vlan", str(VLAN))
+                  and has_word(line, "ip", IP_ADDRESS)
+                  and has_word(line, "mac", MAC_ADDRESS)
+                  for line in interface_block.group(1).splitlines()
+              )
+
+              if OPERATION == "set" and not binding_exists:
+
+                  raise Exception(
+                      "IP-MAC Binding was not found in running configuration."
+                  )
+
+              if OPERATION == "delete" and binding_exists:
+
+                  raise Exception(
+                      "IP-MAC Binding still exists in running configuration."
+                  )
+
+              result = {
+                  "device_ip": HOST,
+                  "status": "SUCCESS",
+                  "feature": "IP-MAC Binding",
+                  "interface": INTERFACE,
+                  "vlan": VLAN,
+                  "ip_address": IP_ADDRESS,
+                  "mac_address": MAC_ADDRESS,
+                  "operation": OPERATION,
+                  "command": binding_command
+              }
+
+              print(
+                  OUTPUT_PREFIX + json.dumps(result)
+              )
+
+              sys.exit(0)
+
+          except Exception as error:
+
+              result = {
+                  "device_ip": HOST,
+                  "status": "FAILED",
+                  "feature": "IP-MAC Binding",
+                  "interface": INTERFACE,
+                  "vlan": VLAN,
+                  "ip_address": IP_ADDRESS,
+                  "mac_address": MAC_ADDRESS,
+                  "operation": OPERATION,
+                  "error": str(error)
+              }
+
+              print(
+                  OUTPUT_PREFIX + json.dumps(result)
+              )
+
+              sys.exit(1)
+
+          finally:
+
+              if channel is not None:
+
+                  try:
+                      channel.close()
+                  except Exception:
+                      pass
+
+              if client is not None:
+
+                  try:
+                      client.close()
+                  except Exception:
+                      pass
+      delegate_to: localhost
+
+    - name: Run IP-MAC Binding SET or DELETE
+      ansible.builtin.command:
+        argv:
+          - python3
+          - "{{ script_file }}"
+      register: ipmac_set_result
+      changed_when: ipmac_set_result.rc == 0
+      failed_when: ipmac_set_result.rc != 0
+
+    - name: Extract IP-MAC Binding result
+      ansible.builtin.set_fact:
+        ipmac_data: >-
+          {{
+            (
+              ipmac_set_result.stdout_lines
+              | select('match', '^IPMAC_RESULT=')
+              | list
+              | first
+              | regex_replace('^IPMAC_RESULT=', '')
+            ) | from_json
+          }}
+
+    - name: Save IP-MAC Binding result
+      ansible.builtin.copy:
+        dest: "{{ output_file }}"
+        content: "{{ ipmac_data | to_nice_yaml }}"
+        mode: "0644"
+      delegate_to: localhost
+
+    - name: Display IP-MAC Binding result
+      ansible.builtin.debug:
+        var: ipmac_data

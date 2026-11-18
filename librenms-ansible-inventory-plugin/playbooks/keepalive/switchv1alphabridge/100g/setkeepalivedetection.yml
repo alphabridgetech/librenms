@@ -1,0 +1,211 @@
+
+---
+# ============================================================
+# Set Keepalive Detection Configuration
+#
+# Configures keepalive status and period on a dynamically
+# supplied interface.
+# Ansible command :
+#
+# ansible-playbook playbooks/keepalive/switchv1alphabridge/100g/setkeepalivedetection.yml -i hosts/10.10.10.1.yml -e '{"interface":"tg0/0/3","keepalive_status":"Enable"}'
+#
+#with the time period:
+#
+#ansible-playbook playbooks/keepalive/switchv1alphabridge/100g/setkeepalivedetection.yml -i hosts/10.10.10.1.yml   -e '{"interface":"tg0/0/3","keepalive_status":"Enable","keepalive_period":34}'
+#
+#Disable:
+#
+#ansible-playbook playbooks/keepalive/switchv1alphabridge/100g/setkeepalivedetection.yml -i hosts/10.10.10.1.yml   -e '{"interface":"tg0/0/3","keepalive_status":"Disable","keepalive_period":34}'
+# ============================================================
+
+- name: Set Keepalive Detection Configuration
+  hosts: alphabridge_devices
+  gather_facts: false
+  connection: local
+
+  vars:
+    temp_script: "/opt/librenms/librenms-ansible-inventory-plugin/tmp/set_keepalive_{{ inventory_hostname | regex_replace('[^A-Za-z0-9_.-]', '_') }}.py"
+    output_dir: "/opt/librenms/librenms-ansible-inventory-plugin/output"
+
+  tasks:
+
+    - name: Validate interface
+      ansible.builtin.assert:
+        that:
+          - interface is defined
+          - interface is match('(?i)^(tg|wg|cg)0/0/[1-9][0-9]*$')
+        fail_msg: "A valid interface is required, for example tg0/0/3."
+
+    - name: Validate keepalive status
+      ansible.builtin.assert:
+        that:
+          - keepalive_status is defined
+          - keepalive_status | lower in ['enable', 'disable']
+        fail_msg: "keepalive_status must be Enable or Disable."
+
+    - name: Validate keepalive period
+      ansible.builtin.assert:
+        that:
+          - keepalive_period | default(12) | string is match('^\d+$')
+          - keepalive_period | default(12) | int >= 0
+          - keepalive_period | default(12) | int <= 32767
+        fail_msg: "keepalive_period must be between 0 and 32767 seconds."
+
+    - name: Create output directory
+      ansible.builtin.file:
+        path: "{{ output_dir }}"
+        state: directory
+        mode: "0755"
+      delegate_to: localhost
+
+    - name: Create Keepalive Detection configuration script
+      ansible.builtin.copy:
+        dest: "{{ temp_script }}"
+        mode: "0755"
+        content: |
+          import paramiko
+          import time
+          import json
+          import sys
+
+          PARAMS = json.loads({{ {
+              'interface': interface,
+              'keepalive_status': keepalive_status,
+              'keepalive_period': keepalive_period | default(12) | int
+          } | to_json | to_json }})
+
+          HOST = {{ (ansible_host | default(inventory_hostname)) | to_json }}
+          USERNAME = {{ ansible_user | to_json }}
+          PASSWORD = {{ ansible_password | to_json }}
+
+          INTERFACE = PARAMS["interface"]
+          STATUS = PARAMS["keepalive_status"].lower()
+          PERIOD = PARAMS["keepalive_period"]
+
+          client = paramiko.SSHClient()
+          client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+
+          applied_commands = []
+          command_outputs = []
+
+          try:
+              client.connect(
+                  hostname=HOST,
+                  username=USERNAME,
+                  password=PASSWORD,
+                  look_for_keys=False,
+                  allow_agent=False,
+                  timeout=20,
+                  banner_timeout=20,
+                  auth_timeout=20
+              )
+
+              channel = client.invoke_shell()
+              time.sleep(2)
+
+              def read_output(wait=1):
+                  time.sleep(wait)
+                  output = ""
+                  while channel.recv_ready():
+                      output += channel.recv(65535).decode(
+                          "utf-8", errors="ignore"
+                      )
+                  return output
+
+              read_output(1)
+
+              def send_command(command):
+                  channel.send(command + "\n")
+                  output = read_output(2)
+
+                  errors = [
+                      "invalid input",
+                      "invalid command",
+                      "incomplete command",
+                      "ambiguous command",
+                      "unknown command",
+                      "command failed"
+                  ]
+
+                  if any(error in output.lower() for error in errors):
+                      raise Exception(
+                          "Command failed: " + command + "\n" + output
+                      )
+
+                  applied_commands.append(command)
+                  command_outputs.append(output.strip())
+
+              send_command("enable")
+              send_command("config")
+              send_command("interface " + INTERFACE)
+
+              if STATUS == "enable":
+                  if PERIOD == 12:
+                      command = "keepalive"
+                  else:
+                      command = "keepalive " + str(PERIOD)
+              else:
+                  command = "no keepalive"
+
+              send_command(command)
+
+              result = {
+                  "device_ip": HOST,
+                  "interface": INTERFACE,
+                  "keepalive_status": STATUS.capitalize(),
+                  "keepalive_period": PERIOD if STATUS == "enable" else None,
+                  "applied_commands": applied_commands,
+                  "command_outputs": command_outputs,
+                  "status": "SUCCESS"
+              }
+
+              print("KEEPALIVE_RESULT=" + json.dumps(result))
+
+          except Exception as error:
+              result = {
+                  "device_ip": HOST,
+                  "interface": INTERFACE,
+                  "applied_commands": applied_commands,
+                  "status": "FAILED",
+                  "error": str(error)
+              }
+
+              print("KEEPALIVE_RESULT=" + json.dumps(result))
+              sys.exit(1)
+
+          finally:
+              client.close()
+
+      delegate_to: localhost
+
+    - name: Apply Keepalive Detection configuration
+      ansible.builtin.command:
+        argv:
+          - python3
+          - "{{ temp_script }}"
+      register: keepalive_result
+      changed_when: keepalive_result.rc == 0
+
+    - name: Extract Keepalive Detection result
+      ansible.builtin.set_fact:
+        keepalive_data: >-
+          {{
+            keepalive_result.stdout_lines
+            | select('match', '^KEEPALIVE_RESULT=')
+            | first
+            | regex_replace('^KEEPALIVE_RESULT=', '')
+            | from_json
+          }}
+
+    - name: Display Keepalive Detection result
+      ansible.builtin.debug:
+        var: keepalive_data
+
+    - name: Save Keepalive Detection result
+      ansible.builtin.copy:
+        content: "{{ keepalive_data | to_nice_yaml }}"
+        dest: "{{ output_dir }}/{{ ansible_host | default(inventory_hostname) }}_keepalive_detection_set.yml"
+        mode: "0644"
+      delegate_to: localhost
+      when: keepalive_data.status == 'SUCCESS'
+

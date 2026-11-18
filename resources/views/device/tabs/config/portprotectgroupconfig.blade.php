@@ -228,16 +228,20 @@
         $btn.find('.spinner-border').toggle(busy);
     }
 
-    // g ports before tg, then by slot/number: g0/1 ... g0/8, tg0/1 ...
+    // g ports before tg (then wg, cg on 100G), then by each number:
+    // g0/1 ... g0/8, tg0/1 ... - or tg0/0/1 ... tg0/0/48, cg0/0/1 ...
     function ppPortKey(port) {
-        const m = /^([a-z]+)(\d+)\/(\d+)$/i.exec(port) || [];
-        const order = { g: 0, ge: 0, tg: 1 };
-        return [order[(m[1] || '').toLowerCase()] ?? 9, parseInt(m[2] || '0', 10), parseInt(m[3] || '0', 10)];
+        const m = /^([a-z]+)([\d\/]+)$/i.exec(port) || [];
+        const order = { g: 0, ge: 0, tg: 1, wg: 2, cg: 3 };
+        return [order[(m[1] || '').toLowerCase()] ?? 9].concat((m[2] || '').split('/').map(n => parseInt(n || '0', 10)));
     }
 
     function ppComparePorts(a, b) {
         const ka = ppPortKey(a), kb = ppPortKey(b);
-        return (ka[0] - kb[0]) || (ka[1] - kb[1]) || (ka[2] - kb[2]);
+        for (let i = 0; i < Math.max(ka.length, kb.length); i++) {
+            if ((ka[i] || 0) !== (kb[i] || 0)) return (ka[i] || 0) - (kb[i] || 0);
+        }
+        return 0;
     }
 
     function ppMembers(group) {
@@ -393,7 +397,9 @@
         ppSetGroups('set', [id], $(this), 'pp_add_error', () => $('#addPortProtectGroupModal').modal('hide'));
     });
 
-    $('#ppGroupTable').on('click', '.btn-delete-group', function () {
+    // Bound on the tbody: Bootgrid stops click propagation at the rows, so
+    // it never reaches the <table> (change events, below, still do)
+    $('#ppGroupTable tbody').on('click', '.btn-delete-group', function () {
         const group = parseInt($(this).attr('data-group'), 10);
         if (ppConfirmDelete([group])) {
             ppSetGroups('delete', [group], $(this), 'pp_group_error');

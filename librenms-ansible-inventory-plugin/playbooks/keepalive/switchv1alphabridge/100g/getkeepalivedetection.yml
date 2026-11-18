@@ -1,0 +1,453 @@
+
+# ============================================================
+# Get Keepalive Detection Configuration
+#
+# Retrieves Keepalive Detection status and period from the running
+# configuration of interfaces.
+#
+# Status Logic:
+#   keepalive <seconds> present -> Enable; configured period
+#   keepalive present           -> Enable; default period 12 seconds
+#   keepalive absent            -> Disable; period null
+#
+# Output:
+#   output/<device-ip>_keepalive_detection.yml
+#
+# Ansible command:
+#
+# ansible-playbook playbooks/keepalive/switchv1alphabridge/100g/getkeepalivedetection.yml -i hosts/10.10.10.1.yml
+# ============================================================
+
+- name: Get Keepalive Detection Configuration
+  hosts: alphabridge_devices
+  gather_facts: false
+  connection: local
+
+  vars:
+    temp_script: "/opt/librenms/librenms-ansible-inventory-plugin/tmp/get_keepalive_detection_{{ inventory_hostname | regex_replace('[^A-Za-z0-9_.-]', '_') }}.py"
+    output_dir: "/opt/librenms/librenms-ansible-inventory-plugin/output"
+
+  tasks:
+
+    - name: Create output directory
+      ansible.builtin.file:
+        path: "{{ output_dir }}"
+        state: directory
+        mode: "0755"
+      delegate_to: localhost
+
+    - name: Create temporary directory
+      ansible.builtin.file:
+        path: "{{ temp_script | dirname }}"
+        state: directory
+        mode: "0755"
+      delegate_to: localhost
+
+    - name: Create Keepalive Detection GET script
+      ansible.builtin.copy:
+        dest: "{{ temp_script }}"
+        mode: "0755"
+        content: |
+          #!/usr/bin/env python3
+
+          import sys
+          import time
+          import re
+          import json
+          import paramiko
+
+          HOST = "{{ ansible_host | default(inventory_hostname) }}"
+          USERNAME = "{{ ansible_user }}"
+          PASSWORD = "{{ ansible_password }}"
+
+          SSH_PORT = 22
+          OUTPUT_PREFIX = "KEEPALIVE_RESULT="
+
+          # ==================================================================
+          # CLEAN TERMINAL OUTPUT
+          # ==================================================================
+
+          ANSI_RE = re.compile(
+              r'\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])'
+          )
+
+          PAGER_RE = re.compile(
+              r'--\s*More\s*--',
+              re.IGNORECASE
+          )
+
+          PROMPT_RE = re.compile(
+              r'^[^\r\n]*[>#][ \t]*$'
+          )
+
+          def clean_output(value):
+
+              value = ANSI_RE.sub("", value)
+              value = value.replace("\r", "")
+
+              cleaned = []
+
+              for char in value:
+
+                  if char == "\b":
+
+                      if cleaned:
+                          cleaned.pop()
+
+                  else:
+                      cleaned.append(char)
+
+              return "".join(cleaned)
+
+          # ==================================================================
+          # READ COMPLETE COMMAND OUTPUT WITH PAGINATION
+          # ==================================================================
+
+          def read_until_prompt(channel, timeout=300):
+
+              output = ""
+              pending = ""
+
+              deadline = time.time() + timeout
+
+              while time.time() < deadline:
+
+                  if channel.recv_ready():
+
+                      data = channel.recv(65535).decode(
+                          "utf-8",
+                          errors="ignore"
+                      )
+
+                      pending += data
+
+                      cleaned_pending = clean_output(pending)
+
+                      # ------------------------------------------------------
+                      # Detect pager and request the next page.
+                      # ------------------------------------------------------
+
+                      pager_match = PAGER_RE.search(cleaned_pending)
+
+                      if pager_match:
+
+                          before_pager = cleaned_pending[
+                              :pager_match.start()
+                          ]
+
+                          after_pager = cleaned_pending[
+                              pager_match.end():
+                          ]
+
+                          output += before_pager
+
+                          pending = after_pager
+
+                          channel.send(" ")
+                          time.sleep(0.15)
+
+                          continue
+
+                      # ------------------------------------------------------
+                      # Check for the final switch prompt.
+                      # ------------------------------------------------------
+
+                      lines = cleaned_pending.splitlines()
+
+                      non_empty_lines = [
+                          line for line in lines
+                          if line.strip()
+                      ]
+
+                      if non_empty_lines:
+
+                          last_line = non_empty_lines[-1].strip()
+
+                          if PROMPT_RE.fullmatch(last_line):
+
+                              output += cleaned_pending
+
+                              return clean_output(output)
+
+                  else:
+
+                      time.sleep(0.05)
+
+              raise Exception(
+                  "Timeout waiting for switch prompt. "
+                  "Received output:\n" +
+                  clean_output(output + pending)[-5000:]
+              )
+
+          # ==================================================================
+          # EXECUTE COMMAND
+          # ==================================================================
+
+          def run_command(channel, command, timeout=300):
+
+              channel.send(command + "\n")
+
+              return read_until_prompt(
+                  channel,
+                  timeout=timeout
+              )
+
+          # ==================================================================
+          # PARSE KEEPALIVE CONFIGURATION
+          # ==================================================================
+
+          def parse_keepalive(running_config):
+
+              keepalive_detection = []
+
+              current_interface = None
+              interface_config_lines = []
+
+              def save_interface(interface, config_lines):
+
+                  if interface is None:
+                      return
+
+                  keepalive_status = "Disable"
+                  keepalive_period = None
+
+                  for line in config_lines:
+
+                      stripped_line = line.strip()
+
+                      match = re.fullmatch(
+                          r"keepalive(?:\s+(\d+))?",
+                          stripped_line,
+                          re.IGNORECASE
+                      )
+
+                      if match:
+
+                          keepalive_status = "Enable"
+
+                          keepalive_period = (
+                              int(match.group(1))
+                              if match.group(1) is not None
+                              else 12
+                          )
+
+                      elif re.fullmatch(
+                          r"no\s+keepalive",
+                          stripped_line,
+                          re.IGNORECASE
+                      ):
+
+                          keepalive_status = "Disable"
+                          keepalive_period = None
+
+                  keepalive_detection.append({
+                      "interface": interface,
+                      "keepalive_period": keepalive_period,
+                      "keepalive_status": keepalive_status
+                  })
+
+              for line in running_config.splitlines():
+
+                  stripped_line = line.strip()
+
+                  interface_match = re.fullmatch(
+                      r"interface\s+(\S+)",
+                      stripped_line,
+                      re.IGNORECASE
+                  )
+
+                  if interface_match:
+
+                      save_interface(
+                          current_interface,
+                          interface_config_lines
+                      )
+
+                      current_interface = interface_match.group(1)
+                      interface_config_lines = []
+
+                      continue
+
+                  if current_interface is not None:
+
+                      if stripped_line == "!":
+
+                          save_interface(
+                              current_interface,
+                              interface_config_lines
+                          )
+
+                          current_interface = None
+                          interface_config_lines = []
+
+                          continue
+
+                      interface_config_lines.append(line)
+
+              # Save the last interface block.
+              save_interface(
+                  current_interface,
+                  interface_config_lines
+              )
+
+              return keepalive_detection
+
+          # ==================================================================
+          # MAIN
+          # ==================================================================
+
+          client = None
+          channel = None
+
+          try:
+
+              client = paramiko.SSHClient()
+
+              client.set_missing_host_key_policy(
+                  paramiko.AutoAddPolicy()
+              )
+
+              client.connect(
+                  hostname=HOST,
+                  port=SSH_PORT,
+                  username=USERNAME,
+                  password=PASSWORD,
+                  timeout=15,
+                  banner_timeout=20,
+                  auth_timeout=15,
+                  look_for_keys=False,
+                  allow_agent=False
+              )
+
+              channel = client.invoke_shell()
+              channel.settimeout(2)
+
+              time.sleep(1)
+
+              # Clear login banner and initial prompt.
+              initial_output = ""
+
+              while channel.recv_ready():
+
+                  initial_output += channel.recv(
+                      65535
+                  ).decode(
+                      "utf-8",
+                      errors="ignore"
+                  )
+
+              # --------------------------------------------------------------
+              # ENABLE MODE
+              # --------------------------------------------------------------
+
+              run_command(
+                  channel,
+                  "enable",
+                  timeout=20
+              )
+
+              # --------------------------------------------------------------
+              # GET RUNNING CONFIGURATION
+              # --------------------------------------------------------------
+
+              running_config = run_command(
+                  channel,
+                  "show running-config",
+                  timeout=300
+              )
+
+              # --------------------------------------------------------------
+              # PARSE CONFIGURATION
+              # --------------------------------------------------------------
+
+              keepalive_detection = parse_keepalive(
+                  running_config
+              )
+
+              if not keepalive_detection:
+
+                  raise Exception(
+                      "No interfaces detected in running configuration."
+                  )
+
+              # --------------------------------------------------------------
+              # BUILD RESULT
+              # --------------------------------------------------------------
+
+              result = {
+                  "device_ip": HOST,
+                  "status": "SUCCESS",
+                  "keepalive_detection": keepalive_detection
+              }
+
+              print(
+                  OUTPUT_PREFIX + json.dumps(result)
+              )
+
+              sys.exit(0)
+
+          except Exception as error:
+
+              result = {
+                  "device_ip": HOST,
+                  "status": "FAILED",
+                  "error": str(error)
+              }
+
+              print(
+                  OUTPUT_PREFIX + json.dumps(result)
+              )
+
+              sys.exit(1)
+
+          finally:
+
+              if channel is not None:
+
+                  try:
+                      channel.close()
+                  except Exception:
+                      pass
+
+              if client is not None:
+
+                  try:
+                      client.close()
+                  except Exception:
+                      pass
+
+      delegate_to: localhost
+
+    - name: Run Keepalive Detection GET
+      ansible.builtin.command:
+        argv:
+          - python3
+          - "{{ temp_script }}"
+      register: keepalive_get_result
+      changed_when: false
+      failed_when: keepalive_get_result.rc != 0
+
+    - name: Extract Keepalive Detection result
+      ansible.builtin.set_fact:
+        keepalive_data: >-
+          {{
+            (
+              keepalive_get_result.stdout_lines
+              | select('match', '^KEEPALIVE_RESULT=')
+              | list
+              | first
+              | regex_replace('^KEEPALIVE_RESULT=', '')
+            ) | from_json
+          }}
+
+    - name: Save Keepalive Detection configuration
+      ansible.builtin.copy:
+        dest: "{{ output_dir }}/{{ ansible_host | default(inventory_hostname) }}_keepalive_detection.yml"
+        content: "{{ keepalive_data | to_nice_yaml }}"
+        mode: "0644"
+      delegate_to: localhost
+
+    - name: Display Keepalive Detection configuration
+      ansible.builtin.debug:
+        var: keepalive_data
+

@@ -29,8 +29,13 @@
                 background: #fff;
                 border-radius: 10px;
                 box-shadow: 0 1px 3px rgba(0,0,0,0.08);
-                overflow: hidden;
                 align-self: flex-start;
+                /* Stays in view below the sticky navbar and scrolls on its own;
+                   --cfg-top is set from the navbar height by the script below */
+                position: sticky;
+                top: var(--cfg-top, 62px);
+                max-height: calc(100vh - var(--cfg-top, 62px) - 10px);
+                overflow-y: auto;
             }
 
             .cfgsidebar-title {
@@ -142,6 +147,8 @@
                     flex: 1 1 auto;
                     display: none;
                     margin-bottom: 14px;
+                    position: static;
+                    max-height: none;
                 }
 
                 .cfgsidebar.mobile-open {
@@ -196,6 +203,44 @@
                     @endif
                 @endforeach
             </div>
+
+            <script>
+                // Keep the sidebar where it was scrolled to when an item is clicked
+                // (each item loads a new page), and always show the active item.
+                (function () {
+                    var sidebar = document.querySelector('.cfgsidebar');
+                    var nav = document.querySelector('nav.navbar-sticky-top');
+                    var key = 'cfgsidebar-scroll';
+
+                    if (nav) {
+                        sidebar.style.setProperty('--cfg-top', (nav.offsetHeight + 10) + 'px');
+                    }
+
+                    try {
+                        var saved = sessionStorage.getItem(key);
+                        if (saved !== null) {
+                            sidebar.scrollTop = parseInt(saved, 10) || 0;
+                        }
+                    } catch (e) {}
+
+                    var active = sidebar.querySelector('.cfgsidebar-item.active');
+                    if (active) {
+                        var top = active.offsetTop;
+                        var bottom = top + active.offsetHeight;
+                        if (top < sidebar.scrollTop || bottom > sidebar.scrollTop + sidebar.clientHeight) {
+                            sidebar.scrollTop = top - sidebar.clientHeight / 2;
+                        }
+                    }
+
+                    sidebar.addEventListener('click', function (e) {
+                        if (e.target.closest('.cfgsidebar-item')) {
+                            try {
+                                sessionStorage.setItem(key, sidebar.scrollTop);
+                            } catch (err) {}
+                        }
+                    });
+                })();
+            </script>
 
             <div class="cfgsidebar-content">
                 @php($cfgCaps = \App\Services\DeviceCapabilities::for($device))

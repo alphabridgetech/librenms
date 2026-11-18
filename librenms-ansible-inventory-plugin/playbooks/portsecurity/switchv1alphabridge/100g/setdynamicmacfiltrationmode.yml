@@ -1,0 +1,581 @@
+---
+# ============================================================
+# Set Dynamic MAC Filtration Mode
+#
+# Enables or disables Dynamic MAC Filtration Mode on a
+# selected 100G switch interface.
+# Dynamically discovers interfaces from show running-config.
+# Configures the maximum number of dynamically learned MAC addresses.
+# Saves only the switch IP and operation result.
+#
+# Required Parameters:
+# - target_interface: Interface (e.g. tg0/0/4)
+# - mode: enable or disable
+# - max_mac_address: Maximum MAC addresses (1-2048, defaults to 1)
+#
+# Enable:
+#  ansible-playbook -i hosts/10.10.10.1.yml playbooks/portsecurity/switchv1alphabridge/100g/setdynamicmacfiltrationmode.yml -e '{"mode":"enable","target_interface":"cg0/0/8","max_mac_address":4}'
+# Disable:
+# ansible-playbook -i hosts/10.10.10.1.yml playbooks/portsecurity/switchv1alphabridge/100g/setdynamicmacfiltrationmode.yml -e '{"mode":"disable","target_interface":"tg0/0/48"}'
+# ============================================================
+
+- name: Set Dynamic MAC Filtration Mode
+  hosts: alphabridge_devices
+  gather_facts: false
+  connection: local
+
+  vars:
+    output_dir: "/opt/librenms/librenms-ansible-inventory-plugin/output"
+    tmp_dir: "/opt/librenms/librenms-ansible-inventory-plugin/tmp"
+
+  tasks:
+    - name: Validate Dynamic MAC Filtration parameters
+      ansible.builtin.assert:
+        that:
+          - mode is defined
+          - (mode | lower) in ['enable', 'disable']
+          - target_interface is defined
+          - (target_interface | string | length) > 0
+          - target_interface | lower is match('^(tg|wg|cg)[0-9]+/[0-9]+/[0-9]+$')
+          - (max_mac_address | default(1) | int) >= 1
+          - (max_mac_address | default(1) | int) <= 2048
+        fail_msg: "Provide mode as enable or disable, a valid 100G interface, and max_mac_address between 1 and 2048."
+        success_msg: "Dynamic MAC Filtration parameters validated."
+
+    - name: Create output directory
+      ansible.builtin.file:
+        path: "{{ output_dir }}"
+        state: directory
+        mode: "0755"
+
+    - name: Create temporary directory
+      ansible.builtin.file:
+        path: "{{ tmp_dir }}"
+        state: directory
+        mode: "0755"
+
+    - name: Generate Dynamic MAC Filtration configuration script
+      ansible.builtin.copy:
+        dest: "{{ tmp_dir }}/set_dynamicmacfiltrationmode_{{ inventory_hostname | regex_replace('[^A-Za-z0-9_.-]', '_') }}.py"
+        mode: "0755"
+        content: |
+          import os
+          import sys
+          import time
+          import json
+          import re
+          import paramiko
+
+          HOST = os.environ["SWITCH_HOST"]
+          SSH_PORT = int(os.environ["SSH_PORT"])
+          USERNAME = os.environ["SWITCH_USERNAME"]
+          PASSWORD = os.environ["SWITCH_PASSWORD"]
+          TARGET_INTERFACE = os.environ["TARGET_INTERFACE"].lower()
+          MODE = os.environ["MODE"].lower()
+          MAX_MAC_ADDRESS = int(os.environ["MAX_MAC_ADDRESS"])
+          OUTPUT_FILE = os.environ["OUTPUT_FILE"]
+
+          ANSI_RE = re.compile(
+              r'\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])'
+          )
+          PAGER_RE = re.compile(
+              r'--\s*More\s*--|Press any key|Press <SPACE>',
+              re.IGNORECASE
+          )
+          PROMPT_RE = re.compile(r'^[^\r\n]*[>#][ \t]*$')
+
+          ERROR_PATTERNS = [
+              r'Unknown command',
+              r'Invalid command',
+              r'invalid input',
+              r'Incomplete command',
+              r'Command incomplete',
+              r'% Error',
+              r'% Invalid',
+              r'command failed',
+              r'configuration failed',
+              r'Port security control cannot be configured on the VLAN Trunk port'
+          ]
+
+          PHYSICAL_INTERFACE_RE = re.compile(
+              r'^(tg|wg|cg)\d+/\d+/\d+$',
+              re.IGNORECASE
+          )
+
+          def clean_output(value):
+              value = ANSI_RE.sub("", value)
+              value = value.replace("\r", "")
+              cleaned = []
+
+              for char in value:
+                  if char == "\b":
+                      if cleaned:
+                          cleaned.pop()
+                  else:
+                      cleaned.append(char)
+
+              return "".join(cleaned)
+
+          def read_until_prompt(channel, timeout=300):
+              output = ""
+              pending = ""
+              deadline = time.time() + timeout
+
+              while time.time() < deadline:
+                  if channel.recv_ready():
+                      data = channel.recv(65535).decode(
+                          "utf-8", errors="ignore"
+                      )
+                      pending += data
+                      cleaned_pending = clean_output(pending)
+
+                      pager_match = PAGER_RE.search(cleaned_pending)
+
+                      if pager_match:
+                          output += cleaned_pending[:pager_match.start()]
+                          pending = cleaned_pending[pager_match.end():]
+                          channel.send(" ")
+                          time.sleep(0.15)
+                          continue
+
+                      lines = cleaned_pending.splitlines()
+                      non_empty_lines = [
+                          line for line in lines if line.strip()
+                      ]
+
+                      if non_empty_lines:
+                          last_line = non_empty_lines[-1].strip()
+
+                          if PROMPT_RE.fullmatch(last_line):
+                              output += cleaned_pending
+                              return clean_output(output)
+
+                  else:
+                      time.sleep(0.05)
+
+              raise Exception(
+                  "Timeout waiting for switch prompt. Received output:\n"
+                  + clean_output(output + pending)[-5000:]
+              )
+
+          def get_prompt(output):
+              lines = [
+                  line.strip()
+                  for line in clean_output(output).splitlines()
+                  if line.strip()
+              ]
+
+              if not lines:
+                  raise Exception("Could not identify the switch prompt.")
+
+              prompt = lines[-1]
+
+              if not PROMPT_RE.fullmatch(prompt):
+                  raise Exception("Invalid switch prompt: " + prompt)
+
+              return prompt
+
+          def run_command(channel, command, timeout=300):
+              channel.send(command + "\n")
+              output = read_until_prompt(channel, timeout)
+              return output, get_prompt(output)
+
+          def has_cli_error(output):
+              return any(
+                  re.search(pattern, clean_output(output), re.IGNORECASE)
+                  for pattern in ERROR_PATTERNS
+              )
+
+          def check_cli_error(output, command):
+              if has_cli_error(output):
+                  raise RuntimeError(
+                      "Switch rejected command: "
+                      + command
+                      + ". Response: "
+                      + clean_output(output).strip()
+                  )
+
+          def is_config_prompt(prompt):
+              return bool(
+                  re.search(
+                      r'\(config(?:-[^)]+)?\)#$',
+                      prompt,
+                      re.IGNORECASE
+                  )
+                  or re.search(
+                      r'_config(?:_[^#]*)?#$',
+                      prompt,
+                      re.IGNORECASE
+                  )
+              )
+
+          def is_interface_prompt(prompt):
+              return bool(
+                  re.search(
+                      r'\(config-[^)]+\)#$',
+                      prompt,
+                      re.IGNORECASE
+                  )
+                  or re.search(
+                      r'_config_(?:tg|wg|cg)\d+/\d+/\d+#$',
+                      prompt,
+                      re.IGNORECASE
+                  )
+              )
+
+          def prompt_interface(prompt):
+              match = re.search(
+                  r'(?:\(config-|_config_)'
+                  r'((?:tg|wg|cg)\d+/\d+/\d+)',
+                  prompt,
+                  re.IGNORECASE
+              )
+
+              return match.group(1).lower() if match else None
+
+          def normalize_interface(name):
+              return re.sub(r'\s+', '', name.strip()).lower()
+
+          def discover_interfaces(config):
+              interfaces = []
+              current = None
+
+              for raw_line in config.splitlines():
+                  line = raw_line.strip()
+
+                  match = re.match(
+                      r'^interface\s+(\S+)',
+                      line,
+                      re.IGNORECASE
+                  )
+
+                  if match:
+                      name = normalize_interface(match.group(1))
+
+                      if PHYSICAL_INTERFACE_RE.fullmatch(name):
+                          current = {
+                              "interface": match.group(1),
+                              "normalized": name,
+                              "trunk": False
+                          }
+                          interfaces.append(current)
+                      else:
+                          current = None
+
+                      continue
+
+                  if line == "!":
+                      current = None
+                      continue
+
+                  if current is not None and re.search(
+                      r'switchport\s+mode\s+trunk',
+                      line,
+                      re.IGNORECASE
+                  ):
+                      current["trunk"] = True
+
+              return interfaces
+
+          def get_interface_config(config, target_interface):
+              block = []
+              in_target = False
+
+              for raw_line in config.splitlines():
+                  line = raw_line.strip()
+
+                  match = re.match(
+                      r'^interface\s+(\S+)',
+                      line,
+                      re.IGNORECASE
+                  )
+
+                  if match:
+                      if in_target:
+                          break
+
+                      name = normalize_interface(match.group(1))
+                      in_target = name == target_interface.lower()
+
+                  if line == "!" and in_target:
+                      break
+
+                  if in_target:
+                      block.append(line)
+
+              return block
+
+          def main():
+              client = None
+              status = "failed"
+
+              report = {
+                  "ip": HOST,
+                  "message": "Dynamic MAC Filtration configuration failed."
+              }
+
+              try:
+                  if MODE not in ("enable", "disable"):
+                      raise ValueError(
+                          "Mode must be enable or disable."
+                      )
+
+                  if not 1 <= MAX_MAC_ADDRESS <= 2048:
+                      raise ValueError(
+                          "Maximum MAC address count must be between 1 and 2048."
+                      )
+
+                  wanted_interface = normalize_interface(
+                      TARGET_INTERFACE
+                  )
+
+                  if not PHYSICAL_INTERFACE_RE.fullmatch(
+                      wanted_interface
+                  ):
+                      raise ValueError(
+                          "Invalid 100G physical interface: "
+                          + TARGET_INTERFACE
+                      )
+
+                  client = paramiko.SSHClient()
+                  client.set_missing_host_key_policy(
+                      paramiko.AutoAddPolicy()
+                  )
+
+                  client.connect(
+                      hostname=HOST,
+                      port=SSH_PORT,
+                      username=USERNAME,
+                      password=PASSWORD,
+                      look_for_keys=False,
+                      allow_agent=False,
+                      timeout=15,
+                      banner_timeout=20,
+                      auth_timeout=15
+                  )
+
+                  channel = client.invoke_shell()
+                  channel.settimeout(2)
+                  time.sleep(1)
+
+                  initial_output = read_until_prompt(channel, 30)
+                  prompt = get_prompt(initial_output)
+
+                  # Enter privileged mode only when required.
+                  if prompt.endswith(">"):
+                      output, prompt = run_command(
+                          channel, "enable", 30
+                      )
+                      check_cli_error(output, "enable")
+
+                  # Move to global configuration mode if required.
+                  if is_interface_prompt(prompt):
+                      if prompt_interface(prompt) != wanted_interface:
+                          output, prompt = run_command(
+                              channel, "exit", 30
+                          )
+                          check_cli_error(output, "exit")
+
+                  if not is_config_prompt(prompt):
+                      output, prompt = run_command(
+                          channel, "config", 30
+                      )
+                      check_cli_error(output, "config")
+
+                  if not is_config_prompt(prompt):
+                      raise RuntimeError(
+                          "Could not enter configuration mode. "
+                          "Current prompt: " + prompt
+                      )
+
+                  # Retrieve running configuration and discover interfaces.
+                  config_output, prompt = run_command(
+                      channel, "show running-config", 300
+                  )
+                  check_cli_error(
+                      config_output, "show running-config"
+                  )
+
+                  interfaces = discover_interfaces(config_output)
+
+                  selected = next(
+                      (
+                          item for item in interfaces
+                          if item["normalized"] == wanted_interface
+                      ),
+                      None
+                  )
+
+                  if not selected:
+                      raise RuntimeError(
+                          "Interface not found in running configuration: "
+                          + TARGET_INTERFACE
+                      )
+
+                  if selected["trunk"]:
+                      raise RuntimeError(
+                          "Dynamic MAC Filtration cannot be configured "
+                          "on a VLAN trunk port."
+                      )
+
+                  # Select the requested interface.
+                  if not (
+                      is_interface_prompt(prompt)
+                      and prompt_interface(prompt) == wanted_interface
+                  ):
+                      if is_interface_prompt(prompt):
+                          output, prompt = run_command(
+                              channel, "exit", 30
+                          )
+                          check_cli_error(output, "exit")
+
+                      output, prompt = run_command(
+                          channel,
+                          "interface " + selected["interface"],
+                          30
+                      )
+                      check_cli_error(
+                          output,
+                          "interface " + selected["interface"]
+                      )
+
+                  if not is_interface_prompt(prompt):
+                      raise RuntimeError(
+                          "Could not enter interface configuration mode. "
+                          "Current prompt: " + prompt
+                      )
+
+                  # Configure Dynamic MAC Filtration.
+                  if MODE == "enable":
+                      commands = [
+                          "switchport port-security mode dynamic",
+                          "switchport port-security dynamic maximum "
+                          + str(MAX_MAC_ADDRESS)
+                      ]
+                  else:
+                      commands = [
+                          "no switchport port-security mode"
+                      ]
+
+                  for command in commands:
+                      output, prompt = run_command(
+                          channel, command, 30
+                      )
+                      check_cli_error(output, command)
+
+                  # Verify the actual running configuration.
+                  verify_output, prompt = run_command(
+                      channel, "show running-config", 300
+                  )
+                  check_cli_error(
+                      verify_output, "show running-config"
+                  )
+
+                  interface_lines = get_interface_config(
+                      verify_output, wanted_interface
+                  )
+
+                  if not interface_lines:
+                      raise RuntimeError(
+                          "Could not find interface in verification output: "
+                          + TARGET_INTERFACE
+                      )
+
+                  dynamic_enabled = any(
+                      re.match(
+                          r'^switchport\s+port-security\s+mode\s+dynamic\s*$',
+                          line,
+                          re.IGNORECASE
+                      )
+                      for line in interface_lines
+                  )
+
+                  maximum_match = None
+
+                  for line in interface_lines:
+                      match = re.match(
+                          r'^switchport\s+port-security\s+dynamic\s+maximum\s+(\d+)\s*$',
+                          line,
+                          re.IGNORECASE
+                      )
+
+                      if match:
+                          maximum_match = int(match.group(1))
+
+                  if MODE == "enable":
+                      if not dynamic_enabled:
+                          raise RuntimeError(
+                              "Dynamic MAC Filtration mode was not found "
+                              "under " + selected["interface"]
+                              + " after configuration."
+                          )
+
+                      if maximum_match != MAX_MAC_ADDRESS:
+                          raise RuntimeError(
+                              "Maximum MAC address value was not verified "
+                              "under " + selected["interface"] + "."
+                          )
+
+                      message = (
+                          "Dynamic MAC Filtration Mode enabled successfully."
+                      )
+
+                  else:
+                      if dynamic_enabled:
+                          raise RuntimeError(
+                              "Dynamic MAC Filtration mode is still enabled "
+                              "under " + selected["interface"] + "."
+                          )
+
+                      message = (
+                          "Dynamic MAC Filtration Mode disabled successfully."
+                      )
+
+                  report = {
+                      "ip": HOST,
+                      "message": message
+                  }
+
+                  status = "success"
+
+              except Exception as exc:
+                  print(
+                      "Dynamic MAC Filtration error: " + str(exc),
+                      file=sys.stderr
+                  )
+
+              finally:
+                  if client:
+                      client.close()
+
+              with open(OUTPUT_FILE, "w") as report_file:
+                  json.dump(report, report_file, indent=2)
+                  report_file.write("\n")
+
+              print(json.dumps(report, indent=2))
+              sys.exit(0 if status == "success" else 1)
+
+          if __name__ == "__main__":
+              main()
+
+    - name: Execute Dynamic MAC Filtration configuration
+      ansible.builtin.command:
+        argv:
+          - python3
+          - "{{ tmp_dir }}/set_dynamicmacfiltrationmode_{{ inventory_hostname | regex_replace('[^A-Za-z0-9_.-]', '_') }}.py"
+      environment:
+        SWITCH_HOST: "{{ ansible_host | default(inventory_hostname) }}"
+        SSH_PORT: "{{ ansible_port | default(22) | string }}"
+        SWITCH_USERNAME: "{{ ansible_user | default(ansible_ssh_user | default('admin')) }}"
+        SWITCH_PASSWORD: "{{ ansible_password | default(ansible_ssh_pass | default('')) }}"
+        TARGET_INTERFACE: "{{ target_interface }}"
+        MODE: "{{ mode | lower }}"
+        MAX_MAC_ADDRESS: "{{ max_mac_address | default(1) | string }}"
+        OUTPUT_FILE: "{{ output_dir }}/{{ ansible_host | default(inventory_hostname) }}_dynamicmacfiltrationmode_set.yml"
+      register: dynamic_mac_result
+      changed_when: dynamic_mac_result.rc == 0
+      failed_when: dynamic_mac_result.rc != 0
+
+    - name: Display Dynamic MAC Filtration result
+      ansible.builtin.debug:
+        var: dynamic_mac_result.stdout
