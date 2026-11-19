@@ -1,0 +1,76 @@
+# 100G (e.g. AS300/56/XC): "show running-config | include" is not supported,
+# so read the name with "show hostname".
+- name: Run "show hostname" on 100G switch via SSH
+  hosts: alphabridge_devices
+  gather_facts: no
+
+  tasks:
+
+    - name: Create Python SSH script
+      ansible.builtin.copy:
+        dest: "/opt/librenms/librenms-ansible-inventory-plugin/tmp/get_hostname_100g_{{ ansible_host }}.py"
+        mode: '0755'
+        content: |
+          import paramiko
+          import time
+
+          HOST = "{{ ansible_host }}"
+          USER = "{{ ansible_user }}"
+          PASSWORD = "{{ ansible_password }}"
+
+          def read(shell, wait):
+              time.sleep(wait)
+              out = ""
+              while shell.recv_ready():
+                  out += shell.recv(65535).decode(errors="ignore")
+              return out
+
+          try:
+              ssh = paramiko.SSHClient()
+              ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+              ssh.connect(HOST, username=USER, password=PASSWORD,
+                          look_for_keys=False, allow_agent=False, timeout=10)
+
+              shell = ssh.invoke_shell()
+              read(shell, 1)
+
+              shell.send("enable\n")
+              read(shell, 1)
+
+              shell.send("show hostname\n")
+              output = read(shell, 2)
+              ssh.close()
+
+              # Output: echoed command, the hostname, then the prompt "<name>#"
+              hostname_value = None
+              for line in output.splitlines():
+                  line = line.strip()
+                  if not line or "show hostname" in line or line.endswith("#") or line.endswith(">"):
+                      continue
+                  hostname_value = line
+                  break
+
+              print(hostname_value if hostname_value else "ERROR")
+
+          except Exception:
+              print("ERROR")
+
+    - name: Run SSH script using virtualenv Python
+      ansible.builtin.command:
+        cmd: >
+          /opt/librenms/librenms-ansible-inventory-plugin/bin/python3
+          /opt/librenms/librenms-ansible-inventory-plugin/tmp/get_hostname_100g_{{ ansible_host }}.py
+      register: output
+      changed_when: false
+
+    - name: Save hostname output to YAML file
+      ansible.builtin.copy:
+        dest: "/opt/librenms/librenms-ansible-inventory-plugin/output/{{ ansible_host }}_gethostname.yml"
+        content: |
+          ip: "{{ ansible_host }}"
+          hostname: "{{ output.stdout | trim }}"
+      when: output.stdout | trim != "ERROR"
+
+    - name: Display hostname only
+      ansible.builtin.debug:
+        msg: "Hostname: {{ output.stdout | trim }}"

@@ -252,7 +252,7 @@ class KunalApiController
 
 public function gethostname($hostname)
 {
-    $playbook = "{$this->pluginPath}/playbooks/hostname/gethostname.yml";
+    $playbook = $this->devicePlaybook('hostname/gethostname.yml', $hostname);
     $hosts    = "{$this->pluginPath}/hosts/{$hostname}.yml";
 
     // Run ansible
