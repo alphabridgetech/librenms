@@ -1,0 +1,217 @@
+---
+# ============================================================================
+# File        : getstaticroute.yml  (100G - switchv1alphabridge/100g)
+# Feature     : Get Static Route Configuration
+#
+# Reads the "ip route" lines of show running-config, which (unlike
+# "show static-route json") also carry the route's tag and description:
+#   ip route <dst> <mask> <gateway|blackhole|reject> [<distance>] [tag <n>] [description <word>]
+#
+# Output (same shape as playbooks/static_route_l3/getstaticroute.yml, used
+# by the Telequill Static Route page):
+#   <output_dir>/<IP>_staticroute.yml
+#     status: SUCCESS | FAILED (+ error)
+#     static_routes:
+#       - destination_ip, destination_ip_mask
+#         interface: ''  (gateway route) | Null0 (blackhole) | reject
+#         forwarding_routing_address: <gateway IP> | ''
+#         distance_metric: <n> | null  (left out of the config when it is 1)
+#         routing_tag: <n> | 0         (0 = no tag)
+#         route_description: <word> | null
+#         default_route: true | false
+#
+# Command:
+# ansible-playbook -i hosts/192.168.200.134.yml playbooks/static_route_l3/switchv1alphabridge/100g/getstaticroute.yml
+# ============================================================================
+
+- name: Get Static Route Configuration
+  hosts: alphabridge_devices
+  gather_facts: false
+  connection: local
+
+  vars:
+    output_dir: "/opt/librenms/librenms-ansible-inventory-plugin/output"
+    tmp_dir: "/opt/librenms/librenms-ansible-inventory-plugin/tmp"
+    temp_script: "{{ tmp_dir }}/getstaticroute_100g_{{ inventory_hostname | regex_replace('[^A-Za-z0-9_.-]', '_') }}.py"
+
+  tasks:
+
+    - name: Create output and temporary directories
+      ansible.builtin.file:
+        path: "{{ item }}"
+        state: directory
+        mode: "0755"
+      loop:
+        - "{{ output_dir }}"
+        - "{{ tmp_dir }}"
+      delegate_to: localhost
+
+    - name: Create Static Route GET script
+      ansible.builtin.copy:
+        dest: "{{ temp_script }}"
+        mode: "0700"
+        content: |
+          import re
+          import sys
+          import time
+          import paramiko
+          import yaml
+
+          HOST = {{ (ansible_host | default(inventory_hostname)) | to_json }}
+          PORT = int({{ (ansible_port | default(22)) | to_json }})
+          USERNAME = {{ ansible_user | to_json }}
+          PASSWORD = {{ ansible_password | to_json }}
+          OUTPUT_FILE = {{ (output_dir ~ '/' ~ (ansible_host | default(inventory_hostname)) ~ '_staticroute.yml') | to_json }}
+
+          ANSI_RE = re.compile(r'\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])')
+          PAGER_RE = re.compile(r'--\s*More\s*--', re.IGNORECASE)
+          PROMPT_RE = re.compile(r'^[^\r\n]*[>#][ \t]*$')
+          ERROR_RE = re.compile(
+              r'Bad parameter|Unknown command|Invalid input|'
+              r'Command incomplete|% Invalid|% Error',
+              re.IGNORECASE
+          )
+
+          def clean_output(value):
+              value = ANSI_RE.sub("", value).replace("\r", "")
+              cleaned = []
+              for char in value:
+                  if char == "\b":
+                      if cleaned:
+                          cleaned.pop()
+                  else:
+                      cleaned.append(char)
+              return "".join(cleaned)
+
+          def run_command(channel, command, timeout=300):
+              channel.send(command + "\n")
+              output = ""
+              pending = ""
+              deadline = time.time() + timeout
+
+              while time.time() < deadline:
+                  if channel.recv_ready():
+                      pending += channel.recv(65535).decode("utf-8", errors="ignore")
+                      cleaned = clean_output(pending)
+
+                      pager = PAGER_RE.search(cleaned)
+                      if pager:
+                          output += cleaned[:pager.start()]
+                          pending = cleaned[pager.end():]
+                          channel.send(" ")
+                          continue
+
+                      lines = [line for line in cleaned.splitlines() if line.strip()]
+                      if lines and PROMPT_RE.fullmatch(lines[-1].strip()):
+                          output += cleaned
+                          if ERROR_RE.search(output):
+                              raise Exception("Switch rejected '" + command + "': " + output.strip()[-500:])
+                          return output
+                  else:
+                      time.sleep(0.05)
+
+              raise Exception("Timeout waiting for the switch prompt after '" + command + "'")
+
+          def parse_routes(config):
+              routes = []
+              for line in config.splitlines():
+                  line = line.strip()
+                  # VRF routes are not shown on the page
+                  if not line.startswith("ip route ") or line.startswith("ip route vrf "):
+                      continue
+
+                  words = line.split()[2:]
+                  default_route = bool(words) and words[0] == "default"
+                  if default_route:
+                      words = ["0.0.0.0", "0.0.0.0"] + words[1:]
+                  if len(words) < 3:
+                      continue
+
+                  route = {
+                      "destination_ip": words[0],
+                      "destination_ip_mask": words[1],
+                      "interface": "",
+                      "forwarding_routing_address": "",
+                      "distance_metric": None,
+                      "routing_tag": 0,
+                      "route_description": None,
+                      "default_route": default_route,
+                  }
+
+                  target = words[2]
+                  if target.lower() == "blackhole":
+                      route["interface"] = "Null0"
+                  elif target.lower() == "reject":
+                      route["interface"] = "reject"
+                  else:
+                      route["forwarding_routing_address"] = target
+
+                  rest = words[3:]
+                  i = 0
+                  while i < len(rest):
+                      word = rest[i].lower()
+                      if word.isdigit() and route["distance_metric"] is None and i == 0:
+                          route["distance_metric"] = int(word)
+                      elif word == "tag" and i + 1 < len(rest) and rest[i + 1].isdigit():
+                          route["routing_tag"] = int(rest[i + 1])
+                          i += 1
+                      elif word == "description" and i + 1 < len(rest):
+                          route["route_description"] = " ".join(rest[i + 1:])
+                          break
+                      elif word == "vrf":
+                          i += 1
+                      i += 1
+
+                  routes.append(route)
+              return routes
+
+          client = None
+          try:
+              client = paramiko.SSHClient()
+              client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+              client.connect(
+                  hostname=HOST, port=PORT, username=USERNAME, password=PASSWORD,
+                  look_for_keys=False, allow_agent=False,
+                  timeout=15, banner_timeout=20, auth_timeout=15
+              )
+              channel = client.invoke_shell()
+              time.sleep(1)
+              while channel.recv_ready():
+                  channel.recv(65535)
+
+              run_command(channel, "enable", timeout=20)
+              config = run_command(channel, "show running-config", timeout=300)
+
+              result = {
+                  "status": "SUCCESS",
+                  "device_ip": HOST,
+                  "static_routes": parse_routes(config),
+              }
+              exit_code = 0
+
+          except Exception as error:
+              result = {"status": "FAILED", "device_ip": HOST, "error": str(error), "static_routes": []}
+              exit_code = 1
+
+          finally:
+              if client:
+                  client.close()
+
+          with open(OUTPUT_FILE, "w") as report:
+              yaml.safe_dump(result, report, default_flow_style=False, sort_keys=False)
+
+          print(("FAILED: " + result["error"]) if exit_code else "SUCCESS")
+          sys.exit(exit_code)
+
+    - name: Get static routes
+      ansible.builtin.command:
+        argv:
+          - python3
+          - "{{ temp_script }}"
+      register: static_route_get
+      changed_when: false
+      delegate_to: localhost
+
+    - name: Show static route result
+      ansible.builtin.debug:
+        msg: "{{ lookup('file', output_dir ~ '/' ~ (ansible_host | default(inventory_hostname)) ~ '_staticroute.yml') }}"

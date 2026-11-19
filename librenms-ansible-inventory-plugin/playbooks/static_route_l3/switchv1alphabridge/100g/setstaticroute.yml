@@ -1,0 +1,228 @@
+---
+# ============================================================================
+# File        : setstaticroute.yml  (100G - switchv1alphabridge/100g)
+# Feature     : Static Route - SET / DELETE
+#
+# Takes the same variables as playbooks/static_route_l3/setstaticroute.yml
+# (sent by the Telequill Static Route page):
+#   operation                  : set | delete
+#   dest_ip, dest_mask         : destination network
+#   interface_type             : Gateway IP Address | Null0 | Interface VLAN
+#   gateway_ip                 : next hop (Gateway IP Address)
+#   distance_metric            : 1-255 (default 1)
+#   routing_tag                : 0-4294967295 (0 = no tag)
+#   route_description          : one word (set only)
+# The older 100G names destination_ip, destination_mask and
+# administrative_distance are accepted as well.
+#
+# 100G CLI:
+#   ip route <dst> <mask> <gateway|blackhole> <distance> [tag <n>] [description <word>]
+#   no ip route <dst> <mask> <gateway|blackhole>
+# Null0 is configured as "blackhole"; routing to an Interface VLAN is not
+# supported by the 100G switch.
+#
+# Output: <output_dir>/<IP>_staticroute.yml
+#   status: SUCCESS | FAILED (+ error) - the page re-reads the routes after.
+#
+# Commands:
+# ansible-playbook -i hosts/192.168.200.134.yml playbooks/static_route_l3/switchv1alphabridge/100g/setstaticroute.yml -e '{"operation":"set","dest_ip":"192.168.30.0","dest_mask":"255.255.255.0","interface_type":"Gateway IP Address","gateway_ip":"192.168.30.1","distance_metric":20,"routing_tag":0,"route_description":"lab"}'
+# ansible-playbook -i hosts/192.168.200.134.yml playbooks/static_route_l3/switchv1alphabridge/100g/setstaticroute.yml -e '{"operation":"delete","dest_ip":"192.168.30.0","dest_mask":"255.255.255.0","interface_type":"Gateway IP Address","gateway_ip":"192.168.30.1"}'
+# ============================================================================
+
+- name: Static Route Configuration
+  hosts: alphabridge_devices
+  gather_facts: false
+  connection: local
+
+  vars:
+    output_dir: "/opt/librenms/librenms-ansible-inventory-plugin/output"
+    tmp_dir: "/opt/librenms/librenms-ansible-inventory-plugin/tmp"
+    temp_script: "{{ tmp_dir }}/setstaticroute_100g_{{ inventory_hostname | regex_replace('[^A-Za-z0-9_.-]', '_') }}.py"
+    route_dest_ip: "{{ dest_ip | default(destination_ip | default('')) }}"
+    route_dest_mask: "{{ dest_mask | default(destination_mask | default('')) }}"
+    route_type: "{{ interface_type | default('Gateway IP Address') }}"
+    route_distance: "{{ distance_metric | default(administrative_distance | default(1)) }}"
+
+  tasks:
+
+    - name: Validate static route parameters
+      ansible.builtin.assert:
+        that:
+          - operation is defined
+          - operation in ['set', 'delete']
+          - route_dest_ip is match('^([0-9]{1,3}\.){3}[0-9]{1,3}$')
+          - route_dest_mask is match('^([0-9]{1,3}\.){3}[0-9]{1,3}$')
+          - route_type in ['Gateway IP Address', 'Null0', 'Interface VLAN']
+          - route_type != 'Gateway IP Address' or (gateway_ip | default('')) is match('^([0-9]{1,3}\.){3}[0-9]{1,3}$')
+          - route_distance | int >= 1
+          - route_distance | int <= 255
+          - (routing_tag | default(0) | int) >= 0
+          - operation != 'set' or (route_description | default('')) is match('^[A-Za-z0-9_.-]*$')
+        fail_msg: "Invalid static route parameters."
+
+    - name: Create output and temporary directories
+      ansible.builtin.file:
+        path: "{{ item }}"
+        state: directory
+        mode: "0755"
+      loop:
+        - "{{ output_dir }}"
+        - "{{ tmp_dir }}"
+      delegate_to: localhost
+
+    - name: Create Static Route SET script
+      ansible.builtin.copy:
+        dest: "{{ temp_script }}"
+        mode: "0700"
+        content: |
+          import ipaddress
+          import re
+          import sys
+          import time
+          import paramiko
+          import yaml
+
+          HOST = {{ (ansible_host | default(inventory_hostname)) | to_json }}
+          PORT = int({{ (ansible_port | default(22)) | to_json }})
+          USERNAME = {{ ansible_user | to_json }}
+          PASSWORD = {{ ansible_password | to_json }}
+          OUTPUT_FILE = {{ (output_dir ~ '/' ~ (ansible_host | default(inventory_hostname)) ~ '_staticroute.yml') | to_json }}
+
+          OPERATION = {{ operation | to_json }}
+          DEST_IP = {{ route_dest_ip | to_json }}
+          DEST_MASK = {{ route_dest_mask | to_json }}
+          ROUTE_TYPE = {{ route_type | to_json }}
+          GATEWAY_IP = {{ (gateway_ip | default('')) | string | to_json }}
+          DISTANCE = int({{ route_distance | to_json }})
+          TAG = int({{ (routing_tag | default(0)) | to_json }})
+          DESCRIPTION = {{ (route_description | default('')) | string | to_json }}
+
+          ANSI_RE = re.compile(r'\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])')
+          PAGER_RE = re.compile(r'--\s*More\s*--', re.IGNORECASE)
+          PROMPT_RE = re.compile(r'^[^\r\n]*[>#][ \t]*$')
+          ERROR_RE = re.compile(
+              r'Bad parameter|Unknown command|Invalid input|Invalid command|'
+              r'Command incomplete|Ambiguous command|% Invalid|% Error|%err',
+              re.IGNORECASE
+          )
+
+          def clean_output(value):
+              value = ANSI_RE.sub("", value).replace("\r", "")
+              cleaned = []
+              for char in value:
+                  if char == "\b":
+                      if cleaned:
+                          cleaned.pop()
+                  else:
+                      cleaned.append(char)
+              return "".join(cleaned)
+
+          def run_command(channel, command, timeout=300):
+              channel.send(command + "\n")
+              output = ""
+              pending = ""
+              deadline = time.time() + timeout
+
+              while time.time() < deadline:
+                  if channel.recv_ready():
+                      pending += channel.recv(65535).decode("utf-8", errors="ignore")
+                      cleaned = clean_output(pending)
+
+                      pager = PAGER_RE.search(cleaned)
+                      if pager:
+                          output += cleaned[:pager.start()]
+                          pending = cleaned[pager.end():]
+                          channel.send(" ")
+                          continue
+
+                      lines = [line for line in cleaned.splitlines() if line.strip()]
+                      if lines and PROMPT_RE.fullmatch(lines[-1].strip()):
+                          output += cleaned
+                          if ERROR_RE.search(output):
+                              raise Exception("Switch rejected '" + command + "': " + output.strip()[-500:])
+                          return output
+                  else:
+                      time.sleep(0.05)
+
+              raise Exception("Timeout waiting for the switch prompt after '" + command + "'")
+
+          result = {"status": "FAILED", "device_ip": HOST, "operation": OPERATION}
+          client = None
+          try:
+              if ROUTE_TYPE == "Interface VLAN":
+                  raise Exception("Routing to an Interface VLAN is not supported on 100G switches - use Gateway IP Address or Null0.")
+
+              # The switch saves the route under its network address
+              # (192.12.55.1 255.255.255.0 -> 192.12.55.0), so use that for
+              # the command and the check
+              DEST_IP = str(ipaddress.ip_network(DEST_IP + "/" + DEST_MASK, strict=False).network_address)
+              result["destination_ip"] = DEST_IP
+
+              target = "blackhole" if ROUTE_TYPE == "Null0" else GATEWAY_IP
+              route = "ip route " + DEST_IP + " " + DEST_MASK + " " + target
+
+              if OPERATION == "set":
+                  command = route + " " + str(DISTANCE)
+                  if TAG > 0:
+                      command += " tag " + str(TAG)
+                  if DESCRIPTION:
+                      command += " description " + DESCRIPTION
+              else:
+                  command = "no " + route
+              result["command"] = command
+
+              client = paramiko.SSHClient()
+              client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+              client.connect(
+                  hostname=HOST, port=PORT, username=USERNAME, password=PASSWORD,
+                  look_for_keys=False, allow_agent=False,
+                  timeout=15, banner_timeout=20, auth_timeout=15
+              )
+              channel = client.invoke_shell()
+              time.sleep(1)
+              while channel.recv_ready():
+                  channel.recv(65535)
+
+              run_command(channel, "enable", timeout=20)
+              run_command(channel, "config", timeout=20)
+              run_command(channel, command, timeout=30)
+
+              # Verify against the running configuration ("end" is an
+              # unknown command on 100G; show works in config mode)
+              config = run_command(channel, "show running-config", timeout=300)
+              route_re = re.compile(r'^\s*' + re.escape(route) + r'(\s|$)', re.IGNORECASE | re.MULTILINE)
+              exists = bool(route_re.search(config))
+
+              if OPERATION == "set" and not exists:
+                  raise Exception("Route was not found in running-config after: " + command)
+              if OPERATION == "delete" and exists:
+                  raise Exception("Route is still in running-config after: " + command)
+
+              result["status"] = "SUCCESS"
+
+          except Exception as error:
+              result["status"] = "FAILED"
+              result["error"] = str(error)
+
+          finally:
+              if client:
+                  client.close()
+
+          with open(OUTPUT_FILE, "w") as report:
+              yaml.safe_dump(result, report, default_flow_style=False, sort_keys=False)
+
+          print(result["status"] + (": " + result["error"] if result.get("error") else ""))
+          sys.exit(0 if result["status"] == "SUCCESS" else 1)
+
+    - name: Apply static route
+      ansible.builtin.command:
+        argv:
+          - python3
+          - "{{ temp_script }}"
+      register: static_route_set
+      changed_when: static_route_set.rc == 0
+      delegate_to: localhost
+
+    - name: Show static route result
+      ansible.builtin.debug:
+        msg: "{{ static_route_set.stdout }}"

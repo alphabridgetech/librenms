@@ -1,8 +1,0 @@
-
-device_ip: "10.10.10.1"
-
-interface: "gigaEthernet 0/1"
-
-status: "success"
-
-message: "Port Configuration SET configuration successful"
