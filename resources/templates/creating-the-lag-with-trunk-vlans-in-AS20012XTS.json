@@ -4,7 +4,8 @@
     "hostname": "",
     "interfaces": [],
     "hardware_models": [
-        "AS200\/12\/XTS"
+        "AS200\/12\/XTS",
+        "AS200\/12\/XTS-2AC"
     ],
     "fields": [
         {
