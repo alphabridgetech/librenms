@@ -182,6 +182,7 @@ Route::prefix('v0')->group(function () {
         Route::post('portchannel/add/{hostname}', [App\Api\Controllers\KunalApiController::class, 'addportaggregate'])->name('portchannel.add');
         Route::post('portchannel/edit/{hostname}', [App\Api\Controllers\KunalApiController::class, 'editportaggregate'])->name('portchannel.edit');
         Route::post('portchannel/delete/{hostname}', [App\Api\Controllers\KunalApiController::class, 'deleteportaggregate'])->name('portchannel.delete');
+        Route::get('portchannel/loadbalance/show/{hostname}', [App\Api\Controllers\KunalApiController::class, 'getportchannelloadbalance'])->name('portchannel.loadbalance.show');
         Route::post('portchannel/loadbalance/{hostname}', [App\Api\Controllers\KunalApiController::class, 'setportchannelloadbalance'])->name('portchannel.loadbalance');
         Route::post('tftpupload/{hostname}', [App\Api\Controllers\KunalApiController::class, 'tftpupload'])->name('tftpupload');
         Route::post('tftpexport/{hostname}', [App\Api\Controllers\KunalApiController::class, 'tftpexport'])->name('tftpexport'); 

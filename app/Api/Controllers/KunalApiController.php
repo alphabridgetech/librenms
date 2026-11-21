@@ -4082,12 +4082,26 @@ public function getvlan($hostname)
         ]);
     }
 
+    /** 100G switches use port_channel/switchv1alphabridge/100g (P1-P64, tg/cg ports, switch-wide load balancing). */
+    private function portChannelIs100g(string $hostname): bool
+    {
+        return basename(dirname($this->devicePlaybook('port_channel/port_aggregate_config.yml', $hostname))) === '100g';
+    }
+
+    /** Allowed aggregate group names: P1-P8 on 10G, P1-P64 on 100G. */
+    private function portChannelGroupRegex(string $hostname, string $prefix): string
+    {
+        return $this->portChannelIs100g($hostname)
+            ? '/^' . $prefix . '([1-9]|[1-5][0-9]|6[0-4])$/'
+            : '/^' . $prefix . '[1-8]$/';
+    }
+
     #------------------------------------------------------------
     #          PORT CHANNEL (AGGREGATE GROUP) - SHOW
     #------------------------------------------------------------
     public function getportaggregate($hostname)
     {
-        $playbook = "{$this->pluginPath}/playbooks/port_channel/port_aggregate_details.yml";
+        $playbook = $this->devicePlaybook('port_channel/port_aggregate_details.yml', $hostname);
         $hosts    = "{$this->pluginPath}/hosts/{$hostname}.yml";
         $yamlFile = "{$this->pluginPath}/output/{$hostname}_port_aggregate_details.yml";
 
@@ -4141,12 +4155,12 @@ public function getvlan($hostname)
         }
 
         $data = $request->validate([
-            'aggregate_group' => 'required|in:P1,P2,P3,P4,P5,P6,P7,P8',
+            'aggregate_group' => ['required', 'regex:' . $this->portChannelGroupRegex($hostname, 'P')],
             'mode'            => 'required|in:static,lacp active,lacp passive',
             'ports'           => 'required|string',
         ]);
 
-        $playbook = "{$this->pluginPath}/playbooks/port_channel/port_aggregate_config.yml";
+        $playbook = $this->devicePlaybook('port_channel/port_aggregate_config.yml', $hostname);
         $hosts    = "{$this->pluginPath}/hosts/{$hostname}.yml";
         $yamlFile = "{$this->pluginPath}/output/{$hostname}_port_aggregate_config.yml";
 
@@ -4172,7 +4186,7 @@ public function getvlan($hostname)
         // frontend reloads right after this call already reflects the
         // change, instead of showing stale data until the next background
         // refresh cycle.
-        $this->runAnsible("{$this->pluginPath}/playbooks/port_channel/port_aggregate_details.yml", $hosts);
+        $this->runAnsible($this->devicePlaybook('port_channel/port_aggregate_details.yml', $hostname), $hosts);
 
         return $this->success([
             "message" => "Aggregate group {$data['aggregate_group']} configured ({$data['mode']}) with ports {$data['ports']}",
@@ -4186,13 +4200,13 @@ public function getvlan($hostname)
     public function editportaggregate(Request $request, $hostname)
     {
         $data = $request->validate([
-            'aggregate_group' => 'required|in:p1,p2,p3,p4,p5,p6,p7,p8',
+            'aggregate_group' => ['required', 'regex:' . $this->portChannelGroupRegex($hostname, 'p')],
             'mode'            => 'required|in:static,lacp active,lacp passive',
             'add_ports'       => 'nullable|string',
             'remove_ports'    => 'nullable|string',
         ]);
 
-        $playbook = "{$this->pluginPath}/playbooks/port_channel/port_aggregate_edit.yml";
+        $playbook = $this->devicePlaybook('port_channel/port_aggregate_edit.yml', $hostname);
         $hosts    = "{$this->pluginPath}/hosts/{$hostname}.yml";
         $yamlFile = "{$this->pluginPath}/output/{$hostname}_port_aggregation_edit.yml";
 
@@ -4220,7 +4234,7 @@ public function getvlan($hostname)
 
         // See addportaggregate() - refresh the getportaggregate cache
         // synchronously so a following table reload reflects the edit.
-        $this->runAnsible("{$this->pluginPath}/playbooks/port_channel/port_aggregate_details.yml", $hosts);
+        $this->runAnsible($this->devicePlaybook('port_channel/port_aggregate_details.yml', $hostname), $hosts);
 
         return $this->success([
             "message" => "Aggregate group {$data['aggregate_group']} updated",
@@ -4234,10 +4248,10 @@ public function getvlan($hostname)
     public function deleteportaggregate(Request $request, $hostname)
     {
         $data = $request->validate([
-            'port_id' => 'required|in:p1,p2,p3,p4,p5,p6,p7,p8',
+            'port_id' => ['required', 'regex:' . $this->portChannelGroupRegex($hostname, 'p')],
         ]);
 
-        $playbook = "{$this->pluginPath}/playbooks/port_channel/port_aggregate_delete.yml";
+        $playbook = $this->devicePlaybook('port_channel/port_aggregate_delete.yml', $hostname);
         $hosts    = "{$this->pluginPath}/hosts/{$hostname}.yml";
         $yamlFile = "{$this->pluginPath}/output/{$hostname}_port_aggregation_config_delete.yml";
 
@@ -4256,7 +4270,7 @@ public function getvlan($hostname)
 
         // See addportaggregate() - refresh the getportaggregate cache
         // synchronously so a following table reload reflects the deletion.
-        $this->runAnsible("{$this->pluginPath}/playbooks/port_channel/port_aggregate_details.yml", $hosts);
+        $this->runAnsible($this->devicePlaybook('port_channel/port_aggregate_details.yml', $hostname), $hosts);
 
         return $this->success([
             "message" => "Port channel interface {$data['port_id']} deleted",
@@ -4265,25 +4279,70 @@ public function getvlan($hostname)
     }
 
     #------------------------------------------------------------
+    #          PORT CHANNEL GROUP LOAD BALANCING - SHOW
+    #------------------------------------------------------------
+    /**
+     * Current load-balance mode, read from the switch: 100G uses
+     * switchv1alphabridge/100g/getportchannelloadbalance.yml (show ... json),
+     * 10G the common getportchannelloadbalance.yml (running-config). An empty
+     * mode means the switch default is in use.
+     */
+    public function getportchannelloadbalance($hostname)
+    {
+        $playbook = $this->devicePlaybook('port_channel/getportchannelloadbalance.yml', $hostname);
+        if (!is_file($playbook)) {
+            return $this->success(["supported" => false]);
+        }
+
+        $hosts    = "{$this->pluginPath}/hosts/{$hostname}.yml";
+        $yamlFile = "{$this->pluginPath}/output/{$hostname}_port_channel_load_balance_get.yml";
+
+        $ansibleOutput = $this->runAnsible($playbook, $hosts);
+
+        if ($reason = $this->verifyFreshPlaybookOutput($yamlFile, $ansibleOutput)) {
+            return $this->error($reason, $ansibleOutput);
+        }
+
+        $data = yaml_parse_file($yamlFile);
+        if (($data['status'] ?? null) !== 'success') {
+            return $this->error($data['error'] ?? 'Failed to read load balancing mode', $data);
+        }
+
+        return $this->success([
+            "supported"  => true,
+            "capability" => $data['capability'] ?? '',
+            "mode"       => $data['mode'] ?? '',
+            "mode_label" => $data['mode_label'] ?? '',
+        ]);
+    }
+
+    #------------------------------------------------------------
     #          PORT CHANNEL GROUP LOAD BALANCING - SET
     #------------------------------------------------------------
     public function setportchannelloadbalance(Request $request, $hostname)
     {
+        // Load balancing is switch-wide on every switch (global
+        // "aggregator-group load-balance <mode>"), so no port channel is needed.
+        // 10G also has SRC PORT and ENHANCED; both have the L4 modes.
+        $is100g = $this->portChannelIs100g($hostname);
+
         $data = $request->validate([
-            'port' => 'required|in:p1,p2,p3,p4,p5,p6,p7,p8',
-            'mode' => 'required|in:SRC MAC,DST MAC,BOTH MAC,SRC IP,DST IP,BOTH IP',
+            'port' => ['nullable', 'regex:' . $this->portChannelGroupRegex($hostname, 'p')],
+            'mode' => 'required|in:SRC MAC,DST MAC,BOTH MAC,SRC IP,DST IP,BOTH IP,L4 SRC PORT,L4 DST PORT,BOTH L4 PORT'
+                . ($is100g ? '' : ',SRC PORT,ENHANCED'),
         ]);
 
-        $playbook = "{$this->pluginPath}/playbooks/port_channel/port_channel_load_balancing.yml";
+        $playbook = $this->devicePlaybook('port_channel/port_channel_load_balancing.yml', $hostname);
         $hosts    = "{$this->pluginPath}/hosts/{$hostname}.yml";
         $yamlFile = "{$this->pluginPath}/output/{$hostname}_port_channel_load_balancing.yml";
 
         // mode contains a space ("SRC MAC", etc.) - use the JSON extra-vars
         // helper so ansible doesn't mis-split it on whitespace.
-        $ansibleOutput = $this->runAnsiblejs($playbook, $hosts, [
-            'port' => $data['port'],
-            'mode' => $data['mode'],
-        ]);
+        $extraVars = ['mode' => $data['mode']];
+        if (!empty($data['port'])) {
+            $extraVars['port'] = $data['port'];
+        }
+        $ansibleOutput = $this->runAnsiblejs($playbook, $hosts, $extraVars);
 
         if ($reason = $this->verifyFreshPlaybookOutput($yamlFile, $ansibleOutput)) {
             return $this->error($reason, $ansibleOutput);
@@ -4295,7 +4354,7 @@ public function getvlan($hostname)
         }
 
         return $this->success([
-            "message" => "Load balancing mode \"{$data['mode']}\" applied to {$data['port']}",
+            "message" => "Load balancing mode \"{$data['mode']}\" applied to all port channels",
             "raw"     => $result,
         ]);
     }

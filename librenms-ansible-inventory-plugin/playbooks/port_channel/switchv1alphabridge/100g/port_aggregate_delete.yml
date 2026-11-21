@@ -1,0 +1,186 @@
+# =============================================================================
+# File        : port_channel/switchv1alphabridge/100g/port_aggregate_delete.yml
+# Feature     : Delete aggregate group (100G switches, e.g. AS300/56/XC)
+#
+# Releases every member port first, then removes the p<N> interface, so no
+# port is left pointing at a deleted group.
+#
+# CLI:
+#   config
+#   interface <member>  /  no aggregator-group  /  exit   (each member)
+#   no interface p<N>
+#   exit
+#   write
+#
+# Extra vars: port_id (p1-p64)
+#
+# Output (same file as the 10G playbook, read by deleteportaggregate()):
+#   output/<switch_ip>_port_aggregation_config_delete.yml -> status: success | failed
+# =============================================================================
+
+- name: Port aggregate delete (100G)
+  hosts: alphabridge_devices
+  gather_facts: false
+
+  vars:
+    plugin_dir: "/opt/librenms/librenms-ansible-inventory-plugin"
+    script_path: "{{ plugin_dir }}/tmp/port_aggregate_delete_100g_{{ ansible_host }}.py"
+    output_file: "{{ plugin_dir }}/output/{{ ansible_host }}_port_aggregation_config_delete.yml"
+
+  tasks:
+
+    - name: Validate inputs
+      ansible.builtin.assert:
+        that:
+          - port_id is defined
+          - port_id | lower is match('^p([1-9]|[1-5][0-9]|6[0-4])$')
+        fail_msg: "Pass port_id p1-p64"
+
+    - name: Create Python SSH script
+      ansible.builtin.copy:
+        dest: "{{ script_path }}"
+        mode: "0755"
+        content: |
+          #!/usr/bin/env python3
+          import re
+          import sys
+          import time
+
+          import paramiko
+          import yaml
+
+          HOST = "{{ ansible_host }}"
+          USER = "{{ ansible_user }}"
+          PASSWORD = "{{ ansible_password }}"
+          OUTPUT_FILE = "{{ output_file }}"
+
+          GROUP = "{{ port_id | lower }}"                 # p1
+          GROUP_ID = GROUP[1:]                            # 1
+
+          ANSI_RE = re.compile(r'\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])')
+          PROMPT_RE = re.compile(r'[>#]\s*$')
+          CLI_ERROR_RE = re.compile(r'Bad parameter|Unknown command|Incomplete|%\s*err|error|fail', re.IGNORECASE)
+          GROUP_SPLIT_RE = re.compile(r'(?=^Group:\s*\d+\b)', re.MULTILINE)
+          GROUP_HEADER_RE = re.compile(r'^Group:\s*(\d+)\b', re.MULTILINE)
+          MEMBER_RE = re.compile(r'Port:\s*(\S+)\s*\n\s*Status:.*\n\s*Aggregator-group\s*:\s*(\d+)')
+
+
+          # " --more-- " is wrapped in colour codes: \x1b[7m --more-- \x1b[m
+          MORE_RE = re.compile(r'(?:\x1b\[[0-9;]*m)?\s*-+\s*more\s*-+\s*(?:\x1b\[[0-9;]*m)?\s*$', re.IGNORECASE)
+          BACKSPACE_RE = re.compile(r'\x08+\s*\x08*')
+
+
+          def read_until_prompt(shell, timeout=10):
+              # 100G switches page long output with " --more--" and have no
+              # "terminal length 0", so press space at every page break.
+              buf = ""
+              end = time.time() + timeout
+              while time.time() < end:
+                  if shell.recv_ready():
+                      buf += shell.recv(65535).decode(errors="ignore")
+                      if MORE_RE.search(buf):
+                          buf = MORE_RE.sub("", buf)
+                          shell.send(" ")
+                          end = time.time() + timeout
+                          continue
+                      if PROMPT_RE.search(buf):
+                          return BACKSPACE_RE.sub("", buf)
+                  else:
+                      time.sleep(0.1)
+              return BACKSPACE_RE.sub("", buf)
+
+
+          def run(shell, command, timeout=10, check=True):
+              shell.send(command + "\n")
+              out = ANSI_RE.sub("", read_until_prompt(shell, timeout)).replace("\r", "")
+              if check and CLI_ERROR_RE.search(out.replace(command, "")):
+                  raise Exception(f"Switch rejected '{command}': {out.replace(command, '').strip()}")
+              return out
+
+
+          def group_members(detail, group_id):
+              found, members = False, []
+              for chunk in GROUP_SPLIT_RE.split(detail):
+                  header = GROUP_HEADER_RE.search(chunk)
+                  if header and header.group(1) == group_id:
+                      found = True
+                      members += [m.group(1) for m in MEMBER_RE.finditer(chunk)]
+              return members if found else None
+
+
+          def save(data):
+              with open(OUTPUT_FILE, "w") as f:
+                  yaml.safe_dump(data, f, default_flow_style=False, sort_keys=False)
+
+
+          ssh = None
+          try:
+              ssh = paramiko.SSHClient()
+              ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+              ssh.connect(HOST, username=USER, password=PASSWORD,
+                          look_for_keys=False, allow_agent=False, timeout=15)
+              shell = ssh.invoke_shell()
+              read_until_prompt(shell, 5)
+              run(shell, "enable", 5, check=False)
+
+              members = group_members(run(shell, "show aggregator-group detail", 20, check=False), GROUP_ID) or []
+              iface = run(shell, f"show running-config interface {GROUP}", 10, check=False)
+              iface_exists = re.search(rf'^interface {GROUP}\s*$', iface, re.MULTILINE) is not None
+              if not members and not iface_exists:
+                  raise Exception(f"Aggregation group {GROUP} does not exist")
+
+              out = run(shell, "config", 5)
+              if "(config)#" not in out:
+                  raise Exception("Could not enter config mode: " + out.strip())
+
+              for port in members:
+                  run(shell, f"interface {port}")
+                  run(shell, "no aggregator-group")
+                  run(shell, "exit", 5, check=False)
+
+              if iface_exists:
+                  run(shell, f"no interface {GROUP}")
+
+              run(shell, "exit", 5, check=False)
+              run(shell, "write", 30, check=False)
+
+              gone = False
+              for _ in range(10):
+                  if group_members(run(shell, "show aggregator-group detail", 20, check=False), GROUP_ID) is None:
+                      gone = True
+                      break
+                  time.sleep(1)
+              ssh.close()
+              if not gone:
+                  raise Exception(f"Aggregation group {GROUP} is still present after deleting")
+
+              save({"ip": HOST, "port_id": GROUP, "released_ports": members, "status": "success"})
+              print(f"SUCCESS: deleted {GROUP}, released {members}")
+
+          except Exception as e:
+              try:
+                  if ssh:
+                      ssh.close()
+              except Exception:
+                  pass
+              save({"ip": HOST, "port_id": GROUP, "status": "failed", "error": str(e)})
+              print("ERROR:", e)
+              sys.exit(1)
+      delegate_to: localhost
+
+    - name: Run port aggregate delete script
+      ansible.builtin.command:
+        cmd: "{{ plugin_dir }}/bin/python3 {{ script_path }}"
+      register: run_result
+      changed_when: run_result.rc == 0
+      failed_when: false
+      delegate_to: localhost
+
+    - name: Show result
+      ansible.builtin.debug:
+        msg: "{{ run_result.stdout_lines + run_result.stderr_lines }}"
+
+    - name: Fail if delete failed
+      ansible.builtin.fail:
+        msg: "{{ run_result.stdout }}"
+      when: run_result.rc != 0

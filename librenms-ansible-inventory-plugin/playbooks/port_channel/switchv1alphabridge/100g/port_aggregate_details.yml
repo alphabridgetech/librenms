@@ -1,0 +1,179 @@
+# =============================================================================
+# File        : port_channel/switchv1alphabridge/100g/port_aggregate_details.yml
+# Feature     : Show aggregate groups (100G switches, e.g. AS300/56/XC)
+#
+# Same parsing and output as port_channel/port_aggregate_details.yml, but the
+# 100G CLI has no "terminal length 0": long output is paged with "--more--",
+# so this presses space at every page break instead of cutting the output.
+#
+# CLI:
+#   show aggregator-group detail
+#
+# Extra vars: group_id (optional, only that group)
+#
+# Output (read by getportaggregate()):
+#   output/<switch_ip>_port_aggregate_details.yml
+#
+#   ip: <switch_ip>
+#   groups:
+#     - aggregation_group: '1'
+#       mode: Static
+#       configured_port_members: [tg0/0/6]
+#       valid_port_members: []
+#       speed: '10'
+#       state: lineDown
+#   status: success | failed
+# =============================================================================
+
+- name: Port aggregate details (100G)
+  hosts: alphabridge_devices
+  gather_facts: false
+
+  vars:
+    plugin_dir: "/opt/librenms/librenms-ansible-inventory-plugin"
+    script_path: "{{ plugin_dir }}/tmp/port_aggregate_details_100g_{{ ansible_host }}.py"
+    output_file: "{{ plugin_dir }}/output/{{ ansible_host }}_port_aggregate_details.yml"
+
+  tasks:
+
+    - name: Create Python SSH script
+      ansible.builtin.copy:
+        dest: "{{ script_path }}"
+        mode: "0755"
+        content: |
+          #!/usr/bin/env python3
+          import os
+          import re
+          import sys
+          import time
+
+          import paramiko
+          import yaml
+
+          HOST = "{{ ansible_host }}"
+          USER = "{{ ansible_user }}"
+          PASSWORD = "{{ ansible_password }}"
+          OUTPUT_FILE = "{{ output_file }}"
+          GROUP_ID_FILTER = "{{ group_id | default('') }}".strip()
+
+          ANSI_RE = re.compile(r'\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])')
+          PROMPT_RE = re.compile(r'[>#]\s*$')
+          # " --more-- " is wrapped in colour codes: \x1b[7m --more-- \x1b[m
+          MORE_RE = re.compile(r'(?:\x1b\[[0-9;]*m)?\s*-+\s*more\s*-+\s*(?:\x1b\[[0-9;]*m)?\s*$', re.IGNORECASE)
+          BACKSPACE_RE = re.compile(r'\x08+\s*\x08*')
+
+          GROUP_SPLIT_RE = re.compile(r'(?=^Group:\s*\d+\b)', re.MULTILINE)
+          GROUP_HEADER_RE = re.compile(r'^Group:\s*(\d+)\s+Speed:\s*(\S+)\s+interval:\s*(\S+)', re.MULTILINE)
+          GROUP_STATE_RE = re.compile(r'^\s*Group ID\s*:.*?\bstate\s*:\s*(\S+)', re.MULTILINE)
+          # Port: tg0/0/5
+          #   Status: Down   Individual
+          #   Aggregator-group : 3    Mode : Static
+          PORT_BLOCK_RE = re.compile(
+              r'Port:\s*(\S+)\s*\n'
+              r'\s*Status:\s*(\S+)\s+(\S+)\s*\n'
+              r'\s*Aggregator-group\s*:\s*(\d+)\s+Mode\s*:\s*(\S+)'
+          )
+
+
+          def read_until_prompt(shell, timeout=10):
+              buf = ""
+              end = time.time() + timeout
+              while time.time() < end:
+                  if shell.recv_ready():
+                      buf += shell.recv(65535).decode(errors="ignore")
+                      if MORE_RE.search(buf):
+                          buf = MORE_RE.sub("\n", buf)
+                          shell.send(" ")
+                          end = time.time() + timeout
+                          continue
+                      if PROMPT_RE.search(buf):
+                          return BACKSPACE_RE.sub("", buf)
+                  else:
+                      time.sleep(0.1)
+              return BACKSPACE_RE.sub("", buf)
+
+
+          def save(data):
+              # Write to a temp file and rename, so a reader never sees half a file
+              tmp = OUTPUT_FILE + ".tmp"
+              with open(tmp, "w") as f:
+                  yaml.safe_dump(data, f, default_flow_style=False, sort_keys=False)
+              os.replace(tmp, OUTPUT_FILE)
+
+
+          ssh = None
+          try:
+              ssh = paramiko.SSHClient()
+              ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+              ssh.connect(HOST, username=USER, password=PASSWORD,
+                          look_for_keys=False, allow_agent=False, timeout=15)
+              shell = ssh.invoke_shell()
+              read_until_prompt(shell, 5)
+              shell.send("enable\n")
+              read_until_prompt(shell, 5)
+
+              shell.send("show aggregator-group detail\n")
+              output = ANSI_RE.sub("", read_until_prompt(shell, 20)).replace("\r", "")
+              ssh.close()
+
+              if not PROMPT_RE.search(output):
+                  raise Exception("Timed out reading 'show aggregator-group detail'")
+
+              groups = []
+              for chunk in GROUP_SPLIT_RE.split(output):
+                  header = GROUP_HEADER_RE.search(chunk)
+                  if not header:
+                      continue
+                  group_num, speed, _interval = header.groups()
+                  if GROUP_ID_FILTER and group_num != GROUP_ID_FILTER:
+                      continue
+
+                  state = GROUP_STATE_RE.search(chunk)
+                  configured, valid, modes = [], [], []
+                  for m in PORT_BLOCK_RE.finditer(chunk):
+                      port_name, status, _link, _agg, mode_val = m.groups()
+                      configured.append(port_name)
+                      if status.lower() == "up":
+                          valid.append(port_name)
+                      if mode_val not in modes:
+                          modes.append(mode_val)
+
+                  groups.append({
+                      "aggregation_group": group_num,
+                      "mode": ", ".join(modes),
+                      "configured_port_members": configured,
+                      "valid_port_members": valid,
+                      "speed": speed,
+                      "state": state.group(1) if state else "",
+                  })
+
+              save({"ip": HOST, "groups": groups, "status": "success"})
+              print("Groups:", [g["aggregation_group"] for g in groups])
+
+          except Exception as e:
+              try:
+                  if ssh:
+                      ssh.close()
+              except Exception:
+                  pass
+              # Keep the last good table on failure, only report the error
+              print("ERROR:", e)
+              sys.exit(1)
+      delegate_to: localhost
+
+    - name: Run port aggregate details script
+      ansible.builtin.command:
+        cmd: "{{ plugin_dir }}/bin/python3 {{ script_path }}"
+      register: run_result
+      changed_when: false
+      failed_when: false
+      delegate_to: localhost
+
+    - name: Show result
+      ansible.builtin.debug:
+        msg: "{{ run_result.stdout_lines + run_result.stderr_lines }}"
+
+    - name: Fail if show failed
+      ansible.builtin.fail:
+        msg: "{{ run_result.stdout }}"
+      when: run_result.rc != 0

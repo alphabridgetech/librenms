@@ -1,0 +1,210 @@
+# =============================================================================
+# File        : port_channel/switchv1alphabridge/100g/port_aggregate_config.yml
+# Feature     : Add / configure aggregate group (100G switches, e.g. AS300/56/XC)
+#
+# Differences from the 10G playbook (port_channel/port_aggregate_config.yml):
+#   - groups P1-P64 (10G: P1-P8)
+#   - member ports are the switch's own names: tg0/0/1, cg0/0/1, g0/1 ...
+#     (10G: g0/1-g0/10 only), checked against "show interface brief"
+#   - LACP mode is "mode lacp active|passive" (10G: "mode active|passive")
+#
+# CLI:
+#   config
+#   interface p<N>
+#   exit
+#   interface <port>            (for each port)
+#   no aggregator-group
+#   aggregator-group <N> mode static | lacp active | lacp passive
+#   exit
+#   exit
+#   write
+#
+# Extra vars: aggregate_group (P1-P64), mode (static | lacp active |
+#             lacp passive), ports (comma separated, e.g. tg0/0/5,tg0/0/6)
+#
+# Output (same file as the 10G playbook, read by addportaggregate()):
+#   output/<switch_ip>_port_aggregate_config.yml   -> status: success | failed
+# =============================================================================
+
+- name: Port aggregate config (100G)
+  hosts: alphabridge_devices
+  gather_facts: false
+
+  vars:
+    plugin_dir: "/opt/librenms/librenms-ansible-inventory-plugin"
+    script_path: "{{ plugin_dir }}/tmp/port_aggregate_config_100g_{{ ansible_host }}.py"
+    output_file: "{{ plugin_dir }}/output/{{ ansible_host }}_port_aggregate_config.yml"
+
+  tasks:
+
+    - name: Validate inputs
+      ansible.builtin.assert:
+        that:
+          - aggregate_group is defined
+          - aggregate_group | upper is match('^P([1-9]|[1-5][0-9]|6[0-4])$')
+          - mode is defined
+          - mode | lower in ['static', 'lacp active', 'lacp passive']
+          - ports is defined
+          - ports | trim | length > 0
+        fail_msg: >-
+          Pass aggregate_group (P1-P64), mode (static, lacp active, lacp passive)
+          and ports, e.g. -e '{"aggregate_group":"P1","mode":"static","ports":"tg0/0/5,tg0/0/6"}'
+
+    - name: Create Python SSH script
+      ansible.builtin.copy:
+        dest: "{{ script_path }}"
+        mode: "0755"
+        content: |
+          #!/usr/bin/env python3
+          import re
+          import sys
+          import time
+
+          import paramiko
+          import yaml
+
+          HOST = "{{ ansible_host }}"
+          USER = "{{ ansible_user }}"
+          PASSWORD = "{{ ansible_password }}"
+          OUTPUT_FILE = "{{ output_file }}"
+
+          GROUP = "{{ aggregate_group | upper }}"        # P1
+          GROUP_ID = GROUP[1:]                            # 1
+          MODE = "{{ mode | lower }}"                     # static | lacp active | lacp passive
+          PORTS = [p.strip().lower() for p in "{{ ports }}".split(",") if p.strip()]
+
+          ANSI_RE = re.compile(r'\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])')
+          PROMPT_RE = re.compile(r'[>#]\s*$')
+          CLI_ERROR_RE = re.compile(r'Bad parameter|Unknown command|Incomplete|%\s*err|error|fail', re.IGNORECASE)
+          PORT_RE = re.compile(r'^((?:g|tg|cg)\d+(?:/\d+)+)\s', re.MULTILINE)
+          GROUP_SPLIT_RE = re.compile(r'(?=^Group:\s*\d+\b)', re.MULTILINE)
+          GROUP_HEADER_RE = re.compile(r'^Group:\s*(\d+)\b', re.MULTILINE)
+          MEMBER_RE = re.compile(r'Port:\s*(\S+)\s*\n\s*Status:.*\n\s*Aggregator-group\s*:\s*(\d+)')
+
+
+          # " --more-- " is wrapped in colour codes: \x1b[7m --more-- \x1b[m
+          MORE_RE = re.compile(r'(?:\x1b\[[0-9;]*m)?\s*-+\s*more\s*-+\s*(?:\x1b\[[0-9;]*m)?\s*$', re.IGNORECASE)
+          BACKSPACE_RE = re.compile(r'\x08+\s*\x08*')
+
+
+          def read_until_prompt(shell, timeout=10):
+              # 100G switches page long output with " --more--" and have no
+              # "terminal length 0", so press space at every page break.
+              buf = ""
+              end = time.time() + timeout
+              while time.time() < end:
+                  if shell.recv_ready():
+                      buf += shell.recv(65535).decode(errors="ignore")
+                      if MORE_RE.search(buf):
+                          buf = MORE_RE.sub("", buf)
+                          shell.send(" ")
+                          end = time.time() + timeout
+                          continue
+                      if PROMPT_RE.search(buf):
+                          return BACKSPACE_RE.sub("", buf)
+                  else:
+                      time.sleep(0.1)
+              return BACKSPACE_RE.sub("", buf)
+
+
+          def run(shell, command, timeout=10, check=True):
+              shell.send(command + "\n")
+              out = ANSI_RE.sub("", read_until_prompt(shell, timeout)).replace("\r", "")
+              if check and CLI_ERROR_RE.search(out.replace(command, "")):
+                  raise Exception(f"Switch rejected '{command}': {out.replace(command, '').strip()}")
+              return out
+
+
+          def group_members(detail, group_id):
+              members = []
+              for chunk in GROUP_SPLIT_RE.split(detail):
+                  header = GROUP_HEADER_RE.search(chunk)
+                  if header and header.group(1) == group_id:
+                      members += [m.group(1) for m in MEMBER_RE.finditer(chunk)]
+              return members
+
+
+          def save(data):
+              with open(OUTPUT_FILE, "w") as f:
+                  yaml.safe_dump(data, f, default_flow_style=False, sort_keys=False)
+
+
+          ssh = None
+          try:
+              if len(PORTS) != len(set(PORTS)):
+                  raise Exception(f"Duplicate ports supplied: {PORTS}")
+              mode_cmd = {"static": "static", "lacp active": "lacp active", "lacp passive": "lacp passive"}[MODE]
+
+              ssh = paramiko.SSHClient()
+              ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+              ssh.connect(HOST, username=USER, password=PASSWORD,
+                          look_for_keys=False, allow_agent=False, timeout=15)
+              shell = ssh.invoke_shell()
+              read_until_prompt(shell, 5)
+              run(shell, "enable", 5, check=False)
+
+              # Every port must exist on this switch
+              known = set(PORT_RE.findall(run(shell, "show interface brief", 20, check=False)))
+              unknown = [p for p in PORTS if p not in known]
+              if unknown:
+                  raise Exception(f"Unknown port(s) {unknown} - not in 'show interface brief'")
+
+              out = run(shell, "config", 5)
+              if "(config)#" not in out:
+                  raise Exception("Could not enter config mode: " + out.strip())
+
+              run(shell, f"interface {GROUP.lower()}")
+              run(shell, "exit", 5, check=False)
+
+              for port in PORTS:
+                  run(shell, f"interface {port}")
+                  run(shell, "no aggregator-group")
+                  run(shell, f"aggregator-group {GROUP_ID} mode {mode_cmd}")
+                  run(shell, "exit", 5, check=False)
+
+              run(shell, "exit", 5, check=False)
+              run(shell, "write", 30, check=False)
+
+              # Confirm the ports are now in the group
+              missing = PORTS
+              for _ in range(10):
+                  detail = run(shell, "show aggregator-group detail", 20, check=False)
+                  missing = [p for p in PORTS if p not in group_members(detail, GROUP_ID)]
+                  if not missing:
+                      break
+                  time.sleep(1)
+              ssh.close()
+              if missing:
+                  raise Exception(f"Port(s) {missing} not in aggregator-group {GROUP_ID} after configuring")
+
+              save({"ip": HOST, "aggregate_group": GROUP, "aggregator_group_id": GROUP_ID,
+                    "mode": MODE, "ports": PORTS, "status": "success"})
+              print(f"SUCCESS: {GROUP} ({MODE}) ports {PORTS}")
+
+          except Exception as e:
+              try:
+                  if ssh:
+                      ssh.close()
+              except Exception:
+                  pass
+              save({"ip": HOST, "aggregate_group": GROUP, "status": "failed", "error": str(e)})
+              print("ERROR:", e)
+              sys.exit(1)
+      delegate_to: localhost
+
+    - name: Run port aggregate config script
+      ansible.builtin.command:
+        cmd: "{{ plugin_dir }}/bin/python3 {{ script_path }}"
+      register: run_result
+      changed_when: run_result.rc == 0
+      failed_when: false
+      delegate_to: localhost
+
+    - name: Show result
+      ansible.builtin.debug:
+        msg: "{{ run_result.stdout_lines + run_result.stderr_lines }}"
+
+    - name: Fail if configuration failed
+      ansible.builtin.fail:
+        msg: "{{ run_result.stdout }}"
+      when: run_result.rc != 0

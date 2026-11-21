@@ -1,375 +1,157 @@
-# ==========================================
-# port_channel_load_balancing.yml
-# Created on Sept 2, 2026 by Vikash Kumar (vikash.kumar@alphabrige.tech).
-#
-# Copyright (c), ALPHA BRIDGE, Inc.
-# 357D, Udyog Vihar Industrial Area Phase VI, Sector 37, Gurugram, Haryana.
-#
-# All rights reserved.
-#
-# This software is the confidential and proprietary information of ALPHA BRIDGE,
-# Inc. ("Confidential Information"). You shall not disclose such Confidential
-# Information and shall use it only in accordance with the terms of the
-# license agreement you entered into with ALPHA BRIDGE.
-#
 # =============================================================================
-# Playbook Name : Port Channel Load Balancing
-# =============================================================================
+# File        : port_channel/port_channel_load_balancing.yml
+# Feature     : Port channel load balancing (10G / common switches, e.g. AS212XTS)
 #
-# Description:
-# Configures the load balancing mode for a port channel
-# (aggregate group interface) on AlphaBridge switches over
-# SSH using:
-#   interface <port>
-#   aggregator-group load-balance <mode>
+# Load balancing is a switch-wide setting (global config), so no port channel
+# is needed. 100G switches use switchv1alphabridge/100g/port_channel_load_balancing.yml.
+#
+# CLI:
+#   config
+#   aggregator-group load-balance src-mac | dst-mac | both-mac |
+#                                 src-ip | dst-ip | both-ip |
+#                                 src-port | enhanced |
+#                                 l4-sport | l4-dport | both-l4port
 #   exit
+#   write
 #
-# Input vars:
-#   port - p1 through p8 (the aggregate group / port
-#          channel interface, confirmed as lowercase "p" in
-#          your device log, e.g. "p5")
-#   mode - one of: "SRC MAC", "DST MAC", "BOTH MAC",
-#          "SRC IP", "DST IP", "BOTH IP"
-#          (matches the six options in the switch UI's
-#          Load Balancing Mode dropdown; also accepts the
-#          hyphenated CLI form directly, e.g. "src-mac")
-#
-# Example:
-# ansible-playbook -i inventory/192.168.2.245.yml \
-#   playbooks/port_channel_load_balancing.yml \
-#   -e 'port=p5  mode="SRC MAC"'
+# Extra vars: mode ("SRC MAC", "BOTH IP", "L4 SRC PORT", "ENHANCED" ...)
+#             port (optional, ignored - kept for older callers)
 #
 # Output:
-# output/<switch_ip>_port_channel_load_balancing.yml
+#   output/<switch_ip>_port_channel_load_balancing.yml -> status: success | failed
 # =============================================================================
 
-- name: Port channel load balancing config
+- name: Port channel load balancing
   hosts: alphabridge_devices
-  gather_facts: no
+  gather_facts: false
+
+  vars:
+    plugin_dir: "/opt/librenms/librenms-ansible-inventory-plugin"
+    script_path: "{{ plugin_dir }}/tmp/port_channel_lb_{{ ansible_host }}.py"
+    output_file: "{{ plugin_dir }}/output/{{ ansible_host }}_port_channel_load_balancing.yml"
+    mode_map:
+      "SRC MAC": src-mac
+      "DST MAC": dst-mac
+      "BOTH MAC": both-mac
+      "SRC IP": src-ip
+      "DST IP": dst-ip
+      "BOTH IP": both-ip
+      "SRC PORT": src-port
+      "ENHANCED": enhanced
+      "L4 SRC PORT": l4-sport
+      "L4 DST PORT": l4-dport
+      "BOTH L4 PORT": both-l4port
 
   tasks:
 
-    # ==========================================
-    # Validate required input variables are present
-    # ==========================================
-
-    - name: Validate required input variables are provided
+    - name: Validate inputs
       ansible.builtin.assert:
         that:
-          - port is defined
           - mode is defined
-        fail_msg: >
-          You must pass port and mode, e.g.
-          -e port=p5 -e mode="SRC MAC"
+          - mode | upper in mode_map
+        fail_msg: "mode must be one of {{ mode_map.keys() | list }}"
 
-    # ==========================================
-    # Validate port (p1-p8)
-    # ==========================================
-
-    - name: Normalize port
-      ansible.builtin.set_fact:
-        port_normalized: "{{ port | lower | trim }}"
-
-    - name: Validate port is p1 through p8
-      ansible.builtin.assert:
-        that:
-          - >-
-            port_normalized in [
-            'p1', 'p2', 'p3', 'p4',
-            'p5', 'p6', 'p7', 'p8']
-        fail_msg: >
-          port must be p1 through p8 (got: {{ port }})
-
-    # ==========================================
-    # Validate mode
-    # ==========================================
-
-    - name: Normalize mode
-      ansible.builtin.set_fact:
-        mode_normalized: >-
-          {{ mode | lower | trim | replace(' ', '-') }}
-
-    - name: Validate mode is a recognized load balance mode
-      ansible.builtin.assert:
-        that:
-          - >-
-            mode_normalized in [
-            'src-mac', 'dst-mac', 'both-mac',
-            'src-ip', 'dst-ip', 'both-ip']
-        fail_msg: >
-          mode must be one of 'SRC MAC', 'DST MAC',
-          'BOTH MAC', 'SRC IP', 'DST IP', 'BOTH IP'
-          (got: {{ mode }})
-
-    # ==========================================
-    # Create Python SSH Script
-    # ==========================================
-
-    - name: >-
-        Create Python SSH Script for port channel load
-        balancing
+    - name: Create Python SSH script
       ansible.builtin.copy:
-        dest: "/opt/librenms/librenms-ansible-inventory-plugin/tmp/\
-               port_channel_load_balancing_exec.py"
-        mode: '0755'
+        dest: "{{ script_path }}"
+        mode: "0755"
         content: |
           #!/usr/bin/env python3
+          import re
+          import sys
+          import time
 
           import paramiko
-          import time
-          import re
-          import json
+          import yaml
 
           HOST = "{{ ansible_host }}"
           USER = "{{ ansible_user }}"
           PASSWORD = "{{ ansible_password }}"
-          PORT = "{{ port_normalized }}"
-          MODE = "{{ mode_normalized }}"
+          OUTPUT_FILE = "{{ output_file }}"
 
-          PROMPT_RE = r'[>#]\s*$'
+          MODE = "{{ mode | upper }}"
+          METHOD = "{{ mode_map[mode | upper] }}"
 
-          VALID_PORTS = {f"p{n}" for n in range(1, 9)}
-          VALID_MODES = {
-              "src-mac", "dst-mac", "both-mac",
-              "src-ip", "dst-ip", "both-ip",
-          }
+          ANSI_RE = re.compile(r'\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])')
+          PROMPT_RE = re.compile(r'[>#]\s*$')
+          CLI_ERROR_RE = re.compile(r'Bad parameter|Unknown command|Incomplete|Too many parameters|%\s*err|error|fail', re.IGNORECASE)
 
 
-          def read_until_prompt(shell, prompt_re, timeout=10):
+          def read_until_prompt(shell, timeout=10):
               buf = ""
-              end_time = time.time() + timeout
-
-              while time.time() < end_time:
+              end = time.time() + timeout
+              while time.time() < end:
                   if shell.recv_ready():
-                      chunk = shell.recv(65535).decode(
-                          errors="ignore"
-                      )
-                      buf += chunk
-
-                      if re.search(prompt_re, buf):
+                      buf += shell.recv(65535).decode(errors="ignore")
+                      if PROMPT_RE.search(buf):
                           return buf
                   else:
                       time.sleep(0.1)
-
               return buf
 
 
-          def send_cmd(
-              shell, cmd, timeout=10, check_errors=True
-          ):
-              """Send a CLI command, wait for the prompt,
-              optionally raise on switch-reported errors.
-              Returns the raw output."""
-              shell.send(
-                  cmd if cmd.endswith("\n") else cmd + "\n"
-              )
-              output = read_until_prompt(
-                  shell, PROMPT_RE, timeout=timeout
-              )
-
-              if check_errors and re.search(
-                  r'%err|invalid|error', output, re.IGNORECASE
-              ):
-                  raise Exception(
-                      f"'{cmd.strip()}' rejected by switch: "
-                      f"{output.strip()}"
-                  )
-
-              return output
+          def run(shell, command, timeout=10, check=True):
+              shell.send(command + "\n")
+              out = ANSI_RE.sub("", read_until_prompt(shell, timeout)).replace("\r", "")
+              if check and CLI_ERROR_RE.search(out.replace(command, "")):
+                  raise Exception(f"Switch rejected '{command}': {out.replace(command, '').strip()}")
+              return out
 
 
-          ansi_re = re.compile(
-              r'\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])'
-          )
+          def save(data):
+              with open(OUTPUT_FILE, "w") as f:
+                  yaml.safe_dump(data, f, default_flow_style=False, sort_keys=False)
 
-          shell = None
+
           ssh = None
-
           try:
-              # ==================================
-              # RE-VALIDATE INPUTS (defense in
-              # depth, in case this script is ever
-              # invoked outside the playbook)
-              # ==================================
-
-              if PORT not in VALID_PORTS:
-                  raise Exception(
-                      f"Invalid port '{PORT}': must be "
-                      f"p1 through p8"
-                  )
-
-              if MODE not in VALID_MODES:
-                  raise Exception(
-                      f"Invalid mode '{MODE}': must be one "
-                      f"of {sorted(VALID_MODES)}"
-                  )
-
-              # ==================================
-              # SSH CONNECTION
-              # ==================================
-
               ssh = paramiko.SSHClient()
-              ssh.set_missing_host_key_policy(
-                  paramiko.AutoAddPolicy()
-              )
-
-              ssh.connect(
-                  HOST,
-                  username=USER,
-                  password=PASSWORD,
-                  look_for_keys=False,
-                  allow_agent=False,
-                  timeout=10
-              )
-
+              ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+              ssh.connect(HOST, username=USER, password=PASSWORD,
+                          look_for_keys=False, allow_agent=False, timeout=15)
               shell = ssh.invoke_shell()
-              time.sleep(0.5)
+              read_until_prompt(shell, 5)
+              run(shell, "enable", 5, check=False)
 
-              # ==================================
-              # LOGIN BANNER / INITIAL PROMPT
-              # ==================================
+              # Config prompt is "<name>_config#" on 10G, "<name>(config)#" on 100G
+              out = run(shell, "config", 5)
+              if not re.search(r'(_config|\(config\))#\s*$', out):
+                  raise Exception("Could not enter config mode: " + out.strip())
 
-              read_until_prompt(shell, PROMPT_RE, timeout=5)
-
-              # ==================================
-              # ENABLE, DISABLE PAGING
-              # ==================================
-
-              send_cmd(
-                  shell, "enable",
-                  timeout=5, check_errors=False
-              )
-              send_cmd(
-                  shell, "terminal length 0",
-                  timeout=5, check_errors=False
-              )
-
-              send_cmd(
-                  shell, "config",
-                  timeout=5, check_errors=False
-              )
-              send_cmd(
-                  shell, "terminal length 0",
-                  timeout=5, check_errors=False
-              )
-              # ==================================
-              # SET LOAD BALANCE MODE
-              # ==================================
-
-              send_cmd(shell, f"interface {PORT}", timeout=10)
-              send_cmd(
-                  shell,
-                  f"aggregator-group load-balance {MODE}",
-                  timeout=10
-              )
-              send_cmd(
-                  shell, "exit",
-                  timeout=5, check_errors=False
-              )
-
-              # ==================================
-              # SAVE CONFIG (persist running-config)
-              # NOTE: "write" was not present in the
-              # confirmed log for this command;
-              # included for consistency with other
-              # config playbooks. Remove if not
-              # applicable here.
-              # ==================================
-
-              write_output = send_cmd(
-                  shell, "write",
-                  timeout=15, check_errors=False
-              )
-              if re.search(
-                  r'%err|invalid|error|fail',
-                  write_output, re.IGNORECASE
-              ):
-                  raise Exception(
-                      "'write' (save config) rejected "
-                      f"by switch: {write_output.strip()}"
-                  )
-
-              # ==================================
-              # CLOSE SSH / RETURN JSON
-              # ==================================
-
-              shell.close()
+              command = f"aggregator-group load-balance {METHOD}"
+              run(shell, command)
+              run(shell, "exit", 5, check=False)
+              run(shell, "write", 30, check=False)
               ssh.close()
 
-              print(json.dumps({
-                  "ip": HOST,
-                  "status": "success",
-              }))
+              save({"ip": HOST, "mode": MODE, "command": command,
+                    "scope": "switch-wide", "status": "success"})
+              print("SUCCESS:", command)
 
           except Exception as e:
               try:
-                  if shell:
-                      shell.close()
                   if ssh:
                       ssh.close()
-              except:
+              except Exception:
                   pass
+              save({"ip": HOST, "mode": MODE, "status": "failed", "error": str(e)})
+              print("ERROR:", e)
+              sys.exit(1)
+      delegate_to: localhost
 
-              print(json.dumps({
-                  "ip": HOST,
-                  "status": "failed",
-                  "error": str(e)
-              }))
-
-    # ==========================================
-    # EXECUTE PYTHON SCRIPT
-    # ==========================================
-
-    - name: Execute port channel load balancing script
+    - name: Run load balancing script
       ansible.builtin.command:
-        cmd: /opt/librenms/librenms-ansible-inventory-plugin/bin/python3 /opt/librenms/librenms-ansible-inventory-plugin/tmp/port_channel_load_balancing_exec.py
-      register: lb_raw
-      changed_when: false
+        cmd: "{{ plugin_dir }}/bin/python3 {{ script_path }}"
+      register: run_result
+      changed_when: run_result.rc == 0
       failed_when: false
+      delegate_to: localhost
 
-    # ==========================================
-    # CONVERT JSON RESULT
-    # ==========================================
-
-    - name: Convert load balancing result to JSON
-      ansible.builtin.set_fact:
-        lb_result: "{{ lb_raw.stdout | from_json }}"
-
-    # ==========================================
-    # DISPLAY RESULT
-    # ==========================================
-
-    - name: Display load balancing result
+    - name: Show result
       ansible.builtin.debug:
-        var: lb_result
+        msg: "{{ run_result.stdout_lines + run_result.stderr_lines }}"
 
-    # ==========================================
-    # SAVE RESULT
-    # ==========================================
-
-    - name: Save load balancing result
-      ansible.builtin.copy:
-        dest: "/opt/librenms/librenms-ansible-inventory-plugin/output/\
-            {{ ansible_host }}_port_channel_load_balancing.yml"
-        content: |
-          {{ lb_result | to_nice_yaml }}
-
-    # ==========================================
-    # FAIL IF COMMAND FAILED
-    # ==========================================
-
-    - name: Fail if load balancing config failed
+    - name: Fail if load balancing failed
       ansible.builtin.fail:
-        msg: "{{ lb_result.error }}"
-      when: lb_result.status == "failed"
-
-    # ==========================================
-    # FINAL MESSAGE
-    # ==========================================
-
-    - name: Display result file
-      ansible.builtin.debug:
-        msg: >
-          Load balancing mode {{ mode }} applied to
-          {{ port }} on {{ ansible_host }}. Result saved
-          to output/{{ ansible_host }}_port_channel_load_balancing.yml
+        msg: "{{ run_result.stdout }}"
+      when: run_result.rc != 0

@@ -77,6 +77,13 @@
 
 <div class="container-fluid" style="margin-top:30px; padding-left:0; padding-right:0;">
     @php
+        // 100G switches (playbooks under port_channel/switchv1alphabridge/100g)
+        // take groups P1-P64, tg/cg ports and a switch-wide load-balance method.
+        $pcCaps = \App\Services\DeviceCapabilities::forHostname($device->hostname) ?? [];
+        $pcIs100g = !empty($pcCaps['family']) && !empty($pcCaps['speed_slug'])
+            && is_file(base_path("librenms-ansible-inventory-plugin/playbooks/port_channel/{$pcCaps['family']}/{$pcCaps['speed_slug']}/port_aggregate_config.yml"));
+        $pcMaxGroup = $pcIs100g ? 64 : 8;
+
         // Show every real interface on this device. Backend
         // (port_aggregate_config.yml) currently only accepts the short
         // "g0/N" form for GigaEthernet ports (max g0/1-g0/10), so map those
@@ -114,7 +121,7 @@
                             <div class="form-group">
                                 <label class="col-sm-2 control-label">Aggregate Group*</label>
                                 <div class="col-sm-6">
-                                    <input type="text" id="pc_add_group" class="form-control" placeholder="e.g. P1" maxlength="2" style="text-transform:uppercase;" oninput="this.value = this.value.toUpperCase();">
+                                    <input type="text" id="pc_add_group" class="form-control" placeholder="e.g. P1 (P1-P{{ $pcMaxGroup }})" maxlength="3" style="text-transform:uppercase;" oninput="this.value = this.value.toUpperCase();">
                                 </div>
                             </div>
                             <div class="form-group">
@@ -150,7 +157,7 @@
                                             </select>
                                         </div>
                                     </div>
-                                    <span class="help-block">Select port(s) then click &gt;&gt; to add to the group, or &lt;&lt; to remove. Only GigaEthernet ports (g0/1-g0/10) are currently supported for aggregation.</span>
+                                    <span class="help-block">Select port(s) then click &gt;&gt; to add to the group, or &lt;&lt; to remove. @if ($pcIs100g)Any port on this switch can be added.@else Only GigaEthernet ports (g0/1-g0/10) are currently supported for aggregation.@endif</span>
                                 </div>
                             </div>
                             <div id="pc_add_error" class="text-danger" style="display:none; margin-left:15px;"></div>
@@ -208,21 +215,7 @@
 
                 <div class="panel-body">
                     <form class="form-horizontal" id="lbForm">
-                        <div class="form-group">
-                            <label class="col-sm-2 control-label">Port Channel*</label>
-                            <div class="col-sm-6">
-                                <select id="lb_port" class="form-control">
-                                    <option value="p1">p1</option>
-                                    <option value="p2">p2</option>
-                                    <option value="p3">p3</option>
-                                    <option value="p4">p4</option>
-                                    <option value="p5">p5</option>
-                                    <option value="p6">p6</option>
-                                    <option value="p7">p7</option>
-                                    <option value="p8">p8</option>
-                                </select>
-                            </div>
-                        </div>
+                        {{-- Load balancing is switch-wide on every switch, so there is no port channel to choose --}}
                         <div class="form-group">
                             <label class="col-sm-2 control-label">Load Balancing Mode*</label>
                             <div class="col-sm-6">
@@ -233,7 +226,16 @@
                                     <option value="SRC IP">SRC IP</option>
                                     <option value="DST IP">DST IP</option>
                                     <option value="BOTH IP">BOTH IP</option>
+                                    @unless ($pcIs100g)
+                                        <option value="SRC PORT">SRC PORT</option>
+                                        <option value="ENHANCED">ENHANCED</option>
+                                    @endunless
+                                    <option value="L4 SRC PORT">L4 SRC PORT</option>
+                                    <option value="L4 DST PORT">L4 DST PORT</option>
+                                    <option value="BOTH L4 PORT">BOTH L4 PORT</option>
                                 </select>
+                                <span id="lb_current" class="help-block" style="display:none;"></span>
+                                <span class="help-block">The load balancing method applies to all port channels on this switch.</span>
                             </div>
                         </div>
                         <div id="lb_error" class="text-danger" style="display:none; margin-left:15px;"></div>
@@ -580,6 +582,38 @@
 
     document.getElementById('lbApplyBtn').dataset.label = 'Apply';
 
+    // Pre-select the switch's current load balancing mode
+    // (GET portchannel/loadbalance/show -> getportchannelloadbalance.yml).
+    function lbShowCurrent(label) {
+        const el = document.getElementById('lb_current');
+        el.textContent = 'Current mode on switch: ' + label;
+        el.style.display = 'block';
+    }
+
+    (function loadCurrentLoadBalance() {
+        const select = document.getElementById('lb_mode');
+        const current = document.getElementById('lb_current');
+        current.textContent = 'Reading current mode from switch...';
+        current.style.display = 'block';
+
+        fetch(`/api/v0/portchannel/loadbalance/show/${pcIp}`, {
+            headers: { "Authorization": "Bearer " + pcApiToken, "Accept": "application/json" }
+        })
+        .then(r => r.json())
+        .then(res => {
+            if (res.status !== 'success' || !res.supported) {
+                current.style.display = 'none';
+                return;
+            }
+            const label = res.mode_label || res.mode || 'switch default (not set)';
+            if (Array.from(select.options).some(o => o.value === res.mode_label)) {
+                select.value = res.mode_label;
+            }
+            lbShowCurrent(label);
+        })
+        .catch(() => { current.style.display = 'none'; });
+    })();
+
     function lbShowError(msg) {
         const el = document.getElementById('lb_error');
         el.innerText = msg;
@@ -595,8 +629,9 @@
     function applyLoadBalance() {
         lbClearError();
 
-        const port = document.getElementById('lb_port').value;
+        const portSelect = document.getElementById('lb_port');   // absent on 100G (switch-wide)
         const mode = document.getElementById('lb_mode').value;
+        const body = portSelect ? { port: portSelect.value, mode: mode } : { mode: mode };
         const btn = document.getElementById('lbApplyBtn');
 
         btn.disabled = true;
@@ -609,7 +644,7 @@
                 "Content-Type": "application/json",
                 "Accept": "application/json"
             },
-            body: JSON.stringify({ port: port, mode: mode })
+            body: JSON.stringify(body)
         })
         .then(r => r.json())
         .then(res => {
@@ -617,6 +652,7 @@
             btn.innerHTML = btn.dataset.label;
 
             if (res.status === "success") {
+                lbShowCurrent(mode);
                 alert(res.message || "Load balancing mode applied");
             } else if (res.errors) {
                 lbShowError(Object.values(res.errors).flat().join(' '));

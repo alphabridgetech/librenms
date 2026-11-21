@@ -1,0 +1,153 @@
+# =============================================================================
+# File        : port_channel/switchv1alphabridge/100g/getportchannelloadbalance.yml
+# Feature     : Get port channel load balancing (100G switches, e.g. AS300/56/XC)
+#
+# CLI:
+#   show port-channel-loading-balance json
+#
+#   {
+#       "LoadingBalenceCapability": "global",      (sic, switch spelling)
+#       "LoadingBalanceMode":       "dst-mac"
+#   }
+#
+# The mode is reported as the CLI keyword (dst-mac, both-ip, l4-sport ...);
+# "mode_label" is the matching value of the Load Balancing Mode dropdown on
+# the Port Channel page ("DST MAC", "BOTH IP", "L4 SRC PORT" ...).
+#
+# Output (read by KunalApiController::getportchannelloadbalance):
+#   output/<switch_ip>_port_channel_load_balance_get.yml
+#
+#   ip: <switch_ip>
+#   capability: global
+#   mode: dst-mac
+#   mode_label: DST MAC
+#   status: success | failed
+#   error: <message>          (only when failed)
+# =============================================================================
+
+- name: Get port channel load balancing (100G)
+  hosts: alphabridge_devices
+  gather_facts: false
+
+  vars:
+    plugin_dir: "/opt/librenms/librenms-ansible-inventory-plugin"
+    script_path: "{{ plugin_dir }}/tmp/getportchannelloadbalance_100g_{{ ansible_host }}.py"
+    output_file: "{{ plugin_dir }}/output/{{ ansible_host }}_port_channel_load_balance_get.yml"
+
+  tasks:
+
+    - name: Create Python SSH script
+      ansible.builtin.copy:
+        dest: "{{ script_path }}"
+        mode: "0755"
+        content: |
+          #!/usr/bin/env python3
+          import json
+          import re
+          import sys
+          import time
+
+          import paramiko
+          import yaml
+
+          HOST = "{{ ansible_host }}"
+          USER = "{{ ansible_user }}"
+          PASSWORD = "{{ ansible_password }}"
+          OUTPUT_FILE = "{{ output_file }}"
+
+          # CLI keyword -> Load Balancing Mode dropdown value
+          MODE_LABELS = {
+              "src-mac": "SRC MAC",
+              "dst-mac": "DST MAC",
+              "both-mac": "BOTH MAC",
+              "src-ip": "SRC IP",
+              "dst-ip": "DST IP",
+              "both-ip": "BOTH IP",
+              "l4-sport": "L4 SRC PORT",
+              "l4-dport": "L4 DST PORT",
+              "both-l4port": "BOTH L4 PORT",
+          }
+
+          ANSI_RE = re.compile(r'\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])')
+          PROMPT_RE = re.compile(r'[>#]\s*$')
+
+
+          def read_until_prompt(shell, timeout=10):
+              buf = ""
+              end = time.time() + timeout
+              while time.time() < end:
+                  if shell.recv_ready():
+                      buf += shell.recv(65535).decode(errors="ignore")
+                      if PROMPT_RE.search(buf):
+                          return buf
+                  else:
+                      time.sleep(0.1)
+              return buf
+
+
+          def save(data):
+              with open(OUTPUT_FILE, "w") as f:
+                  yaml.safe_dump(data, f, default_flow_style=False, sort_keys=False)
+
+
+          ssh = None
+          try:
+              ssh = paramiko.SSHClient()
+              ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+              ssh.connect(HOST, username=USER, password=PASSWORD,
+                          look_for_keys=False, allow_agent=False, timeout=15)
+              shell = ssh.invoke_shell()
+              read_until_prompt(shell, 5)
+              shell.send("enable\n")
+              read_until_prompt(shell, 5)
+
+              shell.send("show port-channel-loading-balance json\n")
+              output = ANSI_RE.sub("", read_until_prompt(shell, 15)).replace("\r", "")
+              ssh.close()
+
+              match = re.search(r"\{.*\}", output, re.DOTALL)
+              if not match:
+                  raise Exception("No JSON in 'show port-channel-loading-balance json': " + output.strip())
+              data = json.loads(match.group(0))
+
+              # The switch spells the capability key "LoadingBalence"
+              capability = data.get("LoadingBalenceCapability", data.get("LoadingBalanceCapability", ""))
+              mode = str(data.get("LoadingBalanceMode", "")).strip().lower()
+
+              save({
+                  "ip": HOST,
+                  "capability": capability,
+                  "mode": mode,
+                  "mode_label": MODE_LABELS.get(mode, ""),
+                  "status": "success",
+              })
+              print(f"capability={capability} mode={mode} label={MODE_LABELS.get(mode, '')}")
+
+          except Exception as e:
+              try:
+                  if ssh:
+                      ssh.close()
+              except Exception:
+                  pass
+              save({"ip": HOST, "capability": "", "mode": "", "mode_label": "",
+                    "status": "failed", "error": str(e)})
+              print("ERROR:", e)
+              sys.exit(1)
+      delegate_to: localhost
+
+    - name: Run get load balancing script
+      ansible.builtin.command:
+        cmd: "{{ plugin_dir }}/bin/python3 {{ script_path }}"
+      register: run_result
+      changed_when: false
+      failed_when: false
+      delegate_to: localhost
+
+    - name: Show result
+      ansible.builtin.debug:
+        msg: "{{ run_result.stdout_lines + run_result.stderr_lines }}"
+
+    - name: Fail if get failed
+      ansible.builtin.fail:
+        msg: "{{ run_result.stdout }}"
+      when: run_result.rc != 0
