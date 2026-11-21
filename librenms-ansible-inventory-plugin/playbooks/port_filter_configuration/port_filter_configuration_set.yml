@@ -1,0 +1,377 @@
+# ==========================================
+# port_filter_configuration_set.yml
+# Created on Nov 10, 2026 by Vikash Kumar (vikash.kumar@alphabrige.tech).
+#
+# Copyright (c), ALPHA BRIDGE, Inc.
+# 357D, Udyog Vihar Industrial Area Phase VI, Sector 37, Gurugram, Haryana.
+#
+# All rights reserved.
+#
+# This software is the confidential and proprietary information of
+# ALPHA BRIDGE, Inc. ("Confidential Information"). You shall not
+# disclose such Confidential Information and shall use it only in
+# accordance with the terms of the license agreement you entered into
+# with ALPHA BRIDGE.
+#
+# =============================================================================
+# Playbook Name : Set Port Filter Interface Configuration
+# =============================================================================
+#
+# Description:
+# Sets one or more per-interface Port Filter values through SSH. Interface
+# names are passed to the switch as supplied; no alias conversion is done.
+# Unspecified filters are left unchanged. Enable maps to `filter ...` and
+# Disable maps to `no filter ...`.
+#
+# Single-interface example:
+# ansible-playbook -i inventory/192.168.200.241.yml \
+#   playbooks/port_config/Port_Filter_Configuration/port_filter_configuration_set.yml \
+#   -e "interface=GigaEthernet0/1 bpdu=Enable arp=Enable"
+#
+# Multiple-interface example:
+# ansible-playbook -i inventory/192.168.200.241.yml \
+#   playbooks/port_config/Port_Filter_Configuration/port_filter_configuration_set.yml \
+#   -e '{"port_filters":[{"interface":"GigaEthernet0/1","bpdu":"Enable","arp":"Enable"},{"interface":"tg0/1","dhcp":"Disable"}]}'
+#
+# Filter fields: bpdu, arp, dhcp, icmp, icmpv6, source_ip
+# Values: Enable | Disable
+#
+# Output:
+#   output/<switch_ip>_port_filter_configuration_set.yml
+# =============================================================================
+
+- name: Set Port Filter interface configuration
+  hosts: alphabridge_devices
+  gather_facts: false
+
+  vars:
+    # Resolve paths from this checkout, including the Jenkins workspace.
+    # This file lives in playbooks/port_filter_configuration/, so the plugin
+    # root is two levels up.
+    project_root: "{{ playbook_dir }}/../.."
+    output_dir: "{{ project_root }}/output"
+    tmp_dir: "{{ project_root }}/tmp"
+
+  pre_tasks:
+    # ==========================================
+    # VALIDATE INPUT MODE
+    # ==========================================
+
+    - name: Validate Port Filter input
+      ansible.builtin.assert:
+        that:
+          - >
+            (port_filters is defined and port_filters is iterable and
+             port_filters is not string and port_filters | length > 0)
+            or
+            (interface is defined and interface | string | trim | length > 0)
+        fail_msg: >-
+          Provide either interface with one or more filter fields, or a
+          non-empty port_filters list of interface dictionaries.
+
+    # ==========================================
+    # NORMALIZE SINGLE / MULTIPLE INPUT
+    # ==========================================
+
+    - name: Build normalized Port Filter request list
+      ansible.builtin.set_fact:
+        port_filter_requests: >-
+          {{
+            port_filters
+            if (port_filters is defined)
+            else
+            [
+              {
+                'interface': interface | default(''),
+                'bpdu': bpdu | default(none),
+                'arp': arp | default(none),
+                'dhcp': dhcp | default(none),
+                'icmp': icmp | default(none),
+                'icmpv6': icmpv6 | default(none),
+                'source_ip': source_ip | default(none)
+              }
+            ]
+          }}
+
+    - name: Ensure script and output directories exist
+      ansible.builtin.file:
+        path: "{{ item }}"
+        state: directory
+        mode: '0755'
+      loop:
+        - "{{ tmp_dir }}"
+        - "{{ output_dir }}"
+
+  tasks:
+    # ==========================================
+    # CREATE PYTHON SSH SCRIPT
+    # ==========================================
+
+    - name: Create Python SSH script for Port Filter interface set
+      ansible.builtin.copy:
+        dest: "{{ tmp_dir }}/port_filter_configuration_set_exec.py"
+        mode: '0755'
+        content: |
+          #!/usr/bin/env python3
+
+          import json
+          import paramiko
+          import re
+          import time
+
+          HOST = {{ ansible_host | to_json }}
+          PORT = int({{ ansible_port | default(22) | to_json }})
+          USER = {{ ansible_user | to_json }}
+          PASSWORD = {{ ansible_password | to_json }}
+          REQUESTS = json.loads(r'''{{ port_filter_requests | to_json }}''')
+
+          FILTER_COMMANDS = {
+              "bpdu": "filter bpdu",
+              "arp": "filter arp",
+              "dhcp": "filter dhcp",
+              "icmp": "filter icmp",
+              "icmpv6": "filter icmpv6",
+              "source_ip": "filter ip source-ip"
+          }
+
+
+          # --------------------------------------------------------------
+          # Read CLI output until the switch prompt returns.
+          # --------------------------------------------------------------
+          def read_until_prompt(shell, prompt_regex=r'[>#]\s*$', timeout=10):
+              output = ""
+              deadline = time.monotonic() + timeout
+
+              while time.monotonic() < deadline:
+                  if shell.recv_ready():
+                      output += shell.recv(65535).decode(errors="ignore")
+                      if re.search(prompt_regex, output):
+                          return output
+                  else:
+                      time.sleep(0.1)
+
+              return output
+
+
+          # --------------------------------------------------------------
+          # Remove terminal ANSI escape characters before checking output.
+          # --------------------------------------------------------------
+          def clean_cli_output(text):
+              ansi_re = re.compile(r'\x1b(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])')
+              return ansi_re.sub("", text).replace("\r", "")
+
+
+          # --------------------------------------------------------------
+          # Keep the interface exactly as supplied by the user.
+          # --------------------------------------------------------------
+          def get_interface_input(interface_name):
+              if interface_name is None:
+                  raise ValueError("interface is required.")
+              interface_name = str(interface_name).strip()
+              if not interface_name:
+                  raise ValueError("interface is required.")
+              if "\n" in interface_name or "\r" in interface_name:
+                  raise ValueError("interface must contain a single interface name.")
+              return interface_name
+
+
+          # --------------------------------------------------------------
+          # Normalize one request and build its interface command sequence.
+          # --------------------------------------------------------------
+          def normalize_request(item, index):
+              if not isinstance(item, dict):
+                  raise ValueError(f"port_filters[{index}] must be a dictionary.")
+
+              interface_name = get_interface_input(item.get("interface", ""))
+              commands = [f"interface {interface_name}"]
+              setting_count = 0
+
+              for field, filter_command in FILTER_COMMANDS.items():
+                  value = item.get(field)
+                  if value is None or str(value).strip() == "":
+                      continue
+
+                  value = str(value).strip().lower()
+                  if value == "enable":
+                      commands.append(filter_command)
+                  elif value == "disable":
+                      commands.append(f"no {filter_command}")
+                  else:
+                      raise ValueError(
+                          f"{field} for {interface_name} must be Enable or Disable."
+                      )
+                  setting_count += 1
+
+              if setting_count == 0:
+                  raise ValueError(
+                      f"At least one filter setting must be supplied for {interface_name}."
+                  )
+
+              commands.append("exit")
+              return {"interface": interface_name, "commands": commands}
+
+
+          # --------------------------------------------------------------
+          # Validate requests and apply them to the switch.
+          # --------------------------------------------------------------
+          shell = None
+          ssh = None
+
+          try:
+              if not isinstance(REQUESTS, list) or not REQUESTS:
+                  raise ValueError("port_filter_requests must be a non-empty list.")
+
+              normalized_requests = [
+                  normalize_request(item, index)
+                  for index, item in enumerate(REQUESTS)
+              ]
+
+              ssh = paramiko.SSHClient()
+              ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+              ssh.connect(
+                  HOST,
+                  port=PORT,
+                  username=USER,
+                  password=PASSWORD,
+                  look_for_keys=False,
+                  allow_agent=False,
+                  timeout=10
+              )
+
+              # Open an interactive shell because interface filter commands
+              # must be applied from global configuration mode.
+              shell = ssh.invoke_shell()
+              time.sleep(0.5)
+              read_until_prompt(shell, timeout=5)
+
+              shell.send("enable\n")
+              read_until_prompt(shell, timeout=5)
+
+              shell.send("config\n")
+              config_output = clean_cli_output(read_until_prompt(shell, timeout=5))
+              if not re.search(r'_config#\s*$', config_output):
+                  raise RuntimeError("Could not enter config mode: " + config_output.strip())
+
+              for request in normalized_requests:
+                  for command in request["commands"]:
+                      shell.send(command + "\n")
+                      output = clean_cli_output(
+                          read_until_prompt(shell, timeout=10)
+                      )
+
+                      error_patterns = [
+                          r'Bad parameter',
+                          r'Too many parameters',
+                          r'Command incomplete',
+                          r'%\s*Invalid input',
+                          r'%\s*Incomplete command',
+                          r'%\s*Ambiguous command',
+                          r'%\s*Error',
+                          r'Command rejected',
+                          r'Unknown command'
+                      ]
+                      failed = any(
+                          re.search(pattern, output, re.IGNORECASE)
+                          for pattern in error_patterns
+                      )
+                      if failed:
+                          raise RuntimeError(
+                              f"Command failed on {request['interface']}: {command}"
+                          )
+
+              # The user supplied command sequence ends with exit from the
+              # last interface configuration block.
+              shell.send("exit\n")
+              read_until_prompt(shell, timeout=5)
+
+              # Save, so the change survives a reboot
+              shell.send("write\n")
+              write_output = clean_cli_output(read_until_prompt(shell, timeout=30))
+              if re.search(r'error|fail|Bad parameter', write_output.replace("write", "", 1), re.IGNORECASE):
+                  raise RuntimeError("write (save config) failed: " + write_output.strip())
+
+              shell.close()
+              ssh.close()
+              shell = None
+              ssh = None
+
+              print(json.dumps({
+                  "ip": HOST,
+                  "interfaces": [r["interface"] for r in normalized_requests],
+                  "status": "success"
+              }, indent=4))
+
+          except Exception as exc:
+              try:
+                  if shell:
+                      shell.close()
+                  if ssh:
+                      ssh.close()
+              except Exception:
+                  pass
+
+              print(json.dumps({
+                  "ip": HOST,
+                  "status": "failed",
+                  "error": str(exc)
+              }, indent=4))
+      no_log: true
+
+    # ==========================================
+    # EXECUTE PYTHON SCRIPT
+    # ==========================================
+
+    - name: Execute Port Filter interface set script
+      ansible.builtin.command:
+        argv:
+          - "{{ project_root }}/bin/python3"   # plugin venv (has paramiko)
+          - "{{ tmp_dir }}/port_filter_configuration_set_exec.py"
+      register: port_filter_configuration_raw
+      changed_when: false
+      failed_when: false
+
+    # ==========================================
+    # CONVERT JSON RESULT
+    # ==========================================
+
+    - name: Convert Port Filter interface result to JSON
+      ansible.builtin.set_fact:
+        port_filter_configuration_result: "{{ port_filter_configuration_raw.stdout | from_json }}"
+
+    # ==========================================
+    # DISPLAY RESULT
+    # ==========================================
+
+    - name: Display Port Filter interface result
+      ansible.builtin.debug:
+        var: port_filter_configuration_result
+
+    # ==========================================
+    # SAVE RESULT
+    # ==========================================
+
+    - name: Save Port Filter interface result
+      ansible.builtin.copy:
+        dest: "{{ output_dir }}/{{ ansible_host }}_port_filter_configuration_set.yml"
+        content: |
+          {{ port_filter_configuration_result | to_nice_yaml }}
+
+    # ==========================================
+    # FAIL IF COMMAND FAILED
+    # ==========================================
+
+    - name: Fail if Port Filter interface configuration set failed
+      ansible.builtin.fail:
+        msg: "{{ port_filter_configuration_result.error }}"
+      when: port_filter_configuration_result.status == "failed"
+
+    # ==========================================
+    # FINAL MESSAGE
+    # ==========================================
+
+    - name: Display result file
+      ansible.builtin.debug:
+        msg: >
+          Port Filter interface configuration applied on {{ ansible_host }}.
+          Result saved to
+          output/{{ ansible_host }}_port_filter_configuration_set.yml

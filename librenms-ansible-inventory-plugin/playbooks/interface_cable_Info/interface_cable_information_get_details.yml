@@ -1,0 +1,318 @@
+# ==========================================
+# interface_cable_information_get_details.yml
+# Created on Nov 16, 2026 by Vikash Kumar (vikash.kumar@alphabrige.tech).
+#
+# Copyright (c), ALPHA BRIDGE, Inc.
+# 357D, Udyog Vihar Industrial Area Phase VI, Sector 37, Gurugram, Haryana.
+#
+# All rights reserved.
+#
+# This software is the confidential and proprietary information of
+# ALPHA BRIDGE, Inc. ("Confidential Information"). You shall not
+# disclose such Confidential Information and shall use it only in
+# accordance with the terms of the license agreement you entered into
+# with ALPHA BRIDGE.
+#
+# =============================================================================
+# Playbook Name : Get Interface Cable Information Details
+# =============================================================================
+#
+# Description:
+# Runs `show cable interface <interface>` for the selected port and returns
+# Cable State and Pair A-D details for the Interface Cable Info GUI.
+# Connected results such as `OK (4 pairs)` / `OK / 9m` and open-cable results
+# such as `Open pair (4 pairs)` / `Open / 1m` are parsed from the CLI response.
+#
+# Input:
+#   interface: interface name selected by the user, such as g0/2
+#
+# Example:
+# ansible-playbook -i inventory/192.168.200.241.yml \
+#   playbooks/port_config/Interface_Cable_Info/interface_cable_information_get_details.yml \
+#   -e "interface=g0/2"
+#
+# Output:
+#   output/<switch_ip>_interface_cable_information_get_details.yml
+#     ip, interface, cable_state, pair_a..pair_d, status: success
+#     ip, interface, stage, error,            status: failed
+# =============================================================================
+
+- name: Get interface cable information details
+  hosts: alphabridge_devices
+  gather_facts: false
+
+  vars:
+    # Resolve paths from this checkout, including the Jenkins workspace.
+    # This file lives in playbooks/interface_cable_Info/, so the plugin root
+    # is two levels up.
+    project_root: "{{ playbook_dir }}/../.."
+    output_dir: "{{ project_root }}/output"
+    tmp_dir: "{{ project_root }}/tmp"
+
+  pre_tasks:
+    - name: Validate interface input is provided
+      ansible.builtin.assert:
+        that:
+          - interface is defined
+          - interface | string | trim | length > 0
+        fail_msg: "interface is required. Example: -e 'interface=g0/2'."
+
+    - name: Ensure script and output directories exist
+      ansible.builtin.file:
+        path: "{{ item }}"
+        state: directory
+        mode: '0755'
+      loop:
+        - "{{ tmp_dir }}"
+        - "{{ output_dir }}"
+
+  tasks:
+    # ==========================================
+    # CREATE PYTHON SSH SCRIPT
+    # ==========================================
+
+    - name: Create Python SSH script for interface cable details
+      ansible.builtin.copy:
+        dest: "{{ tmp_dir }}/interface_cable_information_get_details_exec.py"
+        mode: '0755'
+        content: |
+          #!/usr/bin/env python3
+
+          import json
+          import paramiko
+          import re
+          import time
+
+          HOST = {{ ansible_host | to_json }}
+          PORT = int({{ ansible_port | default(22) | to_json }})
+          USER = {{ ansible_user | to_json }}
+          PASSWORD = {{ ansible_password | to_json }}
+          INTERFACE = {{ interface | string | trim | to_json }}
+
+          ANSI_RE = re.compile(r'\x1b(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])')
+          PROMPT_RE = re.compile(r'[>#]\s*\Z')
+          CLI_ERROR_RE = re.compile(
+              r'(?im)^\s*%\s*(?:invalid|error|incomplete|ambiguous|'
+              r'unknown|unrecognized)\b|'
+              r'\b(?:invalid input|unknown command|incomplete command|'
+              r'command rejected|fail with ret\s*-?\d+)\b'
+          )
+          CABLE_STATE_RE = re.compile(
+              r'^\s*cable\s+(.+?)\s*\((\d+)\s+pairs?\)\s*$',
+              re.IGNORECASE
+          )
+          PAIR_RE = re.compile(
+              r'^\s*pair\s+([a-d])\s+([^,]+?)'
+              r'(?:\s*,\s*length\s+([\d.]+)\s*(?:metres?|meters?|m))?\s*$',
+              re.IGNORECASE
+          )
+
+
+          # --------------------------------------------------------------
+          # Read CLI output until the switch prompt returns.
+          # --------------------------------------------------------------
+          def read_until_prompt(shell, stage, timeout=90):
+              output = ""
+              deadline = time.monotonic() + timeout
+
+              while time.monotonic() < deadline:
+                  if shell.recv_ready():
+                      output += shell.recv(65535).decode(errors="ignore")
+                      clean = ANSI_RE.sub("", output).replace("\r", "")
+                      if PROMPT_RE.search(clean.rstrip()):
+                          return clean
+                  else:
+                      time.sleep(0.1)
+
+              raise TimeoutError(
+                  f"Timed out waiting for switch prompt during {stage}"
+              )
+
+
+          # --------------------------------------------------------------
+          # Execute one CLI command and reject recognizable errors.
+          # --------------------------------------------------------------
+          def run_command(shell, command, stage, timeout=90):
+              shell.send(command + "\n")
+              output = read_until_prompt(shell, stage, timeout)
+              if CLI_ERROR_RE.search(output):
+                  raise RuntimeError(
+                      f"Switch rejected {command!r}: {output.strip()}"
+                  )
+              return output
+
+
+          # --------------------------------------------------------------
+          # Parse cable diagnostic output into the GUI display fields.
+          # --------------------------------------------------------------
+          def parse_cable_information(output):
+              clean = ANSI_RE.sub("", output).replace("\r", "")
+              cable_state = None
+              pair_results = {"pair_a": "", "pair_b": "", "pair_c": "", "pair_d": ""}
+
+              for line in clean.splitlines():
+                  cable_match = CABLE_STATE_RE.fullmatch(line)
+                  if cable_match:
+                      state, pair_count = cable_match.groups()
+                      cable_state = f"{state.strip()} ({pair_count} pairs)"
+                      continue
+
+                  pair_match = PAIR_RE.fullmatch(line)
+                  if pair_match:
+                      pair_name, pair_status, length = pair_match.groups()
+                      value = pair_status.strip()
+                      value = re.sub(r"\s+pair$", "", value, flags=re.IGNORECASE)
+                      if length:
+                          value += f" / {length}m"
+                      pair_results[f"pair_{pair_name.lower()}"] = value
+
+              if cable_state is None:
+                  # Fiber ports: 10G says "this function is only used in copper
+                  # interface", 100G "Cable detection is not supported ..."
+                  if re.search(r'only used in copper|not supported', clean, re.IGNORECASE):
+                      raise ValueError(
+                          f"Cable diagnostics are only supported on copper (RJ45) ports - {INTERFACE} is not one"
+                      )
+                  raise ValueError("Cable diagnostic output did not include cable state")
+
+              return {
+                  "cable_state": cable_state,
+                  **pair_results
+              }
+
+
+          shell = None
+          ssh = None
+          stage = "input validation"
+
+          try:
+              if not INTERFACE or "\n" in INTERFACE or "\r" in INTERFACE:
+                  raise ValueError("interface must be a non-blank single interface name")
+
+              ssh = paramiko.SSHClient()
+              ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+              ssh.connect(
+                  HOST,
+                  port=PORT,
+                  username=USER,
+                  password=PASSWORD,
+                  look_for_keys=False,
+                  allow_agent=False,
+                  timeout=20,
+                  auth_timeout=20,
+                  banner_timeout=20
+              )
+
+              shell = ssh.invoke_shell()
+              read_until_prompt(shell, "initial SSH prompt", timeout=10)
+
+              stage = "enable mode"
+              run_command(shell, "enable", stage, timeout=10)
+
+              stage = "configuration mode"
+              run_command(shell, "config", stage, timeout=10)
+
+              stage = "cable diagnostic"
+              output = run_command(
+                  shell,
+                  f"show cable interface {INTERFACE}",
+                  stage,
+                  timeout=120
+              )
+
+              stage = "parse cable diagnostic"
+              cable_details = parse_cable_information(output)
+
+              print(json.dumps({
+                  "ip": HOST,
+                  **cable_details,
+                  "status": "success"
+              }, indent=4))
+
+          except Exception as exc:
+              print(json.dumps({
+                  "ip": HOST,
+                  "interface": INTERFACE,
+                  "status": "failed",
+                  "stage": stage,
+                  "error": str(exc)
+              }, indent=4))
+
+          finally:
+              if shell is not None:
+                  shell.close()
+              if ssh is not None:
+                  ssh.close()
+      no_log: true
+
+    # ==========================================
+    # EXECUTE PYTHON SCRIPT
+    # ==========================================
+
+    - name: Execute interface cable information details script
+      ansible.builtin.command:
+        argv:
+          - "{{ project_root }}/bin/python3"
+          - "{{ tmp_dir }}/interface_cable_information_get_details_exec.py"
+      register: interface_cable_information_raw
+      changed_when: false
+      failed_when: false
+
+    # ==========================================
+    # CONVERT JSON RESULT
+    # ==========================================
+
+    - name: Convert interface cable information result to JSON
+      ansible.builtin.set_fact:
+        interface_cable_information_result: "{{ interface_cable_information_raw.stdout | from_json }}"
+
+    # ==========================================
+    # DISPLAY RESULT
+    # ==========================================
+
+    - name: Build Interface Cable Info display rows
+      ansible.builtin.set_fact:
+        interface_cable_information_display:
+          "Cable State": "{{ interface_cable_information_result.cable_state }}"
+          "Pair A": "{{ interface_cable_information_result.pair_a }}"
+          "Pair B": "{{ interface_cable_information_result.pair_b }}"
+          "Pair C": "{{ interface_cable_information_result.pair_c }}"
+          "Pair D": "{{ interface_cable_information_result.pair_d }}"
+      when: interface_cable_information_result.status == "success"
+
+    - name: Display interface cable information result
+      ansible.builtin.debug:
+        msg: "{{ interface_cable_information_display | to_nice_yaml(sort_keys=False) }}"
+      when: interface_cable_information_result.status == "success"
+
+    # ==========================================
+    # SAVE RESULT
+    # ==========================================
+
+    # Saved on success AND failure, with the port and status, so the caller
+    # can report errors and never shows an older port's result.
+    - name: Save interface cable information result
+      ansible.builtin.copy:
+        dest: "{{ output_dir }}/{{ ansible_host }}_interface_cable_information_get_details.yml"
+        content: |
+          {{ (interface_cable_information_result | combine({'interface': interface | string | trim})) | to_nice_yaml(sort_keys=False) }}
+
+    # ==========================================
+    # FAIL IF COMMAND FAILED
+    # ==========================================
+
+    - name: Fail if interface cable information get failed
+      ansible.builtin.fail:
+        msg: "{{ interface_cable_information_result.error }}"
+      when: interface_cable_information_result.status == "failed"
+
+    # ==========================================
+    # FINAL MESSAGE
+    # ==========================================
+
+    - name: Display result file
+      ansible.builtin.debug:
+        msg: >
+          Cable information retrieved successfully. Result saved to
+          output/{{ ansible_host }}_interface_cable_information_get_details.yml
+      when: interface_cable_information_result.status == "success"

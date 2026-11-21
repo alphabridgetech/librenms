@@ -1,0 +1,312 @@
+# ==========================================
+# filter_configuration_set.yml
+# Created on Nov 10, 2026 by Vikash Kumar (vikash.kumar@alphabrige.tech).
+#
+# Copyright (c), ALPHA BRIDGE, Inc.
+# 357D, Udyog Vihar Industrial Area Phase VI, Sector 37, Gurugram, Haryana.
+#
+# All rights reserved.
+#
+# This software is the confidential and proprietary information of
+# ALPHA BRIDGE, Inc. ("Confidential Information"). You shall not
+# disclose such Confidential Information and shall use it only in
+# accordance with the terms of the license agreement you entered into
+# with ALPHA BRIDGE.
+#
+# =============================================================================
+# Playbook Name : Set Port Filter Configuration
+# =============================================================================
+#
+# Description:
+# Sets one or more global Port Filter fields through SSH. Unspecified fields
+# are left unchanged. Both single-field and multi-field requests are supported.
+# After applying the changes, the playbook runs `show running non-interface`.
+#
+# Input fields:
+#   filter_enable: Enable | Disable
+#   filter_dhcp: Enable | Disable
+#   filter_mode: raw | hybrid
+#   filter_icmp: Enable | Disable
+#   filter_icmpv6: Enable | Disable
+#   filter_igmp: Enable | Disable
+#   filter_source_ip: Enable | Disable
+#   filter_period: 1-600
+#
+# Examples:
+# ansible-playbook -i inventory/192.168.200.241.yml \
+#   playbooks/port_config/Port_Filter_Configuration/filter_configuration_set.yml \
+#   -e "filter_dhcp=Disable"
+#
+# ansible-playbook -i inventory/192.168.200.241.yml \
+#   playbooks/port_config/Port_Filter_Configuration/filter_configuration_set.yml \
+#   -e "filter_enable=Enable filter_dhcp=Enable filter_icmp=Enable filter_icmpv6=Enable filter_igmp=Enable filter_source_ip=Enable filter_mode=raw filter_period=10"
+#
+# Output:
+#   output/<switch_ip>_filter_configuration_set.yml
+# =============================================================================
+
+- name: Set Port Filter configuration
+  hosts: alphabridge_devices
+  gather_facts: false
+
+  vars:
+    # Resolve paths from this checkout, including the Jenkins workspace.
+    # This file lives in playbooks/port_filter_configuration/, so the plugin
+    # root is two levels up.
+    project_root: "{{ playbook_dir }}/../.."
+    output_dir: "{{ project_root }}/output"
+    tmp_dir: "{{ project_root }}/tmp"
+    filter_configuration_settings:
+      filter_enable: "{{ filter_enable | default('') }}"
+      filter_dhcp: "{{ filter_dhcp | default('') }}"
+      filter_mode: "{{ filter_mode | default('') }}"
+      filter_icmp: "{{ filter_icmp | default('') }}"
+      filter_icmpv6: "{{ filter_icmpv6 | default('') }}"
+      filter_igmp: "{{ filter_igmp | default('') }}"
+      filter_source_ip: "{{ filter_source_ip | default('') }}"
+      filter_period: "{{ filter_period | default('') }}"
+
+  pre_tasks:
+    - name: Ensure script and output directories exist
+      ansible.builtin.file:
+        path: "{{ item }}"
+        state: directory
+        mode: '0755'
+      loop:
+        - "{{ tmp_dir }}"
+        - "{{ output_dir }}"
+
+  tasks:
+    # ==========================================
+    # CREATE PYTHON SSH SCRIPT
+    # ==========================================
+
+    - name: Create Python SSH script for Port Filter set
+      ansible.builtin.copy:
+        dest: "{{ tmp_dir }}/filter_configuration_set_exec.py"
+        mode: '0755'
+        content: |
+          #!/usr/bin/env python3
+
+          import json
+          import paramiko
+          import re
+          import time
+
+          HOST = {{ ansible_host | to_json }}
+          PORT = int({{ ansible_port | default(22) | to_json }})
+          USER = {{ ansible_user | to_json }}
+          PASSWORD = {{ ansible_password | to_json }}
+          SETTINGS = json.loads({{ filter_configuration_settings | to_json | to_json }})
+
+          ANSI_RE = re.compile(r'\x1b(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])')
+          PROMPT_RE = re.compile(r'[>#]\s*\Z')
+          CLI_ERROR_RE = re.compile(
+              r'(?im)^\s*%\s*(?:invalid|error|incomplete|ambiguous|'
+              r'unknown|unrecognized)\b|'
+              r'\b(?:invalid input|unknown command|incomplete command|'
+              r'command rejected|bad parameter|too many parameters|'
+              r'fail with ret\s*-?\d+)\b'
+          )
+
+
+          # --------------------------------------------------------------
+          # Read CLI output until the switch prompt returns.
+          # --------------------------------------------------------------
+          def read_until_prompt(shell, stage, timeout=30):
+              output = ""
+              deadline = time.monotonic() + timeout
+
+              while time.monotonic() < deadline:
+                  if shell.recv_ready():
+                      output += shell.recv(65535).decode(errors="ignore")
+                      clean = ANSI_RE.sub("", output).replace("\r", "")
+                      if PROMPT_RE.search(clean.rstrip()):
+                          return clean
+                  else:
+                      time.sleep(0.1)
+
+              return ANSI_RE.sub("", output).replace("\r", "")
+
+
+          # --------------------------------------------------------------
+          # Execute one command and reject recognizable CLI errors.
+          # --------------------------------------------------------------
+          def run_command(shell, command, stage, timeout=30):
+              shell.send(command + "\n")
+              output = read_until_prompt(shell, stage, timeout)
+              if CLI_ERROR_RE.search(output):
+                  raise RuntimeError(
+                      f"Switch rejected {command!r}: {output.strip()}"
+                  )
+              return output
+
+
+          # --------------------------------------------------------------
+          # Build commands for supplied settings only.
+          # --------------------------------------------------------------
+          def build_commands(settings):
+              commands = []
+              toggle_fields = [
+                  ("filter_enable", "filter enable"),
+                  ("filter_dhcp", "filter dhcp"),
+                  ("filter_icmp", "filter icmp"),
+                  ("filter_icmpv6", "filter icmpv6"),
+                  ("filter_igmp", "filter igmp"),
+                  ("filter_source_ip", "filter ip source-ip")
+              ]
+
+              for field, command in toggle_fields:
+                  value = str(settings.get(field, "")).strip().lower()
+                  if not value:
+                      continue
+                  if value == "enable":
+                      commands.append(command)
+                  elif value == "disable":
+                      commands.append(f"no {command}")
+                  else:
+                      raise ValueError(f"{field} must be Enable or Disable.")
+
+              mode = str(settings.get("filter_mode", "")).strip().lower()
+              if mode:
+                  if mode not in ("raw", "hybrid"):
+                      raise ValueError("filter_mode must be raw or hybrid.")
+                  commands.append(f"filter mode {mode}")
+
+              period = str(settings.get("filter_period", "")).strip()
+              if period:
+                  if not period.isdigit() or not 1 <= int(period) <= 600:
+                      raise ValueError("filter_period must be an integer from 1 to 600.")
+                  commands.append(f"filter period {int(period)}")
+
+              if not commands:
+                  raise ValueError("Provide at least one Port Filter setting.")
+              return commands
+
+
+          shell = None
+          ssh = None
+          stage = "input validation"
+          applied_commands = []
+
+          try:
+              commands = build_commands(SETTINGS)
+
+              ssh = paramiko.SSHClient()
+              ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+              ssh.connect(
+                  HOST,
+                  port=PORT,
+                  username=USER,
+                  password=PASSWORD,
+                  look_for_keys=False,
+                  allow_agent=False,
+                  timeout=20,
+                  auth_timeout=20,
+                  banner_timeout=20
+              )
+
+              shell = ssh.invoke_shell()
+              read_until_prompt(shell, "initial SSH prompt", timeout=10)
+
+              stage = "enable mode"
+              run_command(shell, "enable", stage, timeout=10)
+
+              stage = "disable paging"
+              run_command(shell, "terminal length 0", stage, timeout=10)
+
+              stage = "configuration mode"
+              run_command(shell, "config", stage, timeout=10)
+
+              for command in commands:
+                  stage = command
+                  run_command(shell, command, stage, timeout=20)
+                  applied_commands.append(command)
+
+              stage = "show running non-interface"
+              run_command(shell, "show running non-interface", stage, timeout=90)
+
+              # Leave config mode and save, so the change survives a reboot
+              stage = "exit configuration mode"
+              run_command(shell, "exit", stage, timeout=10)
+              stage = "save configuration"
+              run_command(shell, "write", stage, timeout=30)
+
+              print(json.dumps({
+                  "ip": HOST,
+                  "status": "success"
+              }, indent=4))
+
+          except Exception as exc:
+              print(json.dumps({
+                  "ip": HOST,
+                  "status": "failed",
+                  "stage": stage,
+                  "commands": applied_commands,
+                  "error": str(exc)
+              }, indent=4))
+
+          finally:
+              if shell is not None:
+                  shell.close()
+              if ssh is not None:
+                  ssh.close()
+      no_log: true
+
+    # ==========================================
+    # EXECUTE PYTHON SCRIPT
+    # ==========================================
+
+    - name: Execute Port Filter configuration set script
+      ansible.builtin.command:
+        argv:
+          - "{{ project_root }}/bin/python3"   # plugin venv (has paramiko)
+          - "{{ tmp_dir }}/filter_configuration_set_exec.py"
+      register: filter_configuration_raw
+      changed_when: false
+      failed_when: false
+
+    # ==========================================
+    # CONVERT JSON RESULT
+    # ==========================================
+
+    - name: Convert Port Filter result to JSON
+      ansible.builtin.set_fact:
+        filter_configuration_result: "{{ filter_configuration_raw.stdout | from_json }}"
+
+    # ==========================================
+    # DISPLAY RESULT
+    # ==========================================
+
+    - name: Display Port Filter configuration result
+      ansible.builtin.debug:
+        var: filter_configuration_result
+
+    # ==========================================
+    # SAVE RESULT
+    # ==========================================
+
+    - name: Save Port Filter configuration result
+      ansible.builtin.copy:
+        dest: "{{ output_dir }}/{{ ansible_host }}_filter_configuration_set.yml"
+        content: |
+          {{ filter_configuration_result | to_nice_yaml }}
+
+    # ==========================================
+    # FAIL IF COMMAND FAILED
+    # ==========================================
+
+    - name: Fail if Port Filter configuration set failed
+      ansible.builtin.fail:
+        msg: "{{ filter_configuration_result.error }}"
+      when: filter_configuration_result.status == "failed"
+
+    # ==========================================
+    # FINAL MESSAGE
+    # ==========================================
+
+    - name: Display result file
+      ansible.builtin.debug:
+        msg: >
+          Port Filter configuration applied on {{ ansible_host }}.
+          Result saved to output/{{ ansible_host }}_filter_configuration_set.yml

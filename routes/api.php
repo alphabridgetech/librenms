@@ -89,6 +89,10 @@ Route::prefix('v0')->group(function () {
         Route::post('portmirror/set/{hostname}', [App\Api\Controllers\KunalApiController::class, 'setportmirror'])->name('portmirror.set');
         Route::get('keepalive/show/{hostname}', [App\Api\Controllers\KunalApiController::class, 'getkeepalive'])->name('keepalive.show');
         Route::post('keepalive/set/{hostname}', [App\Api\Controllers\KunalApiController::class, 'setkeepalive'])->name('keepalive.set');
+        Route::get('portfilter/show/{hostname}', [App\Api\Controllers\KunalApiController::class, 'getportfilter'])->name('portfilter.show');
+        Route::post('portfilter/global/{hostname}', [App\Api\Controllers\KunalApiController::class, 'setportfilterglobal'])->name('portfilter.global');
+        Route::post('portfilter/interface/{hostname}', [App\Api\Controllers\KunalApiController::class, 'setportfilterinterface'])->name('portfilter.interface');
+        Route::post('cableinfo/show/{hostname}', [App\Api\Controllers\KunalApiController::class, 'getcableinfo'])->name('cableinfo.show');
         Route::get('loopbackdetection/show/{hostname}', [App\Api\Controllers\KunalApiController::class, 'getloopbackdetection'])->name('loopbackdetection.show');
         Route::post('loopbackdetection/global/{hostname}', [App\Api\Controllers\KunalApiController::class, 'setloopbackdetectionglobal'])->name('loopbackdetection.global');
         Route::post('loopbackdetection/interface/{hostname}', [App\Api\Controllers\KunalApiController::class, 'setloopbackdetectioninterface'])->name('loopbackdetection.interface');

@@ -1,0 +1,305 @@
+# ==========================================
+# filter_configuration_get.yml
+# Created on Nov 10, 2026 by Vikash Kumar (vikash.kumar@alphabrige.tech).
+#
+# Copyright (c), ALPHA BRIDGE, Inc.
+# 357D, Udyog Vihar Industrial Area Phase VI, Sector 37, Gurugram, Haryana.
+#
+# All rights reserved.
+#
+# This software is the confidential and proprietary information of
+# ALPHA BRIDGE, Inc. ("Confidential Information"). You shall not
+# disclose such Confidential Information and shall use it only in
+# accordance with the terms of the license agreement you entered into
+# with ALPHA BRIDGE.
+#
+# =============================================================================
+# Playbook Name : Get Port Filter Configuration
+# =============================================================================
+#
+# Description:
+# Reads global Port Filter settings from `show running non-interface` and
+# reports the fields shown in the Port Filter Configuration GUI.
+#
+# Defaults omitted from running-config are reported as shown by the GUI:
+#   Filter Mode: raw
+#   Filter Period: 10
+#
+# CLI command:
+#   show running non-interface
+# Example:
+# ansible-playbook -i inventory/192.168.200.241.yml playbooks/port_config/Port_Filter_Configuration/filter_configuration_get.yml
+# Output:
+#   output/<switch_ip>_filter_configuration_get.yml
+# =============================================================================
+
+- name: Get Port Filter configuration
+  hosts: alphabridge_devices
+  gather_facts: false
+
+  vars:
+    # Resolve paths from this checkout, including the Jenkins workspace.
+    # This file lives in playbooks/port_filter_configuration/, so the plugin
+    # root is two levels up.
+    project_root: "{{ playbook_dir }}/../.."
+    output_dir: "{{ project_root }}/output"
+    tmp_dir: "{{ project_root }}/tmp"
+
+  pre_tasks:
+    - name: Ensure script and output directories exist
+      ansible.builtin.file:
+        path: "{{ item }}"
+        state: directory
+        mode: '0755'
+      loop:
+        - "{{ tmp_dir }}"
+        - "{{ output_dir }}"
+
+  tasks:
+    # ==========================================
+    # CREATE PYTHON SSH SCRIPT
+    # ==========================================
+
+    - name: Create Python SSH script for Port Filter get
+      ansible.builtin.copy:
+        dest: "{{ tmp_dir }}/filter_configuration_get_exec.py"
+        mode: '0755'
+        content: |
+          #!/usr/bin/env python3
+
+          import json
+          import paramiko
+          import re
+          import time
+
+          HOST = {{ ansible_host | to_json }}
+          PORT = int({{ ansible_port | default(22) | to_json }})
+          USER = {{ ansible_user | to_json }}
+          PASSWORD = {{ ansible_password | to_json }}
+
+          ANSI_RE = re.compile(r'\x1b(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])')
+          PROMPT_RE = re.compile(r'[>#]\s*\Z')
+          PAGER_RE = re.compile(
+              r'--+\s*more\s*--+|----\s*more\s*----|'
+              r'press\s+(?:any\s+key|space)\s+to\s+continue',
+              re.IGNORECASE
+          )
+          CLI_ERROR_RE = re.compile(
+              r'(?im)^\s*%\s*(?:invalid|error|incomplete|ambiguous|'
+              r'unknown|unrecognized)\b|'
+              r'\b(?:invalid input|unknown command|incomplete command|'
+              r'command rejected|fail with ret\s*-?\d+)\b'
+          )
+
+
+          # --------------------------------------------------------------
+          # Read CLI output until the switch prompt returns.
+          # --------------------------------------------------------------
+          def read_until_prompt(shell, stage, timeout=60):
+              output = ""
+              deadline = time.monotonic() + timeout
+              pager_count = 0
+
+              while time.monotonic() < deadline:
+                  if shell.recv_ready():
+                      output += shell.recv(65535).decode(errors="ignore")
+                      clean = ANSI_RE.sub("", output).replace("\r", "")
+                      current_pager_count = len(PAGER_RE.findall(clean))
+                      if current_pager_count > pager_count:
+                          shell.send(" ")
+                          pager_count = current_pager_count
+                      if PROMPT_RE.search(clean.rstrip()):
+                          return clean
+                  else:
+                      time.sleep(0.1)
+
+              raise TimeoutError(
+                  f"Timed out waiting for switch prompt during {stage}"
+              )
+
+
+          # --------------------------------------------------------------
+          # Execute one CLI command and check for recognizable errors.
+          # --------------------------------------------------------------
+          def run_command(shell, command, stage, timeout=60):
+              shell.send(command + "\n")
+              output = read_until_prompt(shell, stage, timeout)
+              if CLI_ERROR_RE.search(output):
+                  raise RuntimeError(
+                      f"Switch rejected {command!r}: {output.strip()}"
+                  )
+              return output
+
+
+          # --------------------------------------------------------------
+          # Parse global filter values. Mode raw and period 10 are implicit
+          # defaults and are therefore not always printed in the config.
+          # --------------------------------------------------------------
+          def parse_filter_configuration(running_config):
+              clean = ANSI_RE.sub("", running_config).replace("\r", "")
+              lines = [line.strip().lower() for line in clean.splitlines()]
+
+              if not any(line.startswith("!version ") for line in lines):
+                  raise ValueError(
+                      "SHOW output did not contain a running-config version header"
+                  )
+
+              result = {
+                  "filter_enable": "Disable",
+                  "filter_dhcp": "Disable",
+                  "filter_mode": "raw",
+                  "filter_icmp": "Disable",
+                  "filter_icmpv6": "Disable",
+                  "filter_igmp": "Disable",
+                  "filter_source_ip": "Disable",
+                  "filter_period": 10
+              }
+
+              toggle_commands = {
+                  "filter enable": "filter_enable",
+                  "filter dhcp": "filter_dhcp",
+                  "filter icmp": "filter_icmp",
+                  "filter icmpv6": "filter_icmpv6",
+                  "filter igmp": "filter_igmp",
+                  "filter ip source-ip": "filter_source_ip"
+              }
+
+              for line in lines:
+                  if line in toggle_commands:
+                      result[toggle_commands[line]] = "Enable"
+                      continue
+                  if line.startswith("no ") and line[3:] in toggle_commands:
+                      result[toggle_commands[line[3:]]] = "Disable"
+                      continue
+
+                  words = line.split()
+                  if len(words) == 3 and words[:2] == ["filter", "mode"]:
+                      mode = words[2]
+                      if mode not in ("raw", "hybrid"):
+                          raise ValueError(f"Unknown filter mode in running-config: {line}")
+                      result["filter_mode"] = mode
+                  elif len(words) == 3 and words[:2] == ["filter", "period"]:
+                      if not words[2].isdigit():
+                          raise ValueError(f"Invalid filter period in running-config: {line}")
+                      period = int(words[2])
+                      if not 1 <= period <= 600:
+                          raise ValueError(f"Filter period is outside 1-600: {line}")
+                      result["filter_period"] = period
+
+              return result
+
+
+          ssh = None
+          shell = None
+          stage = "SSH connection"
+
+          try:
+              ssh = paramiko.SSHClient()
+              ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+              ssh.connect(
+                  HOST,
+                  port=PORT,
+                  username=USER,
+                  password=PASSWORD,
+                  look_for_keys=False,
+                  allow_agent=False,
+                  timeout=20,
+                  auth_timeout=20,
+                  banner_timeout=20
+              )
+
+              shell = ssh.invoke_shell()
+              read_until_prompt(shell, "initial SSH prompt", timeout=10)
+
+              stage = "enable mode"
+              run_command(shell, "enable", stage, timeout=10)
+
+              stage = "disable paging"
+              run_command(shell, "terminal length 0", stage, timeout=10)
+
+              stage = "show running non-interface"
+              running_config = run_command(
+                  shell, "show running non-interface", stage, timeout=90
+              )
+
+              stage = "parse Port Filter configuration"
+              filter_configuration = parse_filter_configuration(running_config)
+
+              print(json.dumps({
+                  "ip": HOST,
+                  **filter_configuration,
+                  "status": "success"
+              }, indent=4))
+
+          except Exception as exc:
+              print(json.dumps({
+                  "ip": HOST,
+                  "status": "failed",
+                  "stage": stage,
+                  "error": str(exc)
+              }, indent=4))
+
+          finally:
+              if shell is not None:
+                  shell.close()
+              if ssh is not None:
+                  ssh.close()
+      no_log: true
+
+    # ==========================================
+    # EXECUTE PYTHON SCRIPT
+    # ==========================================
+
+    - name: Execute Port Filter configuration get script
+      ansible.builtin.command:
+        argv:
+          - "{{ project_root }}/bin/python3"   # plugin venv (has paramiko)
+          - "{{ tmp_dir }}/filter_configuration_get_exec.py"
+      register: filter_configuration_raw
+      changed_when: false
+      failed_when: false
+
+    # ==========================================
+    # CONVERT JSON RESULT
+    # ==========================================
+
+    - name: Convert Port Filter result to JSON
+      ansible.builtin.set_fact:
+        filter_configuration_result: "{{ filter_configuration_raw.stdout | from_json }}"
+
+    # ==========================================
+    # DISPLAY RESULT
+    # ==========================================
+
+    - name: Display Port Filter configuration result
+      ansible.builtin.debug:
+        var: filter_configuration_result
+
+    # ==========================================
+    # SAVE RESULT
+    # ==========================================
+
+    - name: Save Port Filter configuration result
+      ansible.builtin.copy:
+        dest: "{{ output_dir }}/{{ ansible_host }}_filter_configuration_get.yml"
+        content: |
+          {{ filter_configuration_result | to_nice_yaml }}
+
+    # ==========================================
+    # FAIL IF COMMAND FAILED
+    # ==========================================
+
+    - name: Fail if Port Filter configuration get failed
+      ansible.builtin.fail:
+        msg: "{{ filter_configuration_result.error }}"
+      when: filter_configuration_result.status == "failed"
+
+    # ==========================================
+    # FINAL MESSAGE
+    # ==========================================
+
+    - name: Display result file
+      ansible.builtin.debug:
+        msg: >
+          Port Filter configuration retrieved from {{ ansible_host }}.
+          Result saved to output/{{ ansible_host }}_filter_configuration_get.yml

@@ -35,3 +35,8 @@
 # igmpconfig.vlanlist:
 #   hide:
 #     - family: switchv1alphabridge
+
+# Port Filter: 100G switches have no "filter" commands (Unknown command)
+portfilterconfig:
+  hide:
+    - speed: 100g

@@ -1575,6 +1575,266 @@ public function getmtu($hostname)
 
 
     #------------------------------------------------------------
+    #                    PORT FILTER (SHOW)
+    #------------------------------------------------------------
+    /**
+     * Global and per-port filter settings, from
+     * port_filter_configuration/filter_configuration_get.yml and
+     * port_filter_configuration/port_filter_configuration_get.yml.
+     * 10G switches only - 100G has no "filter" commands (the tab is hidden
+     * there by config_module_support.yaml).
+     */
+    public function getportfilter($hostname)
+    {
+        $hosts = "{$this->pluginPath}/hosts/{$hostname}.yml";
+        $globalPlaybook = "{$this->pluginPath}/playbooks/port_filter_configuration/filter_configuration_get.yml";
+        $portPlaybook   = "{$this->pluginPath}/playbooks/port_filter_configuration/port_filter_configuration_get.yml";
+        $globalFile = $this->portFilterFile($hostname, 'filter_configuration_get');
+        $portFile   = $this->portFilterFile($hostname, 'port_filter_configuration_get');
+
+        // Serve the last result straight away and refresh it in the background
+        $cachedGlobal = $this->parseYamlSafely($globalFile);
+        $cachedPorts  = $this->parseYamlSafely($portFile);
+        if (($cachedGlobal['status'] ?? null) === 'success' && ($cachedPorts['status'] ?? null) === 'success') {
+            $this->runAnsibleAsync($globalPlaybook, $hosts);
+            $this->runAnsibleAsync($portPlaybook, $hosts);
+
+            return $this->success([
+                "global"     => $this->portFilterGlobal($cachedGlobal),
+                "interfaces" => $this->portFilterRows($cachedPorts),
+                "cached"     => true,
+            ]);
+        }
+
+        $output = $this->runAnsible($globalPlaybook, $hosts) . $this->runAnsible($portPlaybook, $hosts);
+
+        $global = $this->parseYamlSafely($globalFile);
+        $ports  = $this->parseYamlSafely($portFile);
+        foreach ([$global, $ports] as $result) {
+            if (($result['status'] ?? null) !== 'success') {
+                $reason = $result['error'] ?? $this->extractPortConfigFailureReason($output);
+                return $this->error($reason ?: 'Port filter GET failed', $output);
+            }
+        }
+
+        return $this->success([
+            "global"     => $this->portFilterGlobal($global),
+            "interfaces" => $this->portFilterRows($ports),
+            "cached"     => false,
+        ]);
+    }
+
+    private function portFilterFile(string $hostname, string $which): string
+    {
+        return "{$this->pluginPath}/output/{$hostname}_{$which}.yml";
+    }
+
+    private const PORT_FILTER_GLOBAL_FIELDS = [
+        'filter_enable', 'filter_dhcp', 'filter_mode', 'filter_icmp',
+        'filter_icmpv6', 'filter_igmp', 'filter_source_ip', 'filter_period',
+    ];
+
+    /** Per-port filter: request field => key in the get playbook's output. */
+    private const PORT_FILTER_PORT_FIELDS = [
+        'arp' => 'filter_arp', 'source_ip' => 'filter_source_ip', 'bpdu' => 'filter_bpdu',
+        'dhcp' => 'filter_dhcp', 'icmp' => 'filter_icmp', 'icmpv6' => 'filter_icmpv6',
+    ];
+
+    private function portFilterGlobal(array $data): array
+    {
+        $global = [];
+        foreach (self::PORT_FILTER_GLOBAL_FIELDS as $field) {
+            $global[$field] = $data[$field] ?? null;
+        }
+
+        return $global;
+    }
+
+    private function portFilterRows(array $data): array
+    {
+        $rows = [];
+        foreach ($data['interfaces'] ?? [] as $row) {
+            $out = ['port' => (string) ($row['port'] ?? '')];
+            foreach (self::PORT_FILTER_PORT_FIELDS as $field => $key) {
+                $out[$field] = ($row[$key] ?? 'Disable') === 'Enable' ? 'Enable' : 'Disable';
+            }
+            $rows[] = $out;
+        }
+
+        return $rows;
+    }
+
+    #------------------------------------------------------------
+    #                    PORT FILTER (SET GLOBAL)
+    #------------------------------------------------------------
+    public function setportfilterglobal(Request $request, $hostname)
+    {
+        $data = $request->validate([
+            'filter_enable'    => 'nullable|in:Enable,Disable',
+            'filter_dhcp'      => 'nullable|in:Enable,Disable',
+            'filter_mode'      => 'nullable|in:raw,hybrid',
+            'filter_icmp'      => 'nullable|in:Enable,Disable',
+            'filter_icmpv6'    => 'nullable|in:Enable,Disable',
+            'filter_igmp'      => 'nullable|in:Enable,Disable',
+            'filter_source_ip' => 'nullable|in:Enable,Disable',
+            'filter_period'    => 'nullable|integer|min:1|max:600',
+        ]);
+        $extraVars = array_filter($data, fn ($v) => $v !== null && $v !== '');
+        if (!$extraVars) {
+            return $this->error('Nothing to change');
+        }
+        if (isset($extraVars['filter_period'])) {
+            $extraVars['filter_period'] = (string) $extraVars['filter_period'];
+        }
+
+        $playbook = "{$this->pluginPath}/playbooks/port_filter_configuration/filter_configuration_set.yml";
+        $hosts    = "{$this->pluginPath}/hosts/{$hostname}.yml";
+        $yamlFile = $this->portFilterFile($hostname, 'filter_configuration_set');
+
+        $output = $this->runAnsiblejs($playbook, $hosts, $extraVars);
+
+        if ($reason = $this->verifyFreshPlaybookOutput($yamlFile, $output)) {
+            return $this->error($reason, $output);
+        }
+        $result = $this->parseYamlSafely($yamlFile);
+        if (($result['status'] ?? null) !== 'success') {
+            return $this->error($result['error'] ?? 'Failed to set port filter', $result);
+        }
+
+        // Update the saved settings so the page shows the change at once
+        $globalFile = $this->portFilterFile($hostname, 'filter_configuration_get');
+        $cached = $this->parseYamlSafely($globalFile);
+        if (is_array($cached)) {
+            foreach ($extraVars as $field => $value) {
+                $cached[$field] = $field === 'filter_period' ? (int) $value : $value;
+            }
+            @file_put_contents($globalFile, yaml_emit($cached));
+        }
+
+        return $this->success(["message" => "Port filter configuration saved"]);
+    }
+
+    #------------------------------------------------------------
+    #                    PORT FILTER (SET PORTS)
+    #------------------------------------------------------------
+    /**
+     * ports: [{interface, arp, source_ip, bpdu, dhcp, icmp, icmpv6}, ...] -
+     * applied in one SSH session by port_filter_configuration_set.yml.
+     */
+    public function setportfilterinterface(Request $request, $hostname)
+    {
+        $rules = [
+            'ports'             => 'required|array|min:1|max:64',
+            'ports.*.interface' => ['required', 'string', 'regex:#^(g|tg|GigaEthernet|TGigaEthernet)\d+/\d+$#i'],
+        ];
+        foreach (array_keys(self::PORT_FILTER_PORT_FIELDS) as $field) {
+            $rules["ports.*.{$field}"] = 'nullable|in:Enable,Disable';
+        }
+        $data = $request->validate($rules);
+
+        $portFilters = [];
+        foreach ($data['ports'] as $port) {
+            $item = ['interface' => $port['interface']];
+            foreach (array_keys(self::PORT_FILTER_PORT_FIELDS) as $field) {
+                if (!empty($port[$field])) {
+                    $item[$field] = $port[$field];
+                }
+            }
+            if (count($item) > 1) {
+                $portFilters[] = $item;
+            }
+        }
+        if (!$portFilters) {
+            return $this->error('Nothing to change');
+        }
+
+        $playbook = "{$this->pluginPath}/playbooks/port_filter_configuration/port_filter_configuration_set.yml";
+        $hosts    = "{$this->pluginPath}/hosts/{$hostname}.yml";
+        $yamlFile = $this->portFilterFile($hostname, 'port_filter_configuration_set');
+
+        $output = $this->runAnsiblejs($playbook, $hosts, ['port_filters' => $portFilters]);
+
+        if ($reason = $this->verifyFreshPlaybookOutput($yamlFile, $output)) {
+            return $this->error($reason, $output);
+        }
+        $result = $this->parseYamlSafely($yamlFile);
+        if (($result['status'] ?? null) !== 'success') {
+            return $this->error($result['error'] ?? 'Failed to set port filters', $result);
+        }
+
+        // Update the saved rows so the table shows the change at once
+        $portFile = $this->portFilterFile($hostname, 'port_filter_configuration_get');
+        $cached = $this->parseYamlSafely($portFile);
+        if (is_array($cached['interfaces'] ?? null)) {
+            $byPort = [];
+            foreach ($portFilters as $item) {
+                $byPort[strtolower(preg_replace(['#^TGigaEthernet#i', '#^GigaEthernet#i'], ['tg', 'g'], $item['interface']))] = $item;
+            }
+            foreach ($cached['interfaces'] as &$row) {
+                $item = $byPort[strtolower((string) ($row['port'] ?? ''))] ?? null;
+                if (!$item) {
+                    continue;
+                }
+                foreach (self::PORT_FILTER_PORT_FIELDS as $field => $key) {
+                    if (isset($item[$field])) {
+                        $row[$key] = $item[$field];
+                    }
+                }
+            }
+            unset($row);
+            @file_put_contents($portFile, yaml_emit($cached));
+        }
+
+        return $this->success([
+            "message" => "Port filter saved on " . count($portFilters) . " port(s)",
+        ]);
+    }
+
+    #------------------------------------------------------------
+    #                    CABLE INFORMATION (TEST)
+    #------------------------------------------------------------
+    /**
+     * Cable diagnostic for one copper port, by
+     * interface_cable_Info/interface_cable_information_get_details.yml
+     * ("show cable interface <port>"). Always run live - every test is a
+     * new measurement. Fiber ports (tg/cg) are not supported by the switch.
+     */
+    public function getcableinfo(Request $request, $hostname)
+    {
+        $data = $request->validate([
+            // copper ports: g0/1 or GigaEthernet0/1 (not 100G's g0/0/0 management port)
+            'interface' => ['required', 'string', 'regex:#^(g|GigaEthernet)\d+/\d+$#i'],
+        ]);
+        $interface = preg_replace('#^GigaEthernet#i', 'g', $data['interface']);
+
+        $playbook = "{$this->pluginPath}/playbooks/interface_cable_Info/interface_cable_information_get_details.yml";
+        $hosts    = "{$this->pluginPath}/hosts/{$hostname}.yml";
+        $yamlFile = "{$this->pluginPath}/output/{$hostname}_interface_cable_information_get_details.yml";
+
+        $output = $this->runAnsiblejs($playbook, $hosts, ['interface' => $interface]);
+
+        $result = $this->parseYamlSafely($yamlFile);
+        // The file is rewritten on every run; make sure it is this port's result
+        if (($result['interface'] ?? null) !== $interface) {
+            $reason = $this->extractPortConfigFailureReason($output);
+            return $this->error($reason ?: 'Cable test did not return a result', $output);
+        }
+        if (($result['status'] ?? null) !== 'success') {
+            return $this->error($result['error'] ?? 'Cable test failed', $result);
+        }
+
+        return $this->success([
+            "interface"   => $interface,
+            "cable_state" => $result['cable_state'] ?? '',
+            "pair_a"      => $result['pair_a'] ?? '',
+            "pair_b"      => $result['pair_b'] ?? '',
+            "pair_c"      => $result['pair_c'] ?? '',
+            "pair_d"      => $result['pair_d'] ?? '',
+            "tested_at"   => date('Y-m-d H:i:s'),
+        ]);
+    }
+
+    #------------------------------------------------------------
     #                    LOOPBACK DETECTION (SHOW)
     #------------------------------------------------------------
     /**
