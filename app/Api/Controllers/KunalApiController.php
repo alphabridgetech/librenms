@@ -1575,6 +1575,195 @@ public function getmtu($hostname)
 
 
     #------------------------------------------------------------
+    #                    LOOPBACK DETECTION (SHOW)
+    #------------------------------------------------------------
+    /**
+     * Global status and per-port settings, from
+     * loopback_detection/loopback_detection_global_configuration_get.yml and
+     * loopback_detection/loopback_detection_interface_list_get.yml (both read
+     * the running config; they work on 10G and 100G switches).
+     */
+    public function getloopbackdetection($hostname)
+    {
+        $hosts = "{$this->pluginPath}/hosts/{$hostname}.yml";
+        $globalPlaybook = "{$this->pluginPath}/playbooks/loopback_detection/loopback_detection_global_configuration_get.yml";
+        $listPlaybook   = "{$this->pluginPath}/playbooks/loopback_detection/loopback_detection_interface_list_get.yml";
+        $globalFile = $this->loopbackFile($hostname, 'global_configuration_get');
+        $listFile   = $this->loopbackFile($hostname, 'interface_list_get');
+
+        // Serve the last result straight away and refresh it in the background
+        $cachedGlobal = $this->parseYamlSafely($globalFile);
+        $cachedList   = $this->parseYamlSafely($listFile);
+        if (($cachedGlobal['status'] ?? null) === 'success' && ($cachedList['status'] ?? null) === 'success') {
+            $this->runAnsibleAsync($globalPlaybook, $hosts);
+            $this->runAnsibleAsync($listPlaybook, $hosts);
+
+            return $this->success([
+                "global_status" => $cachedGlobal['loopback_detection_status'] ?? 'Disable',
+                "interfaces"    => $this->loopbackRows($cachedList),
+                "cached"        => true,
+            ]);
+        }
+
+        $output = $this->runAnsible($globalPlaybook, $hosts) . $this->runAnsible($listPlaybook, $hosts);
+
+        $global = $this->parseYamlSafely($globalFile);
+        $list   = $this->parseYamlSafely($listFile);
+        foreach ([$global, $list] as $result) {
+            if (($result['status'] ?? null) !== 'success') {
+                $reason = $result['error'] ?? $this->extractPortConfigFailureReason($output);
+                return $this->error($reason ?: 'Loopback detection GET failed', $output);
+            }
+        }
+
+        return $this->success([
+            "global_status" => $global['loopback_detection_status'] ?? 'Disable',
+            "interfaces"    => $this->loopbackRows($list),
+            "cached"        => false,
+        ]);
+    }
+
+    private function loopbackFile(string $hostname, string $which): string
+    {
+        return "{$this->pluginPath}/output/{$hostname}_loopback_detection_{$which}.yml";
+    }
+
+    /**
+     * Port rows for the page. 100G switches also list their management port
+     * (g0/0/0), which has no loopback detection - it is left out.
+     */
+    private function loopbackRows(?array $list): array
+    {
+        $rows = [];
+        foreach ($list['interfaces'] ?? [] as $row) {
+            $port = (string) ($row['port'] ?? '');
+            if ($port === '' || preg_match('#^g\d+/\d+/\d+$#i', $port)) {
+                continue;
+            }
+            $rows[] = [
+                'port'               => $port,
+                'loopback_detection' => $row['loopback_detection'] ?? 'Disable',
+                'control'            => $row['control'] ?? '',
+                'existence'          => $row['existence_loopback'] ?? 'Disable',
+                'detection_vlan'     => (string) ($row['detection_vlan'] ?? ''),
+                'frames_monitor'     => $row['frames_monitor'] ?? 'Disable',
+                'forbid_packets'     => $row['forbid_loopback_detection_packets'] ?? 'Disable',
+                'dest_mac'           => $row['dest_mac'] ?? '',
+            ];
+        }
+
+        return $rows;
+    }
+
+    #------------------------------------------------------------
+    #                    LOOPBACK DETECTION (SET GLOBAL)
+    #------------------------------------------------------------
+    public function setloopbackdetectionglobal(Request $request, $hostname)
+    {
+        $data = $request->validate([
+            'status' => 'required|in:Enable,Disable',
+        ]);
+
+        $playbook = "{$this->pluginPath}/playbooks/loopback_detection/loopback_detection_global_configuration_set.yml";
+        $hosts    = "{$this->pluginPath}/hosts/{$hostname}.yml";
+        $yamlFile = $this->loopbackFile($hostname, 'global_configuration_set');
+
+        $output = $this->runAnsiblejs($playbook, $hosts, ['loopback_detection_status' => $data['status']]);
+
+        if ($reason = $this->verifyFreshPlaybookOutput($yamlFile, $output)) {
+            return $this->error($reason, $output);
+        }
+        $result = $this->parseYamlSafely($yamlFile);
+        if (($result['status'] ?? null) !== 'success') {
+            return $this->error($result['error'] ?? 'Failed to set loopback detection', $result);
+        }
+
+        // Update the saved status so the page shows the change at once
+        $globalFile = $this->loopbackFile($hostname, 'global_configuration_get');
+        $cached = $this->parseYamlSafely($globalFile);
+        if (is_array($cached)) {
+            $cached['loopback_detection_status'] = $data['status'];
+            @file_put_contents($globalFile, yaml_emit($cached));
+        }
+
+        return $this->success([
+            "message" => "Loopback detection {$data['status']}d on the switch",
+        ]);
+    }
+
+    #------------------------------------------------------------
+    #                    LOOPBACK DETECTION (SET PORT)
+    #------------------------------------------------------------
+    public function setloopbackdetectioninterface(Request $request, $hostname)
+    {
+        $data = $request->validate([
+            // g0/1, tg0/1 (10G) or tg0/0/1, cg0/0/1 (100G)
+            'interface'          => ['required', 'string', 'regex:#^(g|tg|cg|wg)\d+(/\d+){1,2}$#i'],
+            'loopback_detection' => 'required|in:Enable,Disable',
+            // none = remove the control setting (blank Control on the page)
+            'control'            => 'nullable|in:learning,block,shutdown,isolate-vlan,none',
+            'existence'          => 'nullable|in:Enable,Disable',
+            'detection_vlan'     => 'nullable|integer|min:1|max:4094',
+            'frames_monitor'     => 'nullable|in:Enable,Disable',
+            'forbid_packets'     => 'nullable|in:Enable,Disable',
+            'dest_mac'           => ['nullable', 'regex:/^([0-9A-Fa-f]{4}\.){2}[0-9A-Fa-f]{4}$|^([0-9A-Fa-f]{2}:){5}[0-9A-Fa-f]{2}$/'],
+        ]);
+
+        // The switch turns forbid-packet off when detection is enabled
+        if ($data['loopback_detection'] === 'Enable' && ($data['forbid_packets'] ?? null) === 'Enable') {
+            return $this->error('Forbid loopback detection packets must be Disable when loopback detection is enabled');
+        }
+
+        $playbook = "{$this->pluginPath}/playbooks/loopback_detection/loopback_detection_interface_list_set.yml";
+        $hosts    = "{$this->pluginPath}/hosts/{$hostname}.yml";
+        $yamlFile = $this->loopbackFile($hostname, 'interface_list_set');
+
+        // Only filled-in fields are sent; the playbook leaves the others as they are
+        $extraVars = array_filter($data, fn ($v) => $v !== null && $v !== '');
+        if (isset($extraVars['detection_vlan'])) {
+            $extraVars['detection_vlan'] = (string) $extraVars['detection_vlan'];
+        }
+
+        $output = $this->runAnsiblejs($playbook, $hosts, $extraVars);
+
+        if ($reason = $this->verifyFreshPlaybookOutput($yamlFile, $output)) {
+            return $this->error($reason, $output);
+        }
+        $result = $this->parseYamlSafely($yamlFile);
+        if (($result['status'] ?? null) !== 'success') {
+            return $this->error($result['error'] ?? 'Failed to set loopback detection on the port', $result);
+        }
+
+        // Update the saved port row so the table shows the change at once
+        $listFile = $this->loopbackFile($hostname, 'interface_list_get');
+        $cached = $this->parseYamlSafely($listFile);
+        if (is_array($cached['interfaces'] ?? null)) {
+            foreach ($cached['interfaces'] as &$row) {
+                if (strcasecmp((string) ($row['port'] ?? ''), $data['interface']) !== 0) {
+                    continue;
+                }
+                $row['loopback_detection'] = $data['loopback_detection'];
+                if ($data['loopback_detection'] === 'Enable') {
+                    $row['forbid_loopback_detection_packets'] = 'Disable';
+                }
+                foreach (['control' => 'control', 'existence' => 'existence_loopback', 'detection_vlan' => 'detection_vlan',
+                          'frames_monitor' => 'frames_monitor', 'forbid_packets' => 'forbid_loopback_detection_packets',
+                          'dest_mac' => 'dest_mac'] as $field => $key) {
+                    if (isset($extraVars[$field])) {
+                        $row[$key] = ($field === 'control' && $extraVars[$field] === 'none') ? '' : $extraVars[$field];
+                    }
+                }
+            }
+            unset($row);
+            @file_put_contents($listFile, yaml_emit($cached));
+        }
+
+        return $this->success([
+            "message" => "Loopback detection updated on {$data['interface']}",
+        ]);
+    }
+
+    #------------------------------------------------------------
     #                    KEEPALIVE (SHOW)
     #------------------------------------------------------------
     /**

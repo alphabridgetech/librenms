@@ -1,0 +1,273 @@
+# ==========================================
+# loopback_detection_global_configuration_set.yml
+# Created on Nov 10, 2026 by Vikash Kumar (vikash.kumar@alphabrige.tech).
+#
+# Copyright (c), ALPHA BRIDGE, Inc.
+# 357D, Udyog Vihar Industrial Area Phase VI, Sector 37, Gurugram, Haryana.
+#
+# All rights reserved.
+#
+# This software is the confidential and proprietary information of
+# ALPHA BRIDGE, Inc. ("Confidential Information"). You shall not
+# disclose such Confidential Information and shall use it only in
+# accordance with the terms of the license agreement you entered into
+# with ALPHA BRIDGE.
+#
+# =============================================================================
+# Playbook Name : Loopback Detection Global Configuration Set
+# =============================================================================
+#
+# Description:
+# Enables or disables global Loopback Detection through SSH. The setting is
+# checked with `show run non-interface` and saved with `write`.
+#
+# Input:
+#   loopback_detection_status=Enable | Disable
+#
+# Commands:
+#   Enable  -> loopback-detection
+#   Disable -> no loopback-detection
+#
+# Examples:
+# ansible-playbook -i inventory/192.168.200.241.yml \
+#   playbooks/port_config/loopback_detection_global_configuration_set.yml \
+#   -e "loopback_detection_status=Enable"
+#
+# ansible-playbook -i inventory/192.168.200.241.yml \
+#   playbooks/port_config/loopback_detection_global_configuration_set.yml \
+#   -e "loopback_detection_status=Disable"
+#
+# Output:
+#   output/<switch_ip>_loopback_detection_global_configuration_set.yml
+# =============================================================================
+
+- name: Set loopback detection global configuration
+  hosts: alphabridge_devices
+  gather_facts: false
+
+  vars:
+    project_root: "{{ playbook_dir }}/../.."
+    output_dir: "{{ project_root }}/output"
+    tmp_dir: "{{ project_root }}/tmp"
+
+  pre_tasks:
+    - name: Validate requested loopback detection status
+      ansible.builtin.assert:
+        that:
+          - "(loopback_detection_status | default('') | string | trim | lower) in ['enable', 'disable']"
+        fail_msg: >-
+          Provide -e "loopback_detection_status=Enable" or
+          -e "loopback_detection_status=Disable".
+
+    - name: Ensure helper and output directories exist
+      ansible.builtin.file:
+        path: "{{ item }}"
+        state: directory
+        mode: '0755'
+      loop:
+        - "{{ tmp_dir }}"
+        - "{{ output_dir }}"
+
+  tasks:
+    - name: Create loopback detection configuration SSH helper
+      ansible.builtin.copy:
+        dest: "{{ tmp_dir }}/loopback_detection_global_configuration_set_exec.py"
+        mode: '0700'
+        content: |
+          #!/usr/bin/env python3
+
+          import json
+          import re
+          import time
+          import paramiko
+
+          HOST = {{ ansible_host | to_json }}
+          PORT = int({{ ansible_port | default(22) | to_json }})
+          USER = {{ ansible_user | to_json }}
+          PASSWORD = {{ ansible_password | to_json }}
+          REQUESTED_STATUS = {{ loopback_detection_status | string | trim | lower | to_json }}
+
+          COMMAND = (
+              "loopback-detection" if REQUESTED_STATUS == "enable"
+              else "no loopback-detection"
+          )
+
+          ANSI_RE = re.compile(r'\x1b(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])')
+          PROMPT_RE = re.compile(r'[>#]\s*\Z')
+          PAGER_RE = re.compile(
+              r'--+\s*more\s*--+|----\s*more\s*----|'
+              r'press\s+(?:any\s+key|space)\s+to\s+continue',
+              re.IGNORECASE
+          )
+          CLI_ERROR_RE = re.compile(
+              r'(?im)^\s*%\s*(?:invalid|error|incomplete|ambiguous|'
+              r'unknown|unrecognized)\b|'
+              r'\b(?:invalid input|unknown command|incomplete command|'
+              r'command rejected|fail with ret\s*-?\d+)\b'
+          )
+
+          def read_until_prompt(shell, stage, timeout=30):
+              """Read the complete switch response or fail on timeout."""
+              output = ""
+              deadline = time.monotonic() + timeout
+              pager_count = 0
+              while time.monotonic() < deadline:
+                  if shell.recv_ready():
+                      output += shell.recv(65535).decode(errors="replace")
+                      clean = ANSI_RE.sub("", output).replace("\r", "")
+                      current_pager_count = len(PAGER_RE.findall(clean))
+                      if current_pager_count > pager_count:
+                          shell.send(" ")
+                          pager_count = current_pager_count
+                      if PROMPT_RE.search(clean.rstrip()):
+                          return clean
+                  else:
+                      time.sleep(0.1)
+              raise TimeoutError(f"Timed out waiting for switch prompt during {stage}")
+
+          def run_command(shell, command, stage, timeout=30):
+              """Run a CLI command and reject recognizable switch errors."""
+              shell.send(command + "\n")
+              output = read_until_prompt(shell, stage, timeout)
+              if CLI_ERROR_RE.search(output):
+                  raise RuntimeError(f"Switch rejected {command!r}: {output.strip()}")
+              return output
+
+          def parse_loopback_detection_status(running_config):
+              """Read the global setting from non-interface config output."""
+              clean = ANSI_RE.sub("", running_config).replace("\r", "")
+              return any(
+                  line.strip().casefold() == "loopback-detection"
+                  for line in clean.splitlines()
+              )
+
+          ssh = None
+          shell = None
+          stage = "SSH connection"
+          applied_command = None
+          try:
+              ssh = paramiko.SSHClient()
+              ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+              ssh.connect(
+                  HOST,
+                  port=PORT,
+                  username=USER,
+                  password=PASSWORD,
+                  look_for_keys=False,
+                  allow_agent=False,
+                  timeout=20,
+                  auth_timeout=20,
+                  banner_timeout=20
+              )
+              shell = ssh.invoke_shell()
+              read_until_prompt(shell, "initial SSH prompt", timeout=10)
+
+              stage = "enable mode"
+              run_command(shell, "enable", stage, timeout=10)
+
+              stage = "disable paging"
+              run_command(shell, "terminal length 0", stage, timeout=10)
+
+              stage = "configuration mode"
+              run_command(shell, "config", stage, timeout=10)
+
+              stage = f"set loopback detection to {REQUESTED_STATUS}"
+              run_command(shell, COMMAND, stage, timeout=15)
+              applied_command = COMMAND
+
+              stage = "verify loopback detection configuration"
+              running_config = run_command(
+                  shell, "show run non-interface", stage, timeout=90
+              )
+              enabled = parse_loopback_detection_status(running_config)
+              expected_enabled = REQUESTED_STATUS == "enable"
+              if enabled != expected_enabled:
+                  raise RuntimeError(
+                      f"Requested {REQUESTED_STATUS}, but running configuration "
+                      f"reports {'Enable' if enabled else 'Disable'}"
+                  )
+
+              # Back to privileged EXEC mode first: "write" is not a config
+              # mode command on every switch.
+              stage = "exit configuration mode"
+              run_command(shell, "exit", stage, timeout=10)
+
+              stage = "save configuration"
+              write_output = run_command(shell, "write", stage, timeout=30)
+              # 10G prints "startup-config is wrote ... OK!", 100G prints nothing
+              if re.search(r"(?i)error|fail|bad parameter", write_output.replace("write", "", 1)):
+                  raise RuntimeError(
+                      "Switch did not confirm the configuration save: "
+                      + write_output.strip()
+                  )
+
+              print(json.dumps({
+                  "ip": HOST,
+                  "status": "success"
+              }, indent=4))
+
+          except Exception as exc:
+              print(json.dumps({
+                  "ip": HOST,
+                  "status": "failed",
+                  "stage": stage,
+                  "applied_command": applied_command,
+                  "error": str(exc)
+              }))
+
+          finally:
+              if shell is not None:
+                  shell.close()
+              if ssh is not None:
+                  ssh.close()
+      no_log: true
+
+    - name: Execute loopback detection configuration helper
+      ansible.builtin.command:
+        argv:
+          - "{{ project_root }}/bin/python3"
+          - "{{ tmp_dir }}/loopback_detection_global_configuration_set_exec.py"
+      register: loopback_detection_global_configuration_set_raw
+      changed_when: >-
+        loopback_detection_global_configuration_set_raw.rc == 0 and
+        '"status": "success"' in loopback_detection_global_configuration_set_raw.stdout
+      failed_when: false
+
+    - name: Fail if helper returned no JSON
+      ansible.builtin.fail:
+        msg: >-
+          Loopback detection SET helper returned no JSON.
+          rc={{ loopback_detection_global_configuration_set_raw.rc }};
+          stderr={{ loopback_detection_global_configuration_set_raw.stderr }}
+      when: loopback_detection_global_configuration_set_raw.stdout | trim | length == 0
+
+    - name: Parse loopback detection configuration result
+      ansible.builtin.set_fact:
+        loopback_detection_global_configuration_set_result: >-
+          {{ loopback_detection_global_configuration_set_raw.stdout | from_json }}
+
+    - name: Fail if loopback detection configuration update failed
+      ansible.builtin.fail:
+        msg: >-
+          Loopback detection SET failed during
+          {{ loopback_detection_global_configuration_set_result.stage | default('execution') }}:
+          {{ loopback_detection_global_configuration_set_result.error | default(loopback_detection_global_configuration_set_raw.stderr) }}
+          Applied command: {{ loopback_detection_global_configuration_set_result.applied_command | default('none') }}
+      when: >-
+        loopback_detection_global_configuration_set_result.status != 'success' or
+        loopback_detection_global_configuration_set_raw.rc != 0
+
+    - name: Display loopback detection configuration result
+      ansible.builtin.debug:
+        msg: "{{ loopback_detection_global_configuration_set_result | to_nice_yaml(indent=2, sort_keys=False) }}"
+
+    - name: Save loopback detection configuration result
+      ansible.builtin.copy:
+        dest: "{{ output_dir }}/{{ ansible_host }}_loopback_detection_global_configuration_set.yml"
+        content: "{{ loopback_detection_global_configuration_set_result | to_nice_yaml(indent=2, sort_keys=False) }}"
+
+    - name: Display result path
+      ansible.builtin.debug:
+        msg: >-
+          Loopback detection configuration set successfully.
+          Saved to output/{{ ansible_host }}_loopback_detection_global_configuration_set.yml

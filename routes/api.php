@@ -89,6 +89,9 @@ Route::prefix('v0')->group(function () {
         Route::post('portmirror/set/{hostname}', [App\Api\Controllers\KunalApiController::class, 'setportmirror'])->name('portmirror.set');
         Route::get('keepalive/show/{hostname}', [App\Api\Controllers\KunalApiController::class, 'getkeepalive'])->name('keepalive.show');
         Route::post('keepalive/set/{hostname}', [App\Api\Controllers\KunalApiController::class, 'setkeepalive'])->name('keepalive.set');
+        Route::get('loopbackdetection/show/{hostname}', [App\Api\Controllers\KunalApiController::class, 'getloopbackdetection'])->name('loopbackdetection.show');
+        Route::post('loopbackdetection/global/{hostname}', [App\Api\Controllers\KunalApiController::class, 'setloopbackdetectionglobal'])->name('loopbackdetection.global');
+        Route::post('loopbackdetection/interface/{hostname}', [App\Api\Controllers\KunalApiController::class, 'setloopbackdetectioninterface'])->name('loopbackdetection.interface');
         Route::get('portprotect/show/{hostname}', [App\Api\Controllers\KunalApiController::class, 'getportprotect'])->name('portprotect.show');
         Route::post('portprotect/group/set/{hostname}', [App\Api\Controllers\KunalApiController::class, 'setportprotectgroup'])->name('portprotect.group.set');
         Route::post('portprotect/interface/set/{hostname}', [App\Api\Controllers\KunalApiController::class, 'setportprotectinterface'])->name('portprotect.interface.set');

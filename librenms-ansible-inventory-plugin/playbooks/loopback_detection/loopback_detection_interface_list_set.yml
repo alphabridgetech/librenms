@@ -1,0 +1,401 @@
+# ==========================================
+# loopback_detection_interface_list_set.yml
+# Created on Nov 10, 2026 by Vikash Kumar (vikash.kumar@alphabrige.tech).
+#
+# Copyright (c), ALPHA BRIDGE, Inc.
+# 357D, Udyog Vihar Industrial Area Phase VI, Sector 37, Gurugram, Haryana.
+#
+# All rights reserved.
+#
+# This software is the confidential and proprietary information of
+# ALPHA BRIDGE, Inc. ("Confidential Information"). You shall not
+# disclose such Confidential Information and shall use it only in
+# accordance with the terms of the license agreement you entered into
+# with ALPHA BRIDGE.
+#
+# =============================================================================
+# Playbook Name : Set Loopback Detection Interface Configuration
+# =============================================================================
+#
+# Description:
+# Applies Loopback Detection settings to one switch interface over SSH.
+# The interface name is passed to the switch as supplied. Supported examples
+# include g0/1, GigaEthernet0/2, and TGigaEthernet0/1. Only supplied settings
+# are changed. Enabling Loopback Detection also disables forbid-packet.
+#
+# Input:
+#   interface: required; interface name in the switch's accepted syntax
+#   loopback_detection: Enable | Disable
+#   control: learning | block | shutdown | isolate-vlan | none (none = remove the control setting)
+#   existence: Enable | Disable
+#   detection_vlan: VLAN ID (1-4094)
+#   frames_monitor: Enable | Disable
+#   forbid_packets: Enable | Disable
+#   dest_mac: destination MAC address
+#
+# Example:
+# ansible-playbook -i inventory/192.168.200.241.yml \
+#   playbooks/port_config/loopback_detection_interface_list_set.yml \
+#   -e "interface=g0/1 loopback_detection=Enable control=learning existence=Enable detection_vlan=4 frames_monitor=Enable forbid_packets=Disable dest_mac=60dd.8e1c.3dd3"
+#
+# Output:
+#   output/<switch_ip>_loopback_detection_interface_list_set.yml
+# =============================================================================
+
+- name: Set Loopback Detection interface configuration
+  hosts: alphabridge_devices
+  gather_facts: false
+
+  vars:
+    # Resolve paths from this checkout, including the Jenkins workspace.
+    project_root: "{{ playbook_dir }}/../.."
+    output_dir: "{{ project_root }}/output"
+    tmp_dir: "{{ project_root }}/tmp"
+    loopback_detection_interface_settings:
+      interface: "{{ interface | default('') }}"
+      loopback_detection: "{{ loopback_detection | default('') }}"
+      control: "{{ control | default('') }}"
+      existence: "{{ existence | default('') }}"
+      detection_vlan: "{{ detection_vlan | default('') }}"
+      frames_monitor: "{{ frames_monitor | default('') }}"
+      forbid_packets: "{{ forbid_packets | default('') }}"
+      dest_mac: "{{ dest_mac | default('') }}"
+
+  pre_tasks:
+    - name: Validate interface input is provided
+      ansible.builtin.assert:
+        that:
+          - interface is defined
+          - interface | string | trim | length > 0
+        fail_msg: >-
+          interface is required. Examples: g0/1, GigaEthernet0/2,
+          or TGigaEthernet0/1.
+
+    - name: Ensure script and output directories exist
+      ansible.builtin.file:
+        path: "{{ item }}"
+        state: directory
+        mode: '0755'
+      loop:
+        - "{{ tmp_dir }}"
+        - "{{ output_dir }}"
+
+  tasks:
+    # ==========================================
+    # CREATE PYTHON SSH SCRIPT
+    # ==========================================
+
+    - name: Create Python SSH script for Loopback Detection interface set
+      ansible.builtin.copy:
+        dest: "{{ tmp_dir }}/loopback_detection_interface_list_set_exec.py"
+        mode: '0755'
+        content: |
+          #!/usr/bin/env python3
+
+          import json
+          import paramiko
+          import re
+          import time
+
+          HOST = {{ ansible_host | to_json }}
+          PORT = int({{ ansible_port | default(22) | to_json }})
+          USER = {{ ansible_user | to_json }}
+          PASSWORD = {{ ansible_password | to_json }}
+          SETTINGS = json.loads({{ loopback_detection_interface_settings | to_json | to_json }})
+
+
+          # --------------------------------------------------------------
+          # Read CLI output until the switch prompt returns.
+          # --------------------------------------------------------------
+          def read_until_prompt(shell, timeout=10):
+              output = ""
+              deadline = time.monotonic() + timeout
+              prompt_re = re.compile(r'[>#]\s*\Z')
+
+              while time.monotonic() < deadline:
+                  if shell.recv_ready():
+                      output += shell.recv(65535).decode(errors="ignore")
+                      clean = re.sub(
+                          r'\x1b(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])',
+                          "",
+                          output
+                      ).replace("\r", "")
+                      if prompt_re.search(clean.rstrip()):
+                          return clean
+                  else:
+                      time.sleep(0.1)
+
+              return output
+
+
+          # --------------------------------------------------------------
+          # Remove terminal ANSI escape characters before checking output.
+          # --------------------------------------------------------------
+          def clean_cli_output(text):
+              ansi_re = re.compile(r'\x1b(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])')
+              return ansi_re.sub("", text).replace("\r", "")
+
+
+          # --------------------------------------------------------------
+          # Normalize Enable / Disable GUI values.
+          # --------------------------------------------------------------
+          def normalize_toggle(value, field_name):
+              if value is None or str(value).strip() == "":
+                  return None
+
+              value = str(value).strip().lower()
+              if value == "enable":
+                  return "Enable"
+              if value == "disable":
+                  return "Disable"
+              raise ValueError(f"{field_name} must be Enable or Disable.")
+
+
+          # --------------------------------------------------------------
+          # Build interface commands. An omitted field leaves its current
+          # value unchanged.
+          # --------------------------------------------------------------
+          def build_commands(settings):
+              interface = str(settings.get("interface", "")).strip()
+              if not interface:
+                  raise ValueError("interface is required.")
+              if "\n" in interface or "\r" in interface:
+                  raise ValueError("interface must contain a single interface name.")
+
+              detection = normalize_toggle(
+                  settings.get("loopback_detection"), "loopback_detection"
+              )
+              existence = normalize_toggle(
+                  settings.get("existence"), "existence"
+              )
+              frames_monitor = normalize_toggle(
+                  settings.get("frames_monitor"), "frames_monitor"
+              )
+              forbid_packets = normalize_toggle(
+                  settings.get("forbid_packets"), "forbid_packets"
+              )
+              control = str(settings.get("control", "")).strip().lower()
+              detection_vlan = str(settings.get("detection_vlan", "")).strip()
+              dest_mac = str(settings.get("dest_mac", "")).strip()
+
+              if control and control not in ("learning", "block", "shutdown", "isolate-vlan", "none"):
+                  raise ValueError(
+                      "control must be learning, block, shutdown, isolate-vlan, or none."
+                  )
+              if detection_vlan:
+                  if not detection_vlan.isdigit() or not 1 <= int(detection_vlan) <= 4094:
+                      raise ValueError("detection_vlan must be a VLAN ID from 1 to 4094.")
+              if dest_mac and not re.fullmatch(
+                  r"(?:[0-9a-fA-F]{4}\.){2}[0-9a-fA-F]{4}|"
+                  r"(?:[0-9a-fA-F]{2}:){5}[0-9a-fA-F]{2}",
+                  dest_mac
+              ):
+                  raise ValueError(
+                      "dest_mac must use xxxx.xxxx.xxxx or xx:xx:xx:xx:xx:xx format."
+                  )
+              if detection == "Enable" and forbid_packets == "Enable":
+                  raise ValueError(
+                      "forbid_packets must be Disable when loopback_detection is Enable."
+                  )
+
+              commands = [f"interface {interface}"]
+              if detection == "Enable":
+                  commands.append("loopback-detection enable")
+              elif detection == "Disable":
+                  commands.append("no loopback-detection enable")
+
+              if existence:
+                  command = "loopback-detection existence"
+                  if existence == "Disable":
+                      command = "no " + command
+                  commands.append(command)
+
+              if frames_monitor:
+                  command = "loopback-detection frames-monitor"
+                  if frames_monitor == "Disable":
+                      command = "no " + command
+                  commands.append(command)
+
+              if detection == "Enable":
+                  # Enabling Loopback Detection automatically disables this
+                  # option on the switch, so make the resulting state explicit.
+                  commands.append("no loopback-detection forbid-packet")
+              elif forbid_packets:
+                  command = "loopback-detection forbid-packet"
+                  if forbid_packets == "Disable":
+                      command = "no " + command
+                  commands.append(command)
+
+              if control:
+                  if control == "none":
+                      # Blank Control on the page: remove the setting
+                      commands.append("no loopback-detection control")
+                  else:
+                      commands.append(f"loopback-detection control {control}")
+              if detection_vlan:
+                  commands.append(f"loopback-detection vlan-control {detection_vlan}")
+              if dest_mac:
+                  commands.append(f"loopback-detection dest-mac {dest_mac}")
+
+              if len(commands) == 1:
+                  raise ValueError("Provide at least one Loopback Detection setting.")
+
+              commands.append("exit")
+              return interface, commands
+
+
+          # --------------------------------------------------------------
+          # Connect and apply the requested interface configuration.
+          # --------------------------------------------------------------
+          shell = None
+          ssh = None
+          applied_commands = []
+
+          try:
+              interface, commands = build_commands(SETTINGS)
+
+              ssh = paramiko.SSHClient()
+              ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+              ssh.connect(
+                  HOST,
+                  port=PORT,
+                  username=USER,
+                  password=PASSWORD,
+                  look_for_keys=False,
+                  allow_agent=False,
+                  timeout=10
+              )
+
+              # Open an interactive shell because interface commands require
+              # global configuration mode.
+              shell = ssh.invoke_shell()
+              time.sleep(0.5)
+
+              read_until_prompt(shell, timeout=5)
+              shell.send("enable\n")
+              read_until_prompt(shell, timeout=5)
+              shell.send("config\n")
+              config_output = clean_cli_output(read_until_prompt(shell, timeout=5))
+              # "<name>_config#" on 10G, "<name>(config)#" on 100G
+              if not re.search(r'(_config|\(config\))#\s*$', config_output):
+                  raise RuntimeError("Could not enter config mode: " + config_output.strip())
+
+              for command in commands:
+                  shell.send(command + "\n")
+                  output = clean_cli_output(read_until_prompt(shell, timeout=10))
+
+                  error_patterns = [
+                      r'Bad parameter',
+                      r'Too many parameters',
+                      r'Command incomplete',
+                      r'%\s*Invalid input',
+                      r'%\s*Incomplete command',
+                      r'%\s*Ambiguous command',
+                      r'%\s*Error',
+                      r'Command rejected',
+                      r'Unknown command'
+                  ]
+                  failed = any(
+                      re.search(pattern, output, re.IGNORECASE)
+                      for pattern in error_patterns
+                  )
+                  if failed:
+                      raise RuntimeError(f"Command failed: {command}")
+                  applied_commands.append(command)
+
+              # Leave config mode and save, so the change survives a reboot
+              shell.send("exit\n")
+              read_until_prompt(shell, timeout=5)
+              shell.send("write\n")
+              write_output = clean_cli_output(read_until_prompt(shell, timeout=30))
+              if re.search(r'error|fail|Bad parameter', write_output.replace("write", "", 1), re.IGNORECASE):
+                  raise RuntimeError("write (save config) failed: " + write_output.strip())
+
+              shell.close()
+              ssh.close()
+              shell = None
+              ssh = None
+
+              print(json.dumps({
+                  "ip": HOST,
+                  "interface": interface,
+                  "commands": applied_commands,
+                  "status": "success"
+              }, indent=4))
+
+          except Exception as exc:
+              try:
+                  if shell:
+                      shell.close()
+                  if ssh:
+                      ssh.close()
+              except Exception:
+                  pass
+
+              print(json.dumps({
+                  "ip": HOST,
+                  "interface": SETTINGS.get("interface", ""),
+                  "status": "failed",
+                  "commands": applied_commands,
+                  "error": str(exc)
+              }, indent=4))
+      no_log: true
+
+    # ==========================================
+    # EXECUTE PYTHON SCRIPT
+    # ==========================================
+
+    - name: Execute Loopback Detection interface set script
+      ansible.builtin.command:
+        argv:
+          - "{{ project_root }}/bin/python3"
+          - "{{ tmp_dir }}/loopback_detection_interface_list_set_exec.py"
+      register: loopback_detection_interface_raw
+      changed_when: false
+      failed_when: false
+
+    # ==========================================
+    # CONVERT JSON RESULT
+    # ==========================================
+
+    - name: Convert Loopback Detection interface result to JSON
+      ansible.builtin.set_fact:
+        loopback_detection_interface_result: "{{ loopback_detection_interface_raw.stdout | from_json }}"
+
+    # ==========================================
+    # DISPLAY RESULT
+    # ==========================================
+
+    - name: Display Loopback Detection interface result
+      ansible.builtin.debug:
+        var: loopback_detection_interface_result
+
+    # ==========================================
+    # SAVE RESULT
+    # ==========================================
+
+    - name: Save Loopback Detection interface result
+      ansible.builtin.copy:
+        dest: "{{ output_dir }}/{{ ansible_host }}_loopback_detection_interface_list_set.yml"
+        content: |
+          {{ loopback_detection_interface_result | to_nice_yaml }}
+
+    # ==========================================
+    # FAIL IF COMMAND FAILED
+    # ==========================================
+
+    - name: Fail if Loopback Detection interface config failed
+      ansible.builtin.fail:
+        msg: "{{ loopback_detection_interface_result.error }}"
+      when: loopback_detection_interface_result.status == "failed"
+
+    # ==========================================
+    # FINAL MESSAGE
+    # ==========================================
+
+    - name: Display result file
+      ansible.builtin.debug:
+        msg: >
+          Loopback Detection interface configuration completed on {{ ansible_host }}.
+          Result saved to
+          output/{{ ansible_host }}_loopback_detection_interface_list_set.yml

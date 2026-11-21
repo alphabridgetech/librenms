@@ -1,0 +1,237 @@
+# ==========================================
+# loopback_detection_global_configuration_get.yml
+# Created on Nov 10, 2026 by Vikash Kumar (vikash.kumar@alphabrige.tech).
+#
+# Copyright (c), ALPHA BRIDGE, Inc.
+# 357D, Udyog Vihar Industrial Area Phase VI, Sector 37, Gurugram, Haryana.
+#
+# All rights reserved.
+#
+# This software is the confidential and proprietary information of
+# ALPHA BRIDGE, Inc. ("Confidential Information"). You shall not
+# disclose such Confidential Information and shall use it only in
+# accordance with the terms of the license agreement you entered into
+# with ALPHA BRIDGE.
+#
+# =============================================================================
+# Playbook Name : Loopback Detection Global Configuration Get
+# =============================================================================
+#
+# Description:
+# Reads the global Loopback Detection setting from `show running-config`.
+# If an exact `loopback-detection` line is present, the status is Enable;
+# otherwise, it is Disable. A running-config header is required before parsing.
+#
+# CLI command:
+#   show running-config
+#
+# Example:
+# ansible-playbook -i inventory/192.168.200.241.yml \
+#   playbooks/port_config/loopback_detection_global_configuration_get.yml
+#
+# Output:
+#   output/<switch_ip>_loopback_detection_global_configuration_get.yml
+# =============================================================================
+
+- name: Get loopback detection global configuration
+  hosts: alphabridge_devices
+  gather_facts: false
+
+  vars:
+    project_root: "{{ playbook_dir }}/../.."
+    output_dir: "{{ project_root }}/output"
+    tmp_dir: "{{ project_root }}/tmp"
+
+  pre_tasks:
+    - name: Ensure helper and output directories exist
+      ansible.builtin.file:
+        path: "{{ item }}"
+        state: directory
+        mode: '0755'
+      loop:
+        - "{{ tmp_dir }}"
+        - "{{ output_dir }}"
+
+  tasks:
+    - name: Create loopback detection configuration SSH helper
+      ansible.builtin.copy:
+        dest: "{{ tmp_dir }}/loopback_detection_global_configuration_get_exec.py"
+        mode: '0700'
+        content: |
+          #!/usr/bin/env python3
+
+          import json
+          import re
+          import time
+          import paramiko
+
+          HOST = {{ ansible_host | to_json }}
+          PORT = int({{ ansible_port | default(22) | to_json }})
+          USER = {{ ansible_user | to_json }}
+          PASSWORD = {{ ansible_password | to_json }}
+
+          ANSI_RE = re.compile(r'\x1b(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])')
+          PROMPT_RE = re.compile(r'[>#]\s*\Z')
+          CLI_ERROR_RE = re.compile(
+              r'(?im)^\s*%\s*(?:invalid|error|incomplete|ambiguous|'
+              r'unknown|unrecognized)\b|'
+              r'\b(?:invalid input|unknown command|incomplete command|'
+              r'command rejected|fail with ret\s*-?\d+)\b'
+          )
+
+          # 100G switches have no "terminal length 0" and page long output
+          # with " --more-- ", so press space at every page break.
+          PAGER_RE = re.compile(r'--+\s*more\s*--+', re.IGNORECASE)
+
+          def read_until_prompt(shell, stage, timeout=30):
+              """Read the complete switch response or fail on timeout."""
+              output = ""
+              pager_count = 0
+              deadline = time.monotonic() + timeout
+              while time.monotonic() < deadline:
+                  if shell.recv_ready():
+                      output += shell.recv(65535).decode(errors="replace")
+                      clean = ANSI_RE.sub("", output).replace("\r", "")
+                      pagers = len(PAGER_RE.findall(clean))
+                      if pagers > pager_count:
+                          shell.send(" ")
+                          pager_count = pagers
+                          deadline = time.monotonic() + timeout
+                          continue
+                      if PROMPT_RE.search(clean.rstrip()):
+                          return clean
+                  else:
+                      time.sleep(0.1)
+              raise TimeoutError(f"Timed out waiting for switch prompt during {stage}")
+
+          def run_command(shell, command, timeout=30):
+              """Run a CLI command and reject recognizable switch errors."""
+              shell.send(command + "\n")
+              output = read_until_prompt(shell, command, timeout)
+              if CLI_ERROR_RE.search(output):
+                  raise RuntimeError(f"Switch rejected {command!r}: {output.strip()}")
+              return output
+
+          def parse_loopback_detection_status(running_config):
+              """Map the global loopback-detection command to its GUI status."""
+              clean = ANSI_RE.sub("", running_config).replace("\r", "")
+              # Remove 100G pager leftovers (" --more-- " and its backspaces)
+              clean = re.sub(r'[ \t]*--+\s*more\s*--+[ \t]*', '', clean, flags=re.IGNORECASE)
+              clean = re.sub(r'\x08+[ \t]*\x08*', '', clean)
+              if not any(
+                  line.strip().lower() == "current configuration:"
+                  for line in clean.splitlines()
+              ):
+                  raise ValueError(
+                      "SHOW output did not contain 'Current configuration:'"
+                  )
+
+              for line in clean.splitlines():
+                  if line.strip().casefold() == "loopback-detection":
+                      return "Enable"
+              return "Disable"
+
+          ssh = None
+          shell = None
+          stage = "SSH connection"
+          try:
+              ssh = paramiko.SSHClient()
+              ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+              ssh.connect(
+                  HOST,
+                  port=PORT,
+                  username=USER,
+                  password=PASSWORD,
+                  look_for_keys=False,
+                  allow_agent=False,
+                  timeout=20,
+                  auth_timeout=20,
+                  banner_timeout=20
+              )
+              shell = ssh.invoke_shell()
+              read_until_prompt(shell, "initial SSH prompt", timeout=10)
+
+              stage = "enable mode"
+              run_command(shell, "enable", timeout=10)
+
+              stage = "disable paging"
+              run_command(shell, "terminal length 0", timeout=10)
+
+              stage = "show running-config"
+              running_config = run_command(
+                  shell, "show running-config", timeout=60
+              )
+
+              stage = "parse loopback detection configuration"
+              loopback_detection_status = parse_loopback_detection_status(
+                  running_config
+              )
+              print(json.dumps({
+                  "ip": HOST,
+                  "loopback_detection_status": loopback_detection_status,
+                  "status": "success"
+              }, indent=4))
+
+          except Exception as exc:
+              print(json.dumps({
+                  "ip": HOST,
+                  "status": "failed",
+                  "stage": stage,
+                  "error": str(exc)
+              }))
+
+          finally:
+              if shell is not None:
+                  shell.close()
+              if ssh is not None:
+                  ssh.close()
+      no_log: true
+
+    - name: Execute loopback detection configuration helper
+      ansible.builtin.command:
+        argv:
+          - "{{ project_root }}/bin/python3"
+          - "{{ tmp_dir }}/loopback_detection_global_configuration_get_exec.py"
+      register: loopback_detection_global_configuration_get_raw
+      changed_when: false
+      failed_when: false
+
+    - name: Fail if helper returned no JSON
+      ansible.builtin.fail:
+        msg: >-
+          Loopback detection GET helper returned no JSON.
+          rc={{ loopback_detection_global_configuration_get_raw.rc }};
+          stderr={{ loopback_detection_global_configuration_get_raw.stderr }}
+      when: loopback_detection_global_configuration_get_raw.stdout | trim | length == 0
+
+    - name: Parse loopback detection configuration result
+      ansible.builtin.set_fact:
+        loopback_detection_global_configuration_get_result: >-
+          {{ loopback_detection_global_configuration_get_raw.stdout | from_json }}
+
+    - name: Fail if loopback detection configuration read failed
+      ansible.builtin.fail:
+        msg: >-
+          Loopback detection GET failed during
+          {{ loopback_detection_global_configuration_get_result.stage | default('execution') }}:
+          {{ loopback_detection_global_configuration_get_result.error | default(loopback_detection_global_configuration_get_raw.stderr) }}
+      when: >-
+        loopback_detection_global_configuration_get_result.status != 'success' or
+        loopback_detection_global_configuration_get_raw.rc != 0
+
+    - name: Display loopback detection configuration result
+      ansible.builtin.debug:
+        msg: "{{ loopback_detection_global_configuration_get_result | to_nice_yaml(indent=2, sort_keys=False) }}"
+
+    - name: Save loopback detection configuration result
+      ansible.builtin.copy:
+        dest: >-
+          {{ output_dir }}/{{ ansible_host }}_loopback_detection_global_configuration_get.yml
+        content: >-
+          {{ loopback_detection_global_configuration_get_result | to_nice_yaml(indent=2, sort_keys=False) }}
+
+    - name: Display result path
+      ansible.builtin.debug:
+        msg: >-
+          Loopback detection configuration retrieved successfully.
+          Saved to output/{{ ansible_host }}_loopback_detection_global_configuration_get.yml
