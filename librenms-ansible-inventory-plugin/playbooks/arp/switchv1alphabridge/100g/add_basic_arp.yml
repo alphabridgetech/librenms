@@ -1,0 +1,160 @@
+# =============================================================================
+# File        : switchv1alphabridge/100g/add_basic_arp.yml
+# Feature     : Add static ARP entry (100G switches, e.g. AS300/56/XC)
+#
+# CLI (100G syntax differs from 10G "arp <ip> <mac> vlan <id>"):
+#   config
+#   arp static <ip> <mac> <vlan>
+#   exit
+#   write
+#
+# Extra vars: ip_address, mac_address, interface_vlan
+#
+# Output (same as playbooks/arp/add_basic_arp.yml):
+#   output/<switch_ip>_add_basic_arp.yml   -> status: success | failed, error
+# =============================================================================
+
+- name: Add static ARP entry on 100G switch
+  hosts: alphabridge_devices
+  gather_facts: false
+
+  vars:
+    plugin_dir: "/opt/librenms/librenms-ansible-inventory-plugin"
+    script_path: "{{ plugin_dir }}/tmp/add_basic_arp_100g_{{ ansible_host }}.py"
+    output_file: "{{ plugin_dir }}/output/{{ ansible_host }}_add_basic_arp.yml"
+
+  tasks:
+
+    - name: Validate inputs
+      ansible.builtin.assert:
+        that:
+          - ip_address is defined
+          - ip_address is match('^(\d{1,3}\.){3}\d{1,3}$')
+          - mac_address is defined
+          - mac_address is match('^([0-9A-Fa-f]{2}:){5}[0-9A-Fa-f]{2}$')
+          - interface_vlan is defined
+          - (interface_vlan | int) >= 1 and (interface_vlan | int) <= 4094
+        fail_msg: "ip_address, mac_address (AA:BB:CC:DD:EE:FF) and interface_vlan (1-4094) are required"
+
+    - name: Create Python SSH script for adding static ARP
+      ansible.builtin.copy:
+        dest: "{{ script_path }}"
+        mode: "0755"
+        content: |
+          #!/usr/bin/env python3
+          import re
+          import sys
+          import time
+
+          import paramiko
+          import yaml
+
+          HOST = "{{ ansible_host }}"
+          USER = "{{ ansible_user }}"
+          PASSWORD = "{{ ansible_password }}"
+          OUTPUT_FILE = "{{ output_file }}"
+
+          IP_ADDRESS = "{{ ip_address }}"
+          MAC_ADDRESS = "{{ mac_address | lower }}"
+          VLAN = "{{ interface_vlan | int }}"
+
+          ANSI_RE = re.compile(r'\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])')
+          PROMPT_RE = re.compile(r'[>#]\s*$')
+          CLI_ERROR_RE = re.compile(r'Bad parameter|Unknown command|Incomplete|%\s*err|error|fail', re.IGNORECASE)
+
+
+          def read_until_prompt(shell, timeout=10):
+              buf = ""
+              end = time.time() + timeout
+              while time.time() < end:
+                  if shell.recv_ready():
+                      buf += shell.recv(65535).decode(errors="ignore")
+                      if PROMPT_RE.search(buf):
+                          return buf
+                  else:
+                      time.sleep(0.1)
+              return buf
+
+
+          def run(shell, command, timeout=10):
+              shell.send(command + "\n")
+              return ANSI_RE.sub("", read_until_prompt(shell, timeout)).replace("\r", "")
+
+
+          def save(data):
+              with open(OUTPUT_FILE, "w") as f:
+                  yaml.safe_dump(data, f, default_flow_style=False, sort_keys=False)
+
+
+          ssh = None
+          try:
+              ssh = paramiko.SSHClient()
+              ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+              ssh.connect(HOST, username=USER, password=PASSWORD,
+                          look_for_keys=False, allow_agent=False, timeout=15)
+
+              shell = ssh.invoke_shell()
+              read_until_prompt(shell, 5)
+              run(shell, "enable", 5)
+
+              config_out = run(shell, "config", 5)
+              if "(config)#" not in config_out:
+                  raise Exception("Could not enter config mode: " + config_out.strip())
+
+              command = f"arp static {IP_ADDRESS} {MAC_ADDRESS} {VLAN}"
+              add_out = run(shell, command)
+              # The echoed command line itself never contains these words
+              result = add_out.replace(command, "")
+              if CLI_ERROR_RE.search(result):
+                  raise Exception(f"Switch rejected '{command}': {result.strip()}")
+
+              run(shell, "exit", 5)
+              run(shell, "write", 30)
+
+              # Confirm the entry is now in the ARP table (the switch applies
+              # it a moment after the command returns, so poll a few times)
+              found = None
+              for _ in range(10):
+                  show_out = run(shell, "show arp", 15)
+                  found = re.search(
+                      rf'^\s*{re.escape(IP_ADDRESS)}\s+{re.escape(MAC_ADDRESS)}\s+v{VLAN}\(',
+                      show_out, re.IGNORECASE | re.MULTILINE)
+                  if found:
+                      break
+                  time.sleep(1)
+              ssh.close()
+
+              if not found:
+                  raise Exception(f"Entry {IP_ADDRESS} {MAC_ADDRESS} vlan {VLAN} not found in 'show arp' after adding")
+
+              save({"ip": HOST, "ip_address": IP_ADDRESS, "mac_address": MAC_ADDRESS,
+                    "interface_vlan": int(VLAN), "command": command, "status": "success"})
+              print("SUCCESS:", command)
+
+          except Exception as e:
+              try:
+                  if ssh:
+                      ssh.close()
+              except Exception:
+                  pass
+              save({"ip": HOST, "ip_address": IP_ADDRESS, "status": "failed", "error": str(e)})
+              print("ERROR:", e)
+              sys.exit(1)
+      delegate_to: localhost
+
+    - name: Run add ARP script
+      ansible.builtin.command:
+        cmd: "{{ plugin_dir }}/bin/python3 {{ script_path }}"
+      register: arp_run
+      changed_when: arp_run.rc == 0
+      failed_when: false
+      delegate_to: localhost
+
+    - name: Show result
+      ansible.builtin.debug:
+        msg: "{{ arp_run.stdout_lines + arp_run.stderr_lines }}"
+
+    - name: Fail if add failed
+      ansible.builtin.fail:
+        msg: "{{ arp_run.stdout }}"
+      when: arp_run.rc != 0

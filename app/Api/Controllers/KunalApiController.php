@@ -3777,7 +3777,12 @@ public function getvlan($hostname)
     #------------------------------------------------------------
     public function showbasicarp($hostname)
     {
-        $playbook = "{$this->pluginPath}/playbooks/arp/show_basic_arp.yml";
+        // 100G switches use arp/switchv1alphabridge/100g/getarpinfo.yml, which
+        // writes the same output file; others use the common show_basic_arp.yml.
+        $playbook = $this->devicePlaybook('arp/getarpinfo.yml', $hostname);
+        if (!is_file($playbook)) {
+            $playbook = $this->devicePlaybook('arp/show_basic_arp.yml', $hostname);
+        }
         $hosts    = "{$this->pluginPath}/hosts/{$hostname}.yml";
         $yamlFile = "{$this->pluginPath}/output/{$hostname}_show_basic_arp.yml";
 
@@ -3840,6 +3845,51 @@ public function getvlan($hostname)
         shell_exec($cmd);
     }
 
+    /**
+     * Apply a successful add/edit/delete to the cached ARP table
+     * (output/<host>_show_basic_arp.yml) so the table shows the change at once;
+     * the background refresh in showbasicarp() then re-syncs it with the switch.
+     */
+    private function updateArpCache(string $hostname, string $op, array $data): void
+    {
+        $file = "{$this->pluginPath}/output/{$hostname}_show_basic_arp.yml";
+        if (!is_file($file)) {
+            return;
+        }
+
+        $cache = yaml_parse_file($file);
+        if (!is_array($cache)) {
+            return;
+        }
+
+        $ip = $data['ip_address'];
+        $vlan = (string) $data['interface_vlan'];
+        $entries = is_array($cache['arp_entries'] ?? null) ? $cache['arp_entries'] : [];
+
+        $entries = array_values(array_filter($entries, function ($e) use ($op, $ip, $vlan) {
+            if (($e['IP Address'] ?? null) !== $ip) {
+                return true;
+            }
+            // delete removes only the entry on that VLAN; add/edit replace the IP
+            return $op === 'delete' && (string) ($e['Interface VLAN'] ?? '') !== $vlan;
+        }));
+
+        if ($op !== 'delete') {
+            $entries[] = [
+                'IP Address' => $ip,
+                'MAC Address' => strtolower($data['mac_address']),
+                'Interface VLAN' => (int) $vlan,
+                'Port' => '',
+                'Type' => 'Static',
+                'Age' => '-',
+            ];
+        }
+
+        $cache['arp_entries'] = $entries;
+        $cache['status'] = 'success';
+        @file_put_contents($file, yaml_emit($cache));
+    }
+
     #------------------------------------------------------------
     #                    ADD STATIC ARP ENTRY
     #------------------------------------------------------------
@@ -3851,7 +3901,7 @@ public function getvlan($hostname)
             'interface_vlan' => 'required|integer|min:1|max:4094',
         ]);
 
-        $playbook = "{$this->pluginPath}/playbooks/arp/add_basic_arp.yml";
+        $playbook = $this->devicePlaybook('arp/add_basic_arp.yml', $hostname);
         $hosts    = "{$this->pluginPath}/hosts/{$hostname}.yml";
 
         $ansibleOutput = $this->runAnsible($playbook, $hosts, [
@@ -3870,6 +3920,8 @@ public function getvlan($hostname)
             return $this->error($result['error'] ?? 'Failed to add ARP entry', $result);
         }
 
+        $this->updateArpCache($hostname, 'add', $data);
+
         return $this->success([
             "message" => "Static ARP entry {$data['ip_address']} -> {$data['mac_address']} added on VLAN {$data['interface_vlan']}",
             "raw"     => $result,
@@ -3887,7 +3939,7 @@ public function getvlan($hostname)
             'interface_vlan' => 'required|integer|min:1|max:4094',
         ]);
 
-        $playbook = "{$this->pluginPath}/playbooks/arp/edit_basic_arp.yml";
+        $playbook = $this->devicePlaybook('arp/edit_basic_arp.yml', $hostname);
         $hosts    = "{$this->pluginPath}/hosts/{$hostname}.yml";
 
         $ansibleOutput = $this->runAnsible($playbook, $hosts, [
@@ -3906,6 +3958,8 @@ public function getvlan($hostname)
             return $this->error($result['error'] ?? 'Failed to edit ARP entry', $result);
         }
 
+        $this->updateArpCache($hostname, 'edit', $data);
+
         return $this->success([
             "message" => "Static ARP entry for {$data['ip_address']} updated to {$data['mac_address']} on VLAN {$data['interface_vlan']}",
             "raw"     => $result,
@@ -3922,7 +3976,7 @@ public function getvlan($hostname)
             'interface_vlan' => 'required|min:1|max:4094',
         ]);
 
-        $playbook = "{$this->pluginPath}/playbooks/arp/delete_basic_arp.yml";
+        $playbook = $this->devicePlaybook('arp/delete_basic_arp.yml', $hostname);
         $hosts    = "{$this->pluginPath}/hosts/{$hostname}.yml";
 
         $ansibleOutput = $this->runAnsible($playbook, $hosts, [
@@ -3939,6 +3993,8 @@ public function getvlan($hostname)
         if (($result['status'] ?? null) !== 'success') {
             return $this->error($result['error'] ?? 'Failed to delete ARP entry', $result);
         }
+
+        $this->updateArpCache($hostname, 'delete', $data);
 
         return $this->success([
             "message" => "Static ARP entry {$data['ip_address']} removed from VLAN {$data['interface_vlan']}",

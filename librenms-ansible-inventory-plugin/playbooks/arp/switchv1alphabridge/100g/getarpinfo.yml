@@ -1,0 +1,154 @@
+# =============================================================================
+# File        : switchv1alphabridge/100g/getarpinfo.yml
+# Feature     : Show ARP table (100G switches, e.g. AS300/56/XC)
+#
+# CLI:
+#   show arp
+#
+#   ARP total num:4
+#   Address         Hardware Address  Interface                  Age
+#   192.168.200.10  00:11:22:33:44:54 v79(null)                  -
+#   192.168.200.1   78:18:ec:d9:6c:77 v200(tg0/0/25)             9
+#
+#   v<vlan>(null)   -> static entry
+#   v<vlan>(<port>) -> dynamic entry learned on <port>
+#
+# Output (same file and format as playbooks/arp/show_basic_arp.yml, read by
+# KunalApiController::showbasicarp):
+#   output/<switch_ip>_show_basic_arp.yml
+#
+#   ip: <switch_ip>
+#   arp_entries:
+#     - IP Address: 192.168.200.10
+#       MAC Address: 00:11:22:33:44:54
+#       Interface VLAN: 79
+#       Port: ''
+#       Type: Static
+#       Age: '-'
+#   status: success | failed
+#   error: <message>          (only when failed)
+# =============================================================================
+
+- name: Show ARP table on 100G switch
+  hosts: alphabridge_devices
+  gather_facts: false
+
+  vars:
+    plugin_dir: "/opt/librenms/librenms-ansible-inventory-plugin"
+    script_path: "{{ plugin_dir }}/tmp/show_basic_arp_100g_{{ ansible_host }}.py"
+    output_file: "{{ plugin_dir }}/output/{{ ansible_host }}_show_basic_arp.yml"
+
+  tasks:
+
+    - name: Create Python SSH script for show arp
+      ansible.builtin.copy:
+        dest: "{{ script_path }}"
+        mode: "0755"
+        content: |
+          #!/usr/bin/env python3
+          import re
+          import sys
+          import time
+
+          import paramiko
+          import yaml
+
+          HOST = "{{ ansible_host }}"
+          USER = "{{ ansible_user }}"
+          PASSWORD = "{{ ansible_password }}"
+          OUTPUT_FILE = "{{ output_file }}"
+
+          ANSI_RE = re.compile(r'\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])')
+          PROMPT_RE = re.compile(r'[>#]\s*$')
+          # 192.168.200.1   78:18:ec:d9:6c:77 v200(tg0/0/25)   9
+          ENTRY_RE = re.compile(
+              r'^\s*(\d{1,3}(?:\.\d{1,3}){3})\s+'
+              r'([0-9A-Fa-f]{2}(?::[0-9A-Fa-f]{2}){5})\s+'
+              r'v(\d+)\(([^)]*)\)'
+              r'(?:\s+(\S+))?'
+          )
+
+
+          def read_until_prompt(shell, timeout=10):
+              buf = ""
+              end = time.time() + timeout
+              while time.time() < end:
+                  if shell.recv_ready():
+                      buf += shell.recv(65535).decode(errors="ignore")
+                      if PROMPT_RE.search(buf):
+                          return buf
+                  else:
+                      time.sleep(0.1)
+              return buf
+
+
+          def save(data):
+              with open(OUTPUT_FILE, "w") as f:
+                  yaml.safe_dump(data, f, default_flow_style=False, sort_keys=False)
+
+
+          ssh = None
+          try:
+              ssh = paramiko.SSHClient()
+              ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+              ssh.connect(HOST, username=USER, password=PASSWORD,
+                          look_for_keys=False, allow_agent=False, timeout=15)
+
+              shell = ssh.invoke_shell()
+              read_until_prompt(shell, 5)
+
+              shell.send("enable\n")
+              read_until_prompt(shell, 5)
+
+              shell.send("show arp\n")
+              output = ANSI_RE.sub("", read_until_prompt(shell, 15)).replace("\r", "")
+
+              shell.send("exit\n")
+              ssh.close()
+
+              entries = []
+              for line in output.splitlines():
+                  m = ENTRY_RE.match(line)
+                  if not m:
+                      continue
+                  port = m.group(4).strip()
+                  is_static = port.lower() in ("null", "")
+                  entries.append({
+                      "IP Address": m.group(1),
+                      "MAC Address": m.group(2).lower(),
+                      "Interface VLAN": int(m.group(3)),
+                      "Port": "" if is_static else port,
+                      "Type": "Static" if is_static else "Dynamic",
+                      "Age": m.group(5) or "-",
+                  })
+
+              save({"ip": HOST, "arp_entries": entries, "status": "success"})
+              print("ARP entries:", len(entries))
+
+          except Exception as e:
+              try:
+                  if ssh:
+                      ssh.close()
+              except Exception:
+                  pass
+              save({"ip": HOST, "arp_entries": [], "status": "failed", "error": str(e)})
+              print("ERROR:", e)
+              sys.exit(1)
+      delegate_to: localhost
+
+    - name: Run show arp script
+      ansible.builtin.command:
+        cmd: "{{ plugin_dir }}/bin/python3 {{ script_path }}"
+      register: arp_run
+      changed_when: false
+      failed_when: false
+      delegate_to: localhost
+
+    - name: Show result
+      ansible.builtin.debug:
+        msg: "{{ arp_run.stdout_lines + arp_run.stderr_lines }}"
+
+    - name: Fail if show arp failed
+      ansible.builtin.fail:
+        msg: "show arp failed on {{ ansible_host }}: {{ arp_run.stdout }}"
+      when: arp_run.rc != 0
