@@ -57,7 +57,7 @@
         </div>
     </div>
     <div class="panel-footer">
-        Help: ports are taken directly from Telequill (every GigaEthernet/TGigaEthernet port on this device, regardless of VLAN). Enable requires a Speed Unit and Speed - 64kbps accepts 1-15625, Percent accepts 1-100.
+        Help: ports are taken directly from Telequill (every GigaEthernet/TGigaEthernet port, or tg/cg port on 100G switches, regardless of VLAN). Enable requires a Speed Unit and Speed - 64kbps accepts 1-<span class="rl-max-64kbps">15625</span>, Percent accepts 1-100.
     </div>
 </div>
 
@@ -147,6 +147,8 @@
 <script>
     const RL_DEVICE_IP = "{{ $device->hostname }}";
     const RL_API_TOKEN = "{{ $data['api_token'] }}";
+    // Highest 64kbps value - updated from the API (156250 on 100G switches)
+    let RL_MAX_64KBPS = 15625;
 
     function rlShowError(msg) {
         const el = document.getElementById('rl_edit_error');
@@ -214,6 +216,12 @@
                     return [];
                 }
 
+                // 64kbps maximum: 15625 on 10G switches, 156250 on 100G
+                if (json.max_64kbps) {
+                    RL_MAX_64KBPS = json.max_64kbps;
+                    $('.rl-max-64kbps').text(RL_MAX_64KBPS);
+                }
+
                 const ports = json.ports || [];
                 const entries = json.entries || {};
 
@@ -251,7 +259,7 @@
         order: [[0, "asc"]],
         lengthMenu: [10, 25, 50, 100],
         language: {
-            emptyTable: "No GigaEthernet/TGigaEthernet ports found for this device"
+            emptyTable: "No rate-limit ports found for this device"
         }
     });
 
@@ -277,8 +285,8 @@
             help.innerText = 'Percent: 1-100';
         } else {
             speedInput.min = 1;
-            speedInput.max = 15625;
-            help.innerText = '64kbps: 1-15625';
+            speedInput.max = RL_MAX_64KBPS;
+            help.innerText = '64kbps: 1-' + RL_MAX_64KBPS;
         }
     }
 

@@ -1,0 +1,383 @@
+# ==========================================
+# multicast_storm_control_configuration_set.yml
+# Created on Nov 16, 2026 by Vikash Kumar (vikash.kumar@alphabrige.tech).
+#
+# Copyright (c), ALPHA BRIDGE, Inc.
+# 357D, Udyog Vihar Industrial Area Phase VI, Sector 37, Gurugram, Haryana.
+#
+# All rights reserved.
+#
+# This software is the confidential and proprietary information of
+# ALPHA BRIDGE, Inc. ("Confidential Information"). You shall not
+# disclose such Confidential Information and shall use it only in
+# accordance with the terms of the license agreement you entered into
+# with ALPHA BRIDGE.
+#
+# =============================================================================
+# Playbook Name : Set Multicast Storm Control Configuration
+# =============================================================================
+#
+# Description:
+# Sets Multicast Storm Control thresholds on one or more switch interfaces.
+# Interface names are passed to the switch as supplied, without alias
+# conversion. Thresholds are required and must be between 1 and 1048575 pps.
+#
+# Single-interface example:
+# ansible-playbook -i inventory/192.168.200.241.yml \
+#   playbooks/port_config/Strom_Control/multicast_storm_control_configuration_set.yml \
+#   -e "interface=GigaEthernet0/1 threshold=200"
+#
+# Multiple-interface example:
+# ansible-playbook -i inventory/192.168.200.241.yml \
+#   playbooks/port_config/Strom_Control/multicast_storm_control_configuration_set.yml \
+#   -e '{"profiles":[{"interface":"GigaEthernet0/1","threshold":400},{"interface":"g0/3","threshold":500},{"interface":"g0/7","threshold":600}]}'
+#
+# Accepted interface examples include GigaEthernet0/1, g0/1, and giga0/1.
+#
+# Output:
+#   output/<switch_ip>_multicast_storm_control_configuration_set.yml
+# =============================================================================
+
+- name: Set Multicast Storm Control configuration
+  hosts: alphabridge_devices
+  gather_facts: false
+
+  vars:
+    # Resolve paths from this checkout, including the Jenkins workspace.
+    # This file lives in playbooks/strom_control/, so the plugin root is two
+    # levels up.
+    project_root: "{{ playbook_dir }}/../.."
+    output_dir: "{{ project_root }}/output"
+    tmp_dir: "{{ project_root }}/tmp"
+
+  pre_tasks:
+    # ==========================================
+    # VALIDATE INPUT MODE AND THRESHOLD
+    # ==========================================
+
+    - name: Validate Multicast Storm Control input
+      ansible.builtin.assert:
+        that:
+          - >
+            (profiles is defined and profiles is sequence and
+             profiles is not string and profiles is not mapping and
+             profiles | length > 0)
+            or
+            (interface is defined and interface | string | trim | length > 0 and
+             threshold is defined and threshold | string | trim | length > 0)
+        fail_msg: >-
+          Provide either interface and a non-blank threshold, or a non-empty
+          profiles list containing interface and threshold for every profile.
+
+    - name: Validate single Multicast Storm Control threshold range
+      ansible.builtin.assert:
+        that:
+          - >
+            (threshold | string | trim | lower in ['disable', '0'])
+            or
+            (threshold | string | trim is match('^[0-9]+$') and
+             (threshold | int) >= 1 and (threshold | int) <= 1048575)
+        fail_msg: "threshold must be an integer from 1 to 1048575 pps, or Disable."
+      when: profiles is not defined
+
+    # ==========================================
+    # NORMALIZE SINGLE / MULTIPLE INPUT
+    # ==========================================
+
+    - name: Build normalized Multicast Storm Control profile list
+      ansible.builtin.set_fact:
+        multicast_storm_control_profiles: >-
+          {{
+            profiles
+            if (profiles is defined)
+            else
+            [{'interface': interface | default(''), 'threshold': threshold | default('')}]
+          }}
+
+    - name: Ensure script and output directories exist
+      ansible.builtin.file:
+        path: "{{ item }}"
+        state: directory
+        mode: '0755'
+      loop:
+        - "{{ tmp_dir }}"
+        - "{{ output_dir }}"
+
+  tasks:
+    # ==========================================
+    # CREATE PYTHON SSH SCRIPT
+    # ==========================================
+
+    - name: Create Python SSH script for Multicast Storm Control set
+      ansible.builtin.copy:
+        dest: "{{ tmp_dir }}/multicast_storm_control_configuration_set_exec_{{ ansible_host }}.py"
+        mode: '0755'
+        content: |
+          #!/usr/bin/env python3
+
+          import json
+          import paramiko
+          import re
+          import time
+
+          HOST = {{ ansible_host | to_json }}
+          PORT = int({{ ansible_port | default(22) | to_json }})
+          USER = {{ ansible_user | to_json }}
+          PASSWORD = {{ ansible_password | to_json }}
+          PROFILES = json.loads(r'''{{ multicast_storm_control_profiles | to_json }}''')
+
+
+          # --------------------------------------------------------------
+          # Read CLI output until the switch prompt returns.
+          # --------------------------------------------------------------
+          def read_until_prompt(shell, prompt_regex=r'[>#]\s*$', timeout=10):
+              output = ""
+              deadline = time.monotonic() + timeout
+
+              while time.monotonic() < deadline:
+                  if shell.recv_ready():
+                      output += shell.recv(65535).decode(errors="ignore")
+                      if re.search(prompt_regex, output):
+                          return output
+                  else:
+                      time.sleep(0.1)
+
+              return output
+
+
+          # --------------------------------------------------------------
+          # Remove terminal ANSI escape characters before checking output.
+          # --------------------------------------------------------------
+          def clean_cli_output(text):
+              ansi_re = re.compile(r'\x1b(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])')
+              return ansi_re.sub("", text).replace("\r", "")
+
+
+          # --------------------------------------------------------------
+          # Preserve the interface name exactly as supplied by the user.
+          # --------------------------------------------------------------
+          def get_interface_input(interface_name):
+              if interface_name is None:
+                  raise ValueError("interface is required.")
+
+              interface_name = str(interface_name).strip()
+              if not interface_name:
+                  raise ValueError("interface is required.")
+              if "\n" in interface_name or "\r" in interface_name:
+                  raise ValueError("interface must contain a single interface name.")
+
+              return interface_name
+
+
+          # --------------------------------------------------------------
+          # Validate a threshold before any switch commands are sent.
+          # --------------------------------------------------------------
+          def normalize_threshold(value, profile_index):
+              if value is None or str(value).strip() == "":
+                  raise ValueError(
+                      f"profiles[{profile_index}].threshold must not be blank."
+                  )
+
+              text = str(value).strip()
+              # Disable / 0 removes storm control from the port
+              if text.lower() in ("disable", "0"):
+                  return None
+              if not re.fullmatch(r"\d+", text):
+                  raise ValueError(
+                      f"profiles[{profile_index}].threshold must be an integer."
+                  )
+
+              threshold_value = int(text)
+              if not 1 <= threshold_value <= 1048575:
+                  raise ValueError(
+                      f"profiles[{profile_index}].threshold must be from 1 to 1048575 pps."
+                  )
+
+              return threshold_value
+
+
+          # --------------------------------------------------------------
+          # Normalize each profile into interface and threshold commands.
+          # --------------------------------------------------------------
+          def normalize_profile(profile, index):
+              if not isinstance(profile, dict):
+                  raise ValueError(f"profiles[{index}] must be a dictionary.")
+
+              interface_name = get_interface_input(profile.get("interface"))
+              threshold_value = normalize_threshold(profile.get("threshold"), index)
+
+              return {
+                  "interface": interface_name,
+                  "commands": [
+                      f"interface {interface_name}",
+                      (f"storm-control multicast threshold {threshold_value}"
+                       if threshold_value is not None
+                       else "no storm-control multicast threshold"),
+                      "exit"
+                  ]
+              }
+
+
+          # --------------------------------------------------------------
+          # Validate every profile before connecting, then configure ports.
+          # --------------------------------------------------------------
+          shell = None
+          ssh = None
+
+          try:
+              if not isinstance(PROFILES, list) or not PROFILES:
+                  raise ValueError("profiles must be a non-empty list.")
+
+              normalized_profiles = [
+                  normalize_profile(profile, index)
+                  for index, profile in enumerate(PROFILES)
+              ]
+
+              ssh = paramiko.SSHClient()
+              ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+              ssh.connect(
+                  HOST,
+                  port=PORT,
+                  username=USER,
+                  password=PASSWORD,
+                  look_for_keys=False,
+                  allow_agent=False,
+                  timeout=10
+              )
+
+              # Open an interactive shell because interface commands require
+              # global configuration mode.
+              shell = ssh.invoke_shell()
+              time.sleep(0.5)
+              read_until_prompt(shell, timeout=5)
+
+              shell.send("enable\n")
+              read_until_prompt(shell, timeout=5)
+
+              shell.send("config\n")
+              config_output = clean_cli_output(read_until_prompt(shell, timeout=5))
+              # "<name>_config#" on 10G, "<name>(config)#" on 100G
+              if not re.search(r'(_config|\(config\))#\s*$', config_output):
+                  raise RuntimeError("Could not enter config mode: " + config_output.strip())
+
+              for profile in normalized_profiles:
+                  for command in profile["commands"]:
+                      shell.send(command + "\n")
+                      output = clean_cli_output(
+                          read_until_prompt(shell, timeout=10)
+                      )
+
+                      error_patterns = [
+                          r'Bad parameter',
+                          r'Too many parameters',
+                          r'Command incomplete',
+                          r'%\s*Invalid input',
+                          r'%\s*Incomplete command',
+                          r'%\s*Ambiguous command',
+                          r'%\s*Error',
+                          r'Command rejected',
+                          r'Unknown command'
+                      ]
+                      failed = any(
+                          re.search(pattern, output, re.IGNORECASE)
+                          for pattern in error_patterns
+                      )
+                      if failed:
+                          raise RuntimeError(
+                              f"Command failed on {profile['interface']}: {command}"
+                          )
+
+              # Return from global configuration mode after all profiles.
+              shell.send("exit\n")
+              read_until_prompt(shell, timeout=5)
+
+              # Save, so the change survives a reboot
+              shell.send("write\n")
+              write_output = clean_cli_output(read_until_prompt(shell, timeout=30))
+              if re.search(r'error|fail|Bad parameter', write_output.replace("write", "", 1), re.IGNORECASE):
+                  raise RuntimeError("write (save config) failed: " + write_output.strip())
+
+              shell.close()
+              ssh.close()
+              shell = None
+              ssh = None
+
+              print(json.dumps({
+                  "ip": HOST,
+                  "status": "success"
+              }, indent=4))
+
+          except Exception as exc:
+              try:
+                  if shell:
+                      shell.close()
+                  if ssh:
+                      ssh.close()
+              except Exception:
+                  pass
+
+              print(json.dumps({
+                  "ip": HOST,
+                  "status": "failed",
+                  "error": str(exc)
+              }, indent=4))
+      no_log: true
+
+    # ==========================================
+    # EXECUTE PYTHON SCRIPT
+    # ==========================================
+
+    - name: Execute Multicast Storm Control configuration set script
+      ansible.builtin.command:
+        argv:
+          - "{{ project_root }}/bin/python3"   # plugin venv (has paramiko)
+          - "{{ tmp_dir }}/multicast_storm_control_configuration_set_exec_{{ ansible_host }}.py"
+      register: multicast_storm_control_raw
+      changed_when: false
+      failed_when: false
+
+    # ==========================================
+    # CONVERT JSON RESULT
+    # ==========================================
+
+    - name: Convert Multicast Storm Control result to JSON
+      ansible.builtin.set_fact:
+        multicast_storm_control_result: "{{ multicast_storm_control_raw.stdout | from_json }}"
+
+    # ==========================================
+    # DISPLAY RESULT
+    # ==========================================
+
+    - name: Display Multicast Storm Control result
+      ansible.builtin.debug:
+        var: multicast_storm_control_result
+
+    # ==========================================
+    # SAVE RESULT
+    # ==========================================
+
+    - name: Save Multicast Storm Control result
+      ansible.builtin.copy:
+        dest: "{{ output_dir }}/{{ ansible_host }}_multicast_storm_control_configuration_set.yml"
+        content: |
+          {{ multicast_storm_control_result | to_nice_yaml }}
+
+    # ==========================================
+    # FAIL IF COMMAND FAILED
+    # ==========================================
+
+    - name: Fail if Multicast Storm Control configuration set failed
+      ansible.builtin.fail:
+        msg: "{{ multicast_storm_control_result.error }}"
+      when: multicast_storm_control_result.status == "failed"
+
+    # ==========================================
+    # FINAL MESSAGE
+    # ==========================================
+
+    - name: Display result file
+      ansible.builtin.debug:
+        msg: >
+          Multicast Storm Control configuration applied on {{ ansible_host }}.
+          Result saved to
+          output/{{ ansible_host }}_multicast_storm_control_configuration_set.yml

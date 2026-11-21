@@ -1,0 +1,188 @@
+# =============================================================================
+# File        : rate_limit/switchv1alphabridge/100g/set_rate_limit.yml
+# Feature     : Set port rate limit (100G switches, e.g. AS300/56/XC)
+#
+# Same inputs as rate_limit/set_rate_limit.yml. Differences on 100G:
+#   - ports are tg0/0/N / cg0/0/N
+#   - 64kbps unit accepts 1-156250 (10G: 1-15625)
+#   - config prompt is "<name>(config-tg0/0/1)#"
+#
+# CLI (Receive = ingress, Send = egress):
+#   config
+#   interface <port>
+#   switchport rate-limit <1-156250> ingress|egress          (64kbps)
+#   switchport rate-limit bandwidth <1-100> ingress|egress   (Percent)
+#   no switchport rate-limit ingress|egress                  (Disable)
+#   exit
+#   exit
+#   write
+#
+# Extra vars: interface, receive_status, receive_speed_unit, receive_speed,
+#             send_status, send_speed_unit, send_speed
+#             (status Enable | Disable, unit 64kbps | Percent)
+#
+# Output:
+#   output/<switch_ip>_set_rate_limit.yml   -> status: success | failed
+# =============================================================================
+
+- name: Set rate limit (100G)
+  hosts: alphabridge_devices
+  gather_facts: false
+
+  vars:
+    plugin_dir: "/opt/librenms/librenms-ansible-inventory-plugin"
+    script_path: "{{ plugin_dir }}/tmp/set_rate_limit_100g_{{ ansible_host }}.py"
+    output_file: "{{ plugin_dir }}/output/{{ ansible_host }}_set_rate_limit.yml"
+    settings:
+      interface: "{{ interface | default('') }}"
+      receive_status: "{{ receive_status | default('') }}"
+      receive_speed_unit: "{{ receive_speed_unit | default('') }}"
+      receive_speed: "{{ receive_speed | default('') }}"
+      send_status: "{{ send_status | default('') }}"
+      send_speed_unit: "{{ send_speed_unit | default('') }}"
+      send_speed: "{{ send_speed | default('') }}"
+
+  tasks:
+
+    - name: Validate interface
+      ansible.builtin.assert:
+        that:
+          - interface is defined
+          - interface | string | lower is match('^(tg|cg)\d+/\d+/\d+$')
+        fail_msg: "interface must be a 100G switch port such as tg0/0/1 or cg0/0/1"
+
+    - name: Create Python SSH script
+      ansible.builtin.copy:
+        dest: "{{ script_path }}"
+        mode: "0755"
+        content: |
+          #!/usr/bin/env python3
+          import json
+          import re
+          import sys
+          import time
+
+          import paramiko
+          import yaml
+
+          HOST = "{{ ansible_host }}"
+          USER = "{{ ansible_user }}"
+          PASSWORD = "{{ ansible_password }}"
+          OUTPUT_FILE = "{{ output_file }}"
+          SETTINGS = json.loads({{ settings | to_json | to_json }})
+
+          MAX_64KBPS = 156250
+
+          ANSI_RE = re.compile(r'\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])')
+          PROMPT_RE = re.compile(r'[>#]\s*$')
+          CLI_ERROR_RE = re.compile(r'Bad parameter|Unknown command|Incomplete|Too many parameters|%\s*err|error|fail', re.IGNORECASE)
+
+
+          def read_until_prompt(shell, timeout=10):
+              buf = ""
+              end = time.time() + timeout
+              while time.time() < end:
+                  if shell.recv_ready():
+                      buf += shell.recv(65535).decode(errors="ignore")
+                      if PROMPT_RE.search(buf):
+                          return buf
+                  else:
+                      time.sleep(0.1)
+              return buf
+
+
+          def run(shell, command, timeout=10, check=True):
+              shell.send(command + "\n")
+              out = ANSI_RE.sub("", read_until_prompt(shell, timeout)).replace("\r", "")
+              if check and CLI_ERROR_RE.search(out.replace(command, "")):
+                  raise Exception(f"Switch rejected '{command}': {out.replace(command, '').strip()}")
+              return out
+
+
+          def direction_command(label, direction):
+              status = str(SETTINGS.get(f"{label}_status", "")).strip().lower()
+              unit = str(SETTINGS.get(f"{label}_speed_unit", "")).strip().lower()
+              speed = str(SETTINGS.get(f"{label}_speed", "")).strip()
+              if not status:
+                  return None
+              if status == "disable":
+                  return f"no switchport rate-limit {direction}"
+              if status != "enable":
+                  raise ValueError(f"{label}_status must be Enable or Disable")
+              if not speed.isdigit():
+                  raise ValueError(f"{label}_speed is required when {label}_status=Enable")
+              speed = int(speed)
+              if unit in ("percent", "percentage", "%"):
+                  if not 1 <= speed <= 100:
+                      raise ValueError(f"{label}_speed must be 1-100 for Percent")
+                  return f"switchport rate-limit bandwidth {speed} {direction}"
+              if unit in ("64kbps", "64kpbs"):
+                  if not 1 <= speed <= MAX_64KBPS:
+                      raise ValueError(f"{label}_speed must be 1-{MAX_64KBPS} for 64kbps")
+                  return f"switchport rate-limit {speed} {direction}"
+              raise ValueError(f"{label}_speed_unit must be 64kbps or Percent")
+
+
+          def save(data):
+              with open(OUTPUT_FILE, "w") as f:
+                  yaml.safe_dump(data, f, default_flow_style=False, sort_keys=False)
+
+
+          ssh = None
+          interface = str(SETTINGS.get("interface", "")).strip().lower()
+          try:
+              commands = [c for c in (direction_command("receive", "ingress"),
+                                      direction_command("send", "egress")) if c]
+              if not commands:
+                  raise ValueError("Provide receive_status and/or send_status")
+
+              ssh = paramiko.SSHClient()
+              ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+              ssh.connect(HOST, username=USER, password=PASSWORD,
+                          look_for_keys=False, allow_agent=False, timeout=15)
+              shell = ssh.invoke_shell()
+              read_until_prompt(shell, 5)
+              run(shell, "enable", 5, check=False)
+
+              out = run(shell, "config", 5)
+              if "(config)#" not in out:
+                  raise Exception("Could not enter config mode: " + out.strip())
+
+              run(shell, f"interface {interface}")
+              for command in commands:
+                  run(shell, command)
+              run(shell, "exit", 5, check=False)
+              run(shell, "exit", 5, check=False)
+              run(shell, "write", 30, check=False)
+              ssh.close()
+
+              save({"ip": HOST, "interface": interface, "commands": commands, "status": "success"})
+              print("SUCCESS:", interface, commands)
+
+          except Exception as e:
+              try:
+                  if ssh:
+                      ssh.close()
+              except Exception:
+                  pass
+              save({"ip": HOST, "interface": interface, "status": "failed", "error": str(e)})
+              print(json.dumps({"status": "failed", "error": str(e)}))
+              sys.exit(1)
+      delegate_to: localhost
+
+    - name: Run set rate limit script
+      ansible.builtin.command:
+        cmd: "{{ plugin_dir }}/bin/python3 {{ script_path }}"
+      register: run_result
+      changed_when: run_result.rc == 0
+      failed_when: false
+      delegate_to: localhost
+
+    - name: Show result
+      ansible.builtin.debug:
+        msg: "{{ run_result.stdout_lines + run_result.stderr_lines }}"
+
+    - name: Fail if set failed
+      ansible.builtin.fail:
+        msg: "{{ run_result.stdout }}"
+      when: run_result.rc != 0

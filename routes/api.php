@@ -89,6 +89,8 @@ Route::prefix('v0')->group(function () {
         Route::post('portmirror/set/{hostname}', [App\Api\Controllers\KunalApiController::class, 'setportmirror'])->name('portmirror.set');
         Route::get('keepalive/show/{hostname}', [App\Api\Controllers\KunalApiController::class, 'getkeepalive'])->name('keepalive.show');
         Route::post('keepalive/set/{hostname}', [App\Api\Controllers\KunalApiController::class, 'setkeepalive'])->name('keepalive.set');
+        Route::get('stormcontrol/show/{hostname}', [App\Api\Controllers\KunalApiController::class, 'getstormcontrol'])->name('stormcontrol.show');
+        Route::post('stormcontrol/set/{hostname}', [App\Api\Controllers\KunalApiController::class, 'setstormcontrol'])->name('stormcontrol.set');
         Route::get('portfilter/show/{hostname}', [App\Api\Controllers\KunalApiController::class, 'getportfilter'])->name('portfilter.show');
         Route::post('portfilter/global/{hostname}', [App\Api\Controllers\KunalApiController::class, 'setportfilterglobal'])->name('portfilter.global');
         Route::post('portfilter/interface/{hostname}', [App\Api\Controllers\KunalApiController::class, 'setportfilterinterface'])->name('portfilter.interface');

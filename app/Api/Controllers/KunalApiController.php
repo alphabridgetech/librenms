@@ -1103,10 +1103,12 @@ public function getmtu($hostname)
 
         $ports = $this->getEligibleRateLimitPorts($hostname);
         if (empty($ports)) {
-            return $this->error("No GigaEthernet/TGigaEthernet ports found for this device in Telequill");
+            return $this->error($this->rateLimitIs100g($hostname)
+                ? "No tg/cg ports found for this device in Telequill"
+                : "No GigaEthernet/TGigaEthernet ports found for this device in Telequill");
         }
 
-        $playbook = "{$this->pluginPath}/playbooks/rate_limit/rate_limit_details.yml";
+        $playbook = $this->devicePlaybook('rate_limit/rate_limit_details.yml', $hostname);
         $hosts    = "{$this->pluginPath}/hosts/{$hostname}.yml";
         $yamlFile = "{$this->pluginPath}/output/{$hostname}_rate_limit.yml";
         $extraVars = ['interfaces' => implode(',', $ports)];
@@ -1124,6 +1126,7 @@ public function getmtu($hostname)
             return $this->success([
                 "ports"   => $ports,
                 "entries" => $entries,
+                "max_64kbps" => $this->rateLimitMax64kbps($hostname),
                 "cached"  => true,
             ]);
         }
@@ -1141,6 +1144,7 @@ public function getmtu($hostname)
         return $this->success([
             "ports"   => $ports,
             "entries" => $entries,
+            "max_64kbps" => $this->rateLimitMax64kbps($hostname),
             "cached"  => false,
         ]);
     }
@@ -1158,11 +1162,28 @@ public function getmtu($hostname)
             return [];
         }
 
+        // 100G: tg0/0/1, cg0/0/1 (not the g0/0/0 management port)
+        $pattern = $this->rateLimitIs100g($hostname)
+            ? '#^(tg|cg)\d+/\d+/\d+$#i'
+            : '/^(GigaEthernet|TGigaEthernet)/i';
+
         return $device->ports()
             ->pluck('ifName')
-            ->filter(fn ($name) => is_string($name) && preg_match('/^(GigaEthernet|TGigaEthernet)/i', $name))
+            ->filter(fn ($name) => is_string($name) && preg_match($pattern, $name))
             ->values()
             ->all();
+    }
+
+    /** 100G switches use rate_limit/switchv1alphabridge/100g (tg/cg ports, 64kbps up to 156250). */
+    private function rateLimitIs100g(string $hostname): bool
+    {
+        return basename(dirname($this->devicePlaybook('rate_limit/set_rate_limit.yml', $hostname))) === '100g';
+    }
+
+    /** Highest 64kbps value the switch accepts: 15625 on 10G, 156250 on 100G. */
+    private function rateLimitMax64kbps(string $hostname): int
+    {
+        return $this->rateLimitIs100g($hostname) ? 156250 : 15625;
     }
 
     /**
@@ -1205,10 +1226,10 @@ public function getmtu($hostname)
             'interface'          => 'required|string',
             'receive_status'     => 'nullable|in:Enable,Disable',
             'receive_speed_unit' => 'nullable|in:64kbps,Percent',
-            'receive_speed'      => 'nullable|integer|min:1|max:15625',
+            'receive_speed'      => 'nullable|integer|min:1|max:' . $this->rateLimitMax64kbps($hostname),
             'send_status'        => 'nullable|in:Enable,Disable',
             'send_speed_unit'    => 'nullable|in:64kbps,Percent',
-            'send_speed'         => 'nullable|integer|min:1|max:15625',
+            'send_speed'         => 'nullable|integer|min:1|max:' . $this->rateLimitMax64kbps($hostname),
         ]);
 
         if (empty($data['receive_status']) && empty($data['send_status'])) {
@@ -1233,7 +1254,7 @@ public function getmtu($hostname)
             }
         }
 
-        $playbook = "{$this->pluginPath}/playbooks/rate_limit/set_rate_limit.yml";
+        $playbook = $this->devicePlaybook('rate_limit/set_rate_limit.yml', $hostname);
         $hosts    = "{$this->pluginPath}/hosts/{$hostname}.yml";
 
         $extraVars = array_filter([
@@ -1254,7 +1275,7 @@ public function getmtu($hostname)
         $ports = $this->getEligibleRateLimitPorts($hostname);
         if (!empty($ports)) {
             $this->runAnsiblejs(
-                "{$this->pluginPath}/playbooks/rate_limit/rate_limit_details.yml",
+                $this->devicePlaybook('rate_limit/rate_limit_details.yml', $hostname),
                 $hosts,
                 ['interfaces' => implode(',', $ports)]
             );
@@ -1573,6 +1594,154 @@ public function getmtu($hostname)
         ]);
     }
 
+
+    #------------------------------------------------------------
+    #                    STORM CONTROL (SHOW)
+    #------------------------------------------------------------
+    /** Storm type => playbook/output name in playbooks/strom_control/. */
+    private const STORM_TYPES = [
+        'broadcast' => 'broadcast_storm_control_configuration',
+        'multicast' => 'multicast_storm_control_configuration',
+        'unicast'   => 'unknown_unicast_storm_control_configuration',
+    ];
+
+    /**
+     * Per-port broadcast / multicast / unknown-unicast storm control, from the
+     * three strom_control/*_get.yml playbooks (they read the running config;
+     * same commands on 10G and 100G switches).
+     */
+    public function getstormcontrol($hostname)
+    {
+        $hosts = "{$this->pluginPath}/hosts/{$hostname}.yml";
+
+        // Serve the last results straight away and refresh them in the background
+        $cached = [];
+        foreach (self::STORM_TYPES as $type => $name) {
+            $cached[$type] = $this->parseYamlSafely($this->stormFile($hostname, "{$name}_get"));
+        }
+        if (!array_filter($cached, fn ($d) => ($d['status'] ?? null) !== 'success')) {
+            foreach (self::STORM_TYPES as $name) {
+                $this->runAnsibleAsync("{$this->pluginPath}/playbooks/strom_control/{$name}_get.yml", $hosts);
+            }
+
+            return $this->success(["interfaces" => $this->stormRows($cached), "cached" => true]);
+        }
+
+        $output = '';
+        $fresh = [];
+        foreach (self::STORM_TYPES as $type => $name) {
+            $output .= $this->runAnsible("{$this->pluginPath}/playbooks/strom_control/{$name}_get.yml", $hosts);
+            $fresh[$type] = $this->parseYamlSafely($this->stormFile($hostname, "{$name}_get"));
+            if (($fresh[$type]['status'] ?? null) !== 'success') {
+                $reason = $fresh[$type]['error'] ?? $this->extractPortConfigFailureReason($output);
+                return $this->error($reason ?: "Storm control GET failed ({$type})", $output);
+            }
+        }
+
+        return $this->success(["interfaces" => $this->stormRows($fresh), "cached" => false]);
+    }
+
+    private function stormFile(string $hostname, string $name): string
+    {
+        return "{$this->pluginPath}/output/{$hostname}_{$name}.yml";
+    }
+
+    /**
+     * One row per port: {port, broadcast: {status, threshold}, multicast: ..., unicast: ...}.
+     * 100G switches also list their management port (g0/0/0) - left out.
+     */
+    private function stormRows(array $byType): array
+    {
+        $rows = [];
+        foreach ($byType as $type => $data) {
+            foreach ($data['interfaces'] ?? [] as $row) {
+                $port = (string) ($row['port'] ?? '');
+                if ($port === '' || preg_match('#^g\d+/\d+/\d+$#i', $port)) {
+                    continue;
+                }
+                $rows[$port]['port'] = $port;
+                $rows[$port][$type] = [
+                    'status'    => ($row['status'] ?? 'Disable') === 'Enable' ? 'Enable' : 'Disable',
+                    'threshold' => $row['threshold'] === '' || $row['threshold'] === null ? null : (int) $row['threshold'],
+                ];
+            }
+        }
+
+        return array_values($rows);
+    }
+
+    #------------------------------------------------------------
+    #                    STORM CONTROL (SET)
+    #------------------------------------------------------------
+    /**
+     * type: broadcast | multicast | unicast
+     * ports: [{interface, threshold: 1-1048575 | "Disable"}, ...] - applied in
+     * one SSH session by strom_control/<type>_storm_control_configuration_set.yml.
+     */
+    public function setstormcontrol(Request $request, $hostname)
+    {
+        $data = $request->validate([
+            'type'              => 'required|in:broadcast,multicast,unicast',
+            'ports'             => 'required|array|min:1|max:64',
+            // g0/1, tg0/1 (10G) or tg0/0/1, cg0/0/1 (100G)
+            'ports.*.interface' => ['required', 'string', 'regex:#^(g|tg|cg)\d+(/\d+){1,2}$#i'],
+            'ports.*.threshold' => ['required', 'regex:/^(Disable|[1-9]\d{0,6})$/'],
+        ]);
+
+        $profiles = [];
+        foreach ($data['ports'] as $port) {
+            $threshold = $port['threshold'];
+            if ($threshold !== 'Disable' && (int) $threshold > 1048575) {
+                return $this->error("Threshold for {$port['interface']} must be 1-1048575 pps");
+            }
+            $profiles[] = [
+                'interface' => $port['interface'],
+                'threshold' => $threshold === 'Disable' ? 'Disable' : (int) $threshold,
+            ];
+        }
+
+        $name     = self::STORM_TYPES[$data['type']];
+        $playbook = "{$this->pluginPath}/playbooks/strom_control/{$name}_set.yml";
+        $hosts    = "{$this->pluginPath}/hosts/{$hostname}.yml";
+        $yamlFile = $this->stormFile($hostname, "{$name}_set");
+
+        $output = $this->runAnsiblejs($playbook, $hosts, ['profiles' => $profiles]);
+
+        if ($reason = $this->verifyFreshPlaybookOutput($yamlFile, $output)) {
+            return $this->error($reason, $output);
+        }
+        $result = $this->parseYamlSafely($yamlFile);
+        if (($result['status'] ?? null) !== 'success') {
+            return $this->error($result['error'] ?? 'Failed to set storm control', $result);
+        }
+
+        // Update the saved rows so the table shows the change at once
+        $getFile = $this->stormFile($hostname, "{$name}_get");
+        $cached = $this->parseYamlSafely($getFile);
+        if (is_array($cached['interfaces'] ?? null)) {
+            $byPort = [];
+            foreach ($profiles as $profile) {
+                $byPort[strtolower($profile['interface'])] = $profile['threshold'];
+            }
+            foreach ($cached['interfaces'] as &$row) {
+                $key = strtolower((string) ($row['port'] ?? ''));
+                if (!array_key_exists($key, $byPort)) {
+                    continue;
+                }
+                $disable = $byPort[$key] === 'Disable';
+                $row['status'] = $disable ? 'Disable' : 'Enable';
+                $row['threshold'] = $disable ? '' : $byPort[$key];
+            }
+            unset($row);
+            @file_put_contents($getFile, yaml_emit($cached));
+        }
+
+        $label = ['broadcast' => 'Broadcast', 'multicast' => 'Multicast', 'unicast' => 'Unknown unicast'][$data['type']];
+
+        return $this->success([
+            "message" => "{$label} storm control saved on " . count($profiles) . " port(s)",
+        ]);
+    }
 
     #------------------------------------------------------------
     #                    PORT FILTER (SHOW)

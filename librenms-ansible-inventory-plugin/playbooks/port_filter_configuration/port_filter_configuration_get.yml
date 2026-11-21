@@ -56,7 +56,7 @@
 
     - name: Create Python SSH script for Port Filter interface get
       ansible.builtin.copy:
-        dest: "{{ tmp_dir }}/port_filter_configuration_get_exec.py"
+        dest: "{{ tmp_dir }}/port_filter_configuration_get_exec_{{ ansible_host }}.py"
         mode: '0755'
         content: |
           #!/usr/bin/env python3
@@ -287,7 +287,7 @@
       ansible.builtin.command:
         argv:
           - "{{ project_root }}/bin/python3"   # plugin venv (has paramiko)
-          - "{{ tmp_dir }}/port_filter_configuration_get_exec.py"
+          - "{{ tmp_dir }}/port_filter_configuration_get_exec_{{ ansible_host }}.py"
       register: port_filter_configuration_raw
       changed_when: false
       failed_when: false

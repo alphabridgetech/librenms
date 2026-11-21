@@ -1,0 +1,353 @@
+# ==========================================
+# unknown_unicast_storm_control_configuration_get.yml
+# Created on Nov 16, 2026 by Vikash Kumar (vikash.kumar@alphabrige.tech).
+#
+# Copyright (c), ALPHA BRIDGE, Inc.
+# 357D, Udyog Vihar Industrial Area Phase VI, Sector 37, Gurugram, Haryana.
+#
+# All rights reserved.
+#
+# This software is the confidential and proprietary information of
+# ALPHA BRIDGE, Inc. ("Confidential Information"). You shall not
+# disclose such Confidential Information and shall use it only in
+# accordance with the terms of the license agreement you entered into
+# with ALPHA BRIDGE.
+#
+# =============================================================================
+# Playbook Name : Get Unknown Unicast Storm Control Configuration
+# =============================================================================
+#
+# Description:
+# Reads `show running-config`, discovers physical Ethernet interfaces, and
+# reports Unknown Unicast Storm Control status and threshold for each interface.
+# An interface containing `storm-control unicast threshold <value>` is
+# enabled. Interfaces without that command are reported as disabled.
+#
+# CLI command:
+#   show running-config
+#
+# Output:
+#   output/<switch_ip>_unknown_unicast_storm_control_configuration_get.yml
+# =============================================================================
+
+- name: Get Unknown Unicast Storm Control configuration
+  hosts: alphabridge_devices
+  gather_facts: false
+
+  vars:
+    # Resolve paths from this checkout, including the Jenkins workspace.
+    # This file lives in playbooks/strom_control/, so the plugin root is two
+    # levels up.
+    project_root: "{{ playbook_dir }}/../.."
+    output_dir: "{{ project_root }}/output"
+    tmp_dir: "{{ project_root }}/tmp"
+
+  pre_tasks:
+    - name: Ensure script and output directories exist
+      ansible.builtin.file:
+        path: "{{ item }}"
+        state: directory
+        mode: '0755'
+      loop:
+        - "{{ tmp_dir }}"
+        - "{{ output_dir }}"
+
+  tasks:
+    # ==========================================
+    # CREATE PYTHON SSH SCRIPT
+    # ==========================================
+
+    - name: Create Python SSH script for Unknown Unicast Storm Control get
+      ansible.builtin.copy:
+        dest: "{{ tmp_dir }}/unknown_unicast_storm_control_configuration_get_exec_{{ ansible_host }}.py"
+        mode: '0755'
+        content: |
+          #!/usr/bin/env python3
+
+          import json
+          import paramiko
+          import re
+          import time
+
+          HOST = {{ ansible_host | to_json }}
+          PORT = int({{ ansible_port | default(22) | to_json }})
+          USER = {{ ansible_user | to_json }}
+          PASSWORD = {{ ansible_password | to_json }}
+
+          ANSI_RE = re.compile(r'\x1b(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])')
+          PROMPT_RE = re.compile(r'[>#]\s*\Z')
+          PAGER_RE = re.compile(
+              r'--+\s*more\s*--+|----\s*more\s*----|'
+              r'press\s+(?:any\s+key|space)\s+to\s+continue',
+              re.IGNORECASE
+          )
+          CLI_ERROR_RE = re.compile(
+              r'(?im)^\s*%\s*(?:invalid|error|incomplete|ambiguous|'
+              r'unknown|unrecognized)\b|'
+              r'\b(?:invalid input|unknown command|incomplete command|'
+              r'command rejected|fail with ret\s*-?\d+)\b'
+          )
+          # 10G: g0/1, tg0/1 (GigaEthernet0/1 ...); 100G: tg0/0/1, cg0/0/1
+          INTERFACE_RE = re.compile(
+              r'^\s*interface\s+(CGigaEthernet|TGigaEthernet|GigaEthernet|cg|tg|g)(\d+(?:/\d+)+)\s*$',
+              re.IGNORECASE
+          )
+          STORM_CONTROL_RE = re.compile(
+              r'^storm-control\s+unicast\s+threshold\s+(\d+)$',
+              re.IGNORECASE
+          )
+
+
+          # --------------------------------------------------------------
+          # Read CLI output until the switch prompt returns.
+          # --------------------------------------------------------------
+          def read_until_prompt(shell, stage, timeout=60):
+              output = ""
+              deadline = time.monotonic() + timeout
+              pager_count = 0
+
+              while time.monotonic() < deadline:
+                  if shell.recv_ready():
+                      output += shell.recv(65535).decode(errors="ignore")
+                      clean = ANSI_RE.sub("", output).replace("\r", "")
+                      current_pager_count = len(PAGER_RE.findall(clean))
+                      if current_pager_count > pager_count:
+                          shell.send(" ")
+                          pager_count = current_pager_count
+                      if PROMPT_RE.search(clean.rstrip()):
+                          return clean
+                  else:
+                      time.sleep(0.1)
+
+              raise TimeoutError(
+                  f"Timed out waiting for switch prompt during {stage}"
+              )
+
+
+          # --------------------------------------------------------------
+          # Execute one CLI command and reject recognizable errors.
+          # --------------------------------------------------------------
+          def run_command(shell, command, stage, timeout=60):
+              shell.send(command + "\n")
+              output = read_until_prompt(shell, stage, timeout)
+              if CLI_ERROR_RE.search(output):
+                  raise RuntimeError(
+                      f"Switch rejected {command!r}: {output.strip()}"
+                  )
+              return output
+
+
+          # --------------------------------------------------------------
+          # Format switch interface names like the GUI Port column.
+          # --------------------------------------------------------------
+          def normalize_port(prefix, slot_port):
+              if prefix.lower() in ("cgigaethernet", "cg"):
+                  return f"cg{slot_port}"
+              if prefix.lower() in ("tgigaethernet", "tg"):
+                  return f"tg{slot_port}"
+              return f"g{slot_port}"
+
+
+          # --------------------------------------------------------------
+          # Parse Unknown Unicast Storm Control from one interface block.
+          # --------------------------------------------------------------
+          def parse_interface_block(port, lines):
+              status = "Disable"
+              threshold = ""
+
+              for raw_line in lines:
+                  command = raw_line.strip()
+                  match = STORM_CONTROL_RE.fullmatch(command)
+                  if match:
+                      status = "Enable"
+                      threshold = int(match.group(1))
+                  elif re.fullmatch(
+                      r"no\s+storm-control\s+unicast\s+threshold(?:\s+\d+)?",
+                      command,
+                      re.IGNORECASE
+                  ):
+                      status = "Disable"
+                      threshold = ""
+
+              return {
+                  "port": port,
+                  "status": status,
+                  "threshold": threshold
+              }
+
+
+          # --------------------------------------------------------------
+          # Discover physical interfaces and parse their settings.
+          # --------------------------------------------------------------
+          def parse_unknown_unicast_storm_control_configuration(running_config):
+              clean = ANSI_RE.sub("", running_config).replace("\r", "")
+              # Remove 100G pager leftovers (" --more-- " and its backspaces),
+              # which otherwise hide the next "interface ..." line
+              clean = re.sub(r'[ \t]*--+\s*more\s*--+[ \t]*', '', clean, flags=re.IGNORECASE)
+              clean = re.sub(r'\x08+[ \t]*\x08*', '', clean)
+              if not any(
+                  line.strip().lower() == "current configuration:"
+                  for line in clean.splitlines()
+              ):
+                  raise ValueError(
+                      "SHOW output did not contain 'Current configuration:'"
+                  )
+
+              interfaces = []
+              current_port = None
+              current_lines = []
+
+              def save_current():
+                  if current_port is not None:
+                      interfaces.append(
+                          parse_interface_block(current_port, current_lines)
+                      )
+
+              for line in clean.splitlines():
+                  if line.strip().lower() == "current configuration:":
+                      continue
+                  if line.strip().lower().startswith("interface "):
+                      save_current()
+                      match = INTERFACE_RE.match(line)
+                      if match:
+                          prefix, slot_port = match.groups()
+                          current_port = normalize_port(prefix, slot_port)
+                          current_lines = []
+                      else:
+                          current_port = None
+                          current_lines = []
+                      continue
+
+                  if current_port is not None:
+                      if line.strip() == "!":
+                          save_current()
+                          current_port = None
+                          current_lines = []
+                      else:
+                          current_lines.append(line)
+
+              save_current()
+              if not interfaces:
+                  raise ValueError(
+                      "No physical Ethernet interfaces were found in SHOW output"
+                  )
+              return interfaces
+
+
+          shell = None
+          ssh = None
+          stage = "SSH connection"
+
+          try:
+              ssh = paramiko.SSHClient()
+              ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+              ssh.connect(
+                  HOST,
+                  port=PORT,
+                  username=USER,
+                  password=PASSWORD,
+                  look_for_keys=False,
+                  allow_agent=False,
+                  timeout=20,
+                  auth_timeout=20,
+                  banner_timeout=20
+              )
+
+              shell = ssh.invoke_shell()
+              read_until_prompt(shell, "initial SSH prompt", timeout=10)
+
+              stage = "enable mode"
+              run_command(shell, "enable", stage, timeout=10)
+
+              stage = "disable paging"
+              run_command(shell, "terminal length 0", stage, timeout=10)
+
+              stage = "show running-config"
+              running_config = run_command(
+                  shell, "show running-config", stage, timeout=90
+              )
+
+              stage = "parse Unknown Unicast Storm Control configuration"
+              interfaces = parse_unknown_unicast_storm_control_configuration(
+                  running_config
+              )
+
+              print(json.dumps({
+                  "ip": HOST,
+                  "interfaces": interfaces,
+                  "status": "success"
+              }, indent=4))
+
+          except Exception as exc:
+              print(json.dumps({
+                  "ip": HOST,
+                  "status": "failed",
+                  "stage": stage,
+                  "error": str(exc)
+              }, indent=4))
+
+          finally:
+              if shell is not None:
+                  shell.close()
+              if ssh is not None:
+                  ssh.close()
+      no_log: true
+
+    # ==========================================
+    # EXECUTE PYTHON SCRIPT
+    # ==========================================
+
+    - name: Execute Unknown Unicast Storm Control get script
+      ansible.builtin.command:
+        argv:
+          - "{{ project_root }}/bin/python3"   # plugin venv (has paramiko)
+          - "{{ tmp_dir }}/unknown_unicast_storm_control_configuration_get_exec_{{ ansible_host }}.py"
+      register: unknown_unicast_storm_control_raw
+      changed_when: false
+      failed_when: false
+
+    # ==========================================
+    # CONVERT JSON RESULT
+    # ==========================================
+
+    - name: Convert Unknown Unicast Storm Control result to JSON
+      ansible.builtin.set_fact:
+        unknown_unicast_storm_control_result: "{{ unknown_unicast_storm_control_raw.stdout | from_json }}"
+
+    # ==========================================
+    # DISPLAY RESULT
+    # ==========================================
+
+    - name: Display Unknown Unicast Storm Control configuration
+      ansible.builtin.debug:
+        var: unknown_unicast_storm_control_result
+
+    # ==========================================
+    # SAVE RESULT
+    # ==========================================
+
+    - name: Save Unknown Unicast Storm Control configuration
+      ansible.builtin.copy:
+        dest: "{{ output_dir }}/{{ ansible_host }}_unknown_unicast_storm_control_configuration_get.yml"
+        content: |
+          {{ unknown_unicast_storm_control_result | to_nice_yaml }}
+
+    # ==========================================
+    # FAIL IF COMMAND FAILED
+    # ==========================================
+
+    - name: Fail if Unknown Unicast Storm Control get failed
+      ansible.builtin.fail:
+        msg: "{{ unknown_unicast_storm_control_result.error }}"
+      when: unknown_unicast_storm_control_result.status == "failed"
+
+    # ==========================================
+    # FINAL MESSAGE
+    # ==========================================
+
+    - name: Display result file
+      ansible.builtin.debug:
+        msg: >
+          Unknown Unicast Storm Control configuration retrieved from {{ ansible_host }}.
+          Result saved to
+          output/{{ ansible_host }}_unknown_unicast_storm_control_configuration_get.yml

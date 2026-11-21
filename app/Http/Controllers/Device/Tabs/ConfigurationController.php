@@ -402,6 +402,7 @@ class ConfigurationController implements DeviceTab
             ['name' => __('Loopback Detection'), 'url' => 'loopbackdetectionconfig'],
             ['name' => __('Cable Information'), 'url' => 'cableinfoconfig'],
             ['name' => __('Port Filter'), 'url' => 'portfilterconfig'],
+            ['name' => __('Storm Control'), 'url' => 'stormcontrolconfig'],
             ['name' => __('Port Protect Group'), 'url' => 'portprotectgroupconfig'],
             ['name' => __('Port Security'), 'url' => 'portsecurityconfig'],
         ];

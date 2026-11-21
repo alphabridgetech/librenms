@@ -87,7 +87,7 @@
 
     - name: Create Python SSH script for Loopback Detection interface set
       ansible.builtin.copy:
-        dest: "{{ tmp_dir }}/loopback_detection_interface_list_set_exec.py"
+        dest: "{{ tmp_dir }}/loopback_detection_interface_list_set_exec_{{ ansible_host }}.py"
         mode: '0755'
         content: |
           #!/usr/bin/env python3
@@ -349,7 +349,7 @@
       ansible.builtin.command:
         argv:
           - "{{ project_root }}/bin/python3"
-          - "{{ tmp_dir }}/loopback_detection_interface_list_set_exec.py"
+          - "{{ tmp_dir }}/loopback_detection_interface_list_set_exec_{{ ansible_host }}.py"
       register: loopback_detection_interface_raw
       changed_when: false
       failed_when: false
