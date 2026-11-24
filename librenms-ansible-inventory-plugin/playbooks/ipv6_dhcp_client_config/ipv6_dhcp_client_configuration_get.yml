@@ -1,0 +1,251 @@
+# ==========================================
+# ipv6_dhcp_client_configuration_get.yml
+# Created on Nov 10, 2026 by Vikash Kumar (vikash.kumar@alphabrige.tech).
+#
+# Copyright (c), ALPHA BRIDGE, Inc.
+# 357D, Udyog Vihar Industrial Area Phase VI, Sector 37, Gurugram, Haryana.
+#
+# All rights reserved.
+#
+# This software is the confidential and proprietary information of
+# ALPHA BRIDGE, Inc. ("Confidential Information"). You shall not
+# disclose such Confidential Information and shall use it only in
+# accordance with the terms of the license agreement you entered into
+# with ALPHA BRIDGE.
+#
+# =============================================================================
+# Playbook Name : IPv6 DHCP Client Configuration Get
+# =============================================================================
+#
+# Description:
+# Reads IPv6 DHCP client settings from each configured VLAN interface. VLANs
+# are discovered from the switch running configuration; no VLAN input is needed.
+#
+# Example:
+# ansible-playbook -i inventory/192.168.200.241.yml \
+#   playbooks/l3/ipv6_dhcp_client_config/ipv6_dhcp_client_configuration_get.yml
+#
+# Output:
+#   output/<switch_ip>_ipv6_dhcp_client_configuration_get.yml
+# =============================================================================
+
+- name: Get IPv6 DHCP client configuration
+  hosts: alphabridge_devices
+  gather_facts: false
+
+  vars:
+    # These files live in playbooks/<feature>/, so the plugin root is two
+    # levels up.
+    project_root: "{{ playbook_dir }}/../.."
+    output_dir: "{{ project_root }}/output"
+    tmp_dir: "{{ project_root }}/tmp"
+
+  pre_tasks:
+    - name: Ensure helper and output directories exist
+      ansible.builtin.file:
+        path: "{{ item }}"
+        state: directory
+        mode: '0755'
+      loop:
+        - "{{ tmp_dir }}"
+        - "{{ output_dir }}"
+
+  tasks:
+    - name: Create IPv6 DHCP client configuration SSH helper
+      ansible.builtin.copy:
+        dest: "{{ tmp_dir }}/ipv6_dhcp_client_configuration_get_exec_{{ ansible_host }}.py"
+        mode: '0700'
+        content: |
+          #!/usr/bin/env python3
+
+          import json
+          import re
+          import time
+          import paramiko
+
+          HOST = {{ ansible_host | to_json }}
+          PORT = int({{ ansible_port | default(22) | to_json }})
+          USER = {{ ansible_user | to_json }}
+          PASSWORD = {{ ansible_password | to_json }}
+
+          ANSI_RE = re.compile(r'\x1b(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])')
+          PROMPT_RE = re.compile(r'[>#]\s*\Z')
+          CLI_ERROR_RE = re.compile(
+              r'(?im)^\s*%\s*(?:invalid|error|incomplete|ambiguous|'
+              r'unknown|unrecognized)\b|'
+              r'\b(?:invalid input|unknown command|incomplete command|'
+              r'command rejected|bad parameter|too many parameters|fail with ret\s*-?\d+)\b'
+          )
+
+          def read_until_prompt(shell, stage, timeout=30):
+              buffer = ""
+              deadline = time.monotonic() + timeout
+              while time.monotonic() < deadline:
+                  if shell.recv_ready():
+                      buffer += shell.recv(65535).decode(errors="replace")
+                      clean = ANSI_RE.sub("", buffer).replace("\r", "")
+                      if PROMPT_RE.search(clean.rstrip()):
+                          return clean
+                  else:
+                      time.sleep(0.1)
+              raise TimeoutError(f"Timed out waiting for switch prompt during {stage}")
+
+          def run_command(shell, command, timeout=30):
+              shell.send(command + "\n")
+              output = read_until_prompt(shell, command, timeout)
+              if CLI_ERROR_RE.search(output):
+                  raise RuntimeError(f"Switch rejected {command!r}: {output.strip()}")
+              return output
+
+          def parse_vlan_config(output, vlan):
+              clean = ANSI_RE.sub("", output).replace("\r", "")
+              if not re.search(rf"(?im)^\s*interface\s+vlan\s*{re.escape(vlan)}\s*$", clean):
+                  raise ValueError(f"VLAN interface {vlan} was not found in SHOW output")
+
+              settings = {
+                  "vlan_id": int(vlan),
+                  "prefix_name": "",
+                  "stateless_allocation": "Disable",
+                  "rapid_commit": "Disable",
+                  "non_temp_address_allocation": "Disable",
+              }
+              seen = set()
+              for line in clean.splitlines():
+                  words = line.strip().split()
+                  if len(words) < 4 or [word.lower() for word in words[:3]] != [
+                      "ipv6", "dhcp", "client"
+                  ]:
+                      continue
+
+                  key = words[3].lower()
+                  if key in seen:
+                      raise ValueError(f"Duplicate IPv6 DHCP client setting: {line.strip()}")
+                  seen.add(key)
+                  value = words[4:]
+                  if key == "pd":
+                      if len(value) != 1:
+                          raise ValueError(f"Invalid prefix name setting: {line.strip()}")
+                      settings["prefix_name"] = value[0]
+                  elif key == "stateless":
+                      if value:
+                          raise ValueError(f"Unexpected stateless setting value: {line.strip()}")
+                      settings["stateless_allocation"] = "Enable"
+                  elif key == "rapid-commit":
+                      if value:
+                          raise ValueError(f"Unexpected rapid-commit setting value: {line.strip()}")
+                      settings["rapid_commit"] = "Enable"
+                  elif key == "na":
+                      if value:
+                          raise ValueError(f"Unexpected non-temporary address setting value: {line.strip()}")
+                      settings["non_temp_address_allocation"] = "Enable"
+                  else:
+                      raise ValueError(f"Unknown IPv6 DHCP client setting: {line.strip()}")
+              return settings
+
+          def discover_vlan_ids(output):
+              clean = ANSI_RE.sub("", output).replace("\r", "")
+              if not any(
+                  line.strip().lower().startswith("!version ")
+                  or line.strip().lower() == "current configuration:"
+                  for line in clean.splitlines()
+              ):
+                  raise ValueError("SHOW output does not contain a running-config header")
+
+              vlan_ids = []
+              for line in clean.splitlines():
+                  match = re.match(r"^\s*interface\s+vlan\s*(\d+)\s*$", line, re.IGNORECASE)
+                  if match:
+                      vlan = match.group(1)
+                      if vlan not in vlan_ids:
+                          vlan_ids.append(vlan)
+              if not vlan_ids:
+                  raise ValueError("No configured VLAN interfaces were found")
+              return vlan_ids
+
+          ssh = None
+          shell = None
+          stage = "SSH connection"
+          try:
+              ssh = paramiko.SSHClient()
+              ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+              stage = "SSH connection"
+              ssh.connect(
+                  HOST, port=PORT, username=USER, password=PASSWORD,
+                  look_for_keys=False, allow_agent=False,
+                  timeout=20, auth_timeout=20, banner_timeout=20,
+              )
+              shell = ssh.invoke_shell()
+              read_until_prompt(shell, "initial prompt", timeout=10)
+              stage = "enable mode"
+              run_command(shell, "enable", timeout=10)
+              stage = "disable paging"
+              run_command(shell, "terminal length 0", timeout=10)
+
+              stage = "discover VLAN interfaces"
+              running_config = run_command(shell, "show running-config", timeout=60)
+              vlan_ids = discover_vlan_ids(running_config)
+
+              result = []
+              for vlan in vlan_ids:
+                  stage = f"show VLAN {vlan} IPv6 DHCP client configuration"
+                  config = run_command(shell, f"show running-config interface vlan {vlan}", timeout=30)
+                  result.append(parse_vlan_config(config, vlan))
+
+              print(json.dumps({"ip": HOST, "ipv6_dhcp_client": result, "status": "success"}))
+          except Exception as exc:
+              print(json.dumps({
+                  "ip": HOST, "status": "failed", "stage": stage, "error": str(exc)
+              }))
+          finally:
+              if shell is not None:
+                  shell.close()
+              if ssh is not None:
+                  ssh.close()
+      no_log: true
+
+    - name: Execute IPv6 DHCP client configuration helper
+      ansible.builtin.command:
+        argv:
+          - "{{ project_root }}/bin/python3"   # plugin venv (has paramiko)
+          - "{{ tmp_dir }}/ipv6_dhcp_client_configuration_get_exec_{{ ansible_host }}.py"
+      register: ipv6_dhcp_client_configuration_get_raw
+      changed_when: false
+      failed_when: false
+
+    - name: Fail if helper returned no JSON
+      ansible.builtin.fail:
+        msg: >-
+          IPv6 DHCP client GET helper returned no JSON.
+          rc={{ ipv6_dhcp_client_configuration_get_raw.rc }};
+          stderr={{ ipv6_dhcp_client_configuration_get_raw.stderr }}
+      when: ipv6_dhcp_client_configuration_get_raw.stdout | trim | length == 0
+
+    - name: Parse IPv6 DHCP client configuration result
+      ansible.builtin.set_fact:
+        ipv6_dhcp_client_configuration_get_result: >-
+          {{ ipv6_dhcp_client_configuration_get_raw.stdout | from_json }}
+
+    - name: Fail if IPv6 DHCP client configuration read failed
+      ansible.builtin.fail:
+        msg: >-
+          IPv6 DHCP client GET failed during
+          {{ ipv6_dhcp_client_configuration_get_result.stage | default('execution') }}:
+          {{ ipv6_dhcp_client_configuration_get_result.error | default(ipv6_dhcp_client_configuration_get_raw.stderr) }}
+      when: >-
+        ipv6_dhcp_client_configuration_get_result.status != 'success' or
+        ipv6_dhcp_client_configuration_get_raw.rc != 0
+
+    - name: Display IPv6 DHCP client configuration result
+      ansible.builtin.debug:
+        msg: "{{ ipv6_dhcp_client_configuration_get_result | to_nice_yaml(indent=2, sort_keys=False) }}"
+
+    - name: Save IPv6 DHCP client configuration result
+      ansible.builtin.copy:
+        dest: "{{ output_dir }}/{{ ansible_host }}_ipv6_dhcp_client_configuration_get.yml"
+        content: "{{ ipv6_dhcp_client_configuration_get_result | to_nice_yaml(indent=2, sort_keys=False) }}"
+
+    - name: Display result path
+      ansible.builtin.debug:
+        msg: >-
+          IPv6 DHCP client configuration retrieved successfully.
+          Saved to output/{{ ansible_host }}_ipv6_dhcp_client_configuration_get.yml

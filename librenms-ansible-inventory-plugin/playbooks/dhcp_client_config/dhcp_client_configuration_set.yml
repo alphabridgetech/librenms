@@ -1,0 +1,319 @@
+# ==========================================
+# dhcp_client_configuration_set.yml
+# Created on Nov 4, 2026 by Vikash Kumar (vikash.kumar@alphabrige.tech).
+#
+# Copyright (c), ALPHA BRIDGE, Inc.
+# 357D, Udyog Vihar Industrial Area Phase VI, Sector 37, Gurugram, Haryana.
+#
+# All rights reserved.
+#
+# This software is the confidential and proprietary information of
+# ALPHA BRIDGE, Inc. ("Confidential Information"). You shall not
+# disclose such Confidential Information and shall use it only in
+# accordance with the terms of the license agreement you entered into
+# with ALPHA BRIDGE.
+#
+# =============================================================================
+# Playbook Name : DHCP Client Configuration Set
+# =============================================================================
+#
+# Description:
+# Applies one or more global DHCP client settings over SSH.
+#
+# Pass one or more GUI-named variables with `-e "name=value ..."`.
+# Only fields supplied on the command line are sent to the switch.
+# Toggle values accept Enable or Disable.
+#
+# Example (set one field):
+# ansible-playbook -i inventory/192.168.200.241.yml \
+#   playbooks/l3/dhcp_client/dhcp_client_configuration_set.yml \
+#   -e "Number_of_packet_retransmission_times=6"
+#
+# Example (set multiple fields):
+# ansible-playbook -i inventory/192.168.200.241.yml \
+#   playbooks/l3/dhcp_client/dhcp_client_configuration_set.yml \
+#   -e "Boot_file_Name=Enable Vendor_Class_Identifier=tty Client_Identifier=Enable Minimal_acceptable_lease_time=60 Number_of_packet_retransmission_times=4 Retry_interval=1 Select_interval=5 TFTP_Download=Enable Shut_down_port_when_timeout=Enable"
+# =============================================================================
+
+- name: Set DHCP client configuration
+  hosts: alphabridge_devices
+  gather_facts: false
+
+  vars:
+    # These files live in playbooks/<feature>/, so the plugin root is two
+    # levels up.
+    project_root: "{{ playbook_dir }}/../.."
+    output_dir: "{{ project_root }}/output"
+    tmp_dir: "{{ project_root }}/tmp"
+    dhcp_client_settings:
+      retransmit: "{{ Number_of_packet_retransmission_times | default('') }}"
+      select: "{{ Select_interval | default('') }}"
+      minlease: "{{ Minimal_acceptable_lease_time | default('') }}"
+      retry_interval: "{{ Retry_interval | default('') }}"
+      class_identifier: "{{ Vendor_Class_Identifier | default('') }}"
+      client_identifier: "{{ Client_Identifier | default('') }}"
+      timeout_shut: "{{ Shut_down_port_when_timeout | default('') }}"
+      tftpdownload: "{{ TFTP_Download | default('') }}"
+      bootfileaddmac: "{{ Boot_file_Name | default('') }}"
+
+  pre_tasks:
+    - name: Ensure helper and output directories exist
+      ansible.builtin.file:
+        path: "{{ item }}"
+        state: directory
+        mode: '0755'
+      loop:
+        - "{{ tmp_dir }}"
+        - "{{ output_dir }}"
+
+  tasks:
+    - name: Create DHCP client configuration SSH helper
+      ansible.builtin.copy:
+        dest: "{{ tmp_dir }}/dhcp_client_configuration_set_exec_{{ ansible_host }}.py"
+        mode: '0700'
+        content: |
+          #!/usr/bin/env python3
+
+          import json
+          import re
+          import time
+          import paramiko
+
+          HOST = {{ ansible_host | to_json }}
+          PORT = int({{ ansible_port | default(22) | to_json }})
+          USER = {{ ansible_user | to_json }}
+          PASSWORD = {{ ansible_password | to_json }}
+          SETTINGS = json.loads({{ dhcp_client_settings | to_json | to_json }})
+
+          ANSI_RE = re.compile(r'\x1b(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])')
+          PROMPT_RE = re.compile(r'[>#]\s*\Z')
+          CLI_ERROR_RE = re.compile(
+              r'(?im)^\s*%\s*(?:invalid|error|incomplete|ambiguous|'
+              r'unknown|unrecognized)\b|'
+              r'\b(?:invalid input|unknown command|incomplete command|'
+              r'command rejected|bad parameter|too many parameters|fail with ret\s*-?\d+)\b'
+          )
+
+          ALLOWED_KEYS = {
+              "retransmit", "select", "minlease", "retry_interval",
+              "class_identifier", "client_identifier", "timeout_shut",
+              "tftpdownload", "bootfileaddmac",
+          }
+          NUMERIC_RANGES = {
+              "retransmit": (1, 10),
+              "select": (5, 30),
+              "minlease": (60, 86400),
+              "retry_interval": (1, 1440),
+          }
+
+          def validate_and_build_commands(settings):
+              if not isinstance(settings, dict):
+                  raise ValueError("DHCP client settings must be a mapping")
+              unknown = set(settings) - ALLOWED_KEYS
+              if unknown:
+                  raise ValueError(f"Unsupported DHCP client setting(s): {sorted(unknown)}")
+
+              commands = []
+              for key in ("retransmit", "select", "minlease", "retry_interval"):
+                  if key not in settings or settings[key] in (None, "", "none"):
+                      continue
+                  value = settings[key]
+                  if isinstance(value, str) and value.isdigit():
+                      value = int(value)
+                  if isinstance(value, bool) or not isinstance(value, int):
+                      raise ValueError(f"{key} must be an integer")
+                  low, high = NUMERIC_RANGES[key]
+                  if not low <= value <= high:
+                      raise ValueError(f"{key} must be between {low} and {high}")
+                  commands.append(f"ip dhcp client {key} {value}")
+
+              if settings.get("class_identifier") not in (None, "", "none"):
+                  value = settings["class_identifier"]
+                  if not isinstance(value, str) or not value.strip():
+                      raise ValueError("class_identifier must be a non-empty string")
+                  if any(char in value for char in "\r\n\x00"):
+                      raise ValueError("class_identifier contains an invalid character")
+                  commands.append(f"ip dhcp client class_identifier {value.strip()}")
+
+              client_identifier = settings.get("client_identifier")
+              if client_identifier not in (None, "", "none"):
+                  if not isinstance(client_identifier, str):
+                      raise ValueError("Client_Identifier must be Enable or Disable")
+                  normalized = client_identifier.strip().lower()
+                  if normalized in ("disable", "false"):
+                      commands.append("no ip dhcp client client-identifier")
+                  elif normalized in ("enable", "true"):
+                      commands.append("ip dhcp client client-identifier hrd-ether")
+                  elif re.fullmatch(r"[A-Za-z0-9_.:-]+", client_identifier):
+                      commands.append(
+                          f"ip dhcp client client-identifier {client_identifier}"
+                      )
+                  else:
+                      raise ValueError("Client_Identifier must be Enable or Disable")
+
+              for key in ("timeout_shut", "tftpdownload", "bootfileaddmac"):
+                  if key not in settings or settings[key] in (None, "", "none"):
+                      continue
+                  value = settings[key]
+                  if isinstance(value, str):
+                      normalized = value.strip().lower()
+                      if normalized not in ("enable", "disable", "true", "false"):
+                          raise ValueError(f"{key} must be Enable or Disable")
+                      enabled = normalized in ("enable", "true")
+                  elif isinstance(value, bool):
+                      enabled = value
+                  else:
+                      raise ValueError(f"{key} must be Enable or Disable")
+                  prefix = "" if enabled else "no "
+                  commands.append(f"{prefix}ip dhcp client {key}")
+
+              if not commands:
+                  raise ValueError("No DHCP client commands were selected")
+              return commands
+
+          def read_until_prompt(shell, stage, timeout=30):
+              buffer = ""
+              deadline = time.monotonic() + timeout
+              while time.monotonic() < deadline:
+                  if shell.recv_ready():
+                      buffer += shell.recv(65535).decode(errors="replace")
+                      clean = ANSI_RE.sub("", buffer).replace("\r", "")
+                      if PROMPT_RE.search(clean.rstrip()):
+                          return clean
+                  else:
+                      time.sleep(0.1)
+              raise TimeoutError(f"Timed out waiting for switch prompt during {stage}")
+
+          def run_command(shell, command, timeout=30, check_errors=True):
+              shell.send(command + "\n")
+              output = read_until_prompt(shell, command, timeout)
+              if check_errors and CLI_ERROR_RE.search(output):
+                  raise RuntimeError(f"Switch rejected {command!r}: {output.strip()}")
+              return output
+
+          ssh = None
+          shell = None
+          stage = "input validation"
+          commands = []
+          applied = []
+          try:
+              commands = validate_and_build_commands(SETTINGS)
+
+              stage = "SSH connection"
+              ssh = paramiko.SSHClient()
+              ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+              ssh.connect(
+                  HOST, port=PORT, username=USER, password=PASSWORD,
+                  look_for_keys=False, allow_agent=False,
+                  timeout=20, auth_timeout=20, banner_timeout=20,
+              )
+              shell = ssh.invoke_shell()
+              read_until_prompt(shell, "initial prompt", timeout=10)
+
+              stage = "enable mode"
+              run_command(shell, "enable", timeout=10, check_errors=False)
+              stage = "disable paging"
+              run_command(shell, "terminal length 0", timeout=10, check_errors=False)
+              stage = "configuration mode"
+              run_command(shell, "config", timeout=10)
+
+              for command in commands:
+                  stage = command
+                  run_command(shell, command, timeout=15)
+                  applied.append(command)
+
+              stage = "exit configuration mode"
+              run_command(shell, "exit", timeout=10, check_errors=False)
+              stage = "save configuration"
+              write_output = run_command(
+                  shell, "write", timeout=20, check_errors=False
+              )
+              write_output = ANSI_RE.sub("", write_output)
+              if re.search(r"%err|invalid|error|fail", write_output, re.IGNORECASE):
+                  raise RuntimeError(
+                      f"Switch rejected 'write': {write_output.strip()}"
+                  )
+              if "OK!" not in write_output:
+                  raise RuntimeError(
+                      "Switch did not confirm the configuration save: "
+                      + write_output.strip()
+                  )
+
+              stage = "verify running configuration"
+              running_config = run_command(
+                  shell, "show running non-interface", timeout=60
+              )
+              clean_config = ANSI_RE.sub("", running_config).replace("\r", "")
+              if not any(
+                  line.strip().lower().startswith("!version ")
+                  or line.strip().lower() == "current configuration:"
+                  for line in clean_config.splitlines()
+              ):
+                  raise RuntimeError("SHOW output does not contain a running-config header")
+
+              print(json.dumps({
+                  "ip": HOST,
+                  "status": "success",
+                  "saved": True,
+                  "save_response": write_output.strip(),
+              }))
+          except Exception as exc:
+              print(json.dumps({
+                  "ip": HOST,
+                  "status": "failed",
+                  "stage": stage,
+                  "applied_commands": applied,
+                  "error": str(exc),
+              }))
+          finally:
+              if shell is not None:
+                  shell.close()
+              if ssh is not None:
+                  ssh.close()
+      no_log: true
+
+    - name: Execute DHCP client configuration helper
+      ansible.builtin.command:
+        argv:
+          - "{{ project_root }}/bin/python3"   # plugin venv (has paramiko)
+          - "{{ tmp_dir }}/dhcp_client_configuration_set_exec_{{ ansible_host }}.py"
+      register: dhcp_client_raw
+      changed_when: >-
+        dhcp_client_raw.rc == 0 and
+        '"status": "success"' in dhcp_client_raw.stdout
+      failed_when: false
+
+    - name: Fail if helper returned no JSON
+      ansible.builtin.fail:
+        msg: >-
+          DHCP client SET helper returned no JSON.
+          rc={{ dhcp_client_raw.rc }}; stderr={{ dhcp_client_raw.stderr }}
+      when: dhcp_client_raw.stdout | trim | length == 0
+
+    - name: Parse DHCP client configuration result
+      ansible.builtin.set_fact:
+        dhcp_client_result: "{{ dhcp_client_raw.stdout | from_json }}"
+
+    - name: Fail if DHCP client configuration failed
+      ansible.builtin.fail:
+        msg: >-
+          DHCP client SET failed during
+          {{ dhcp_client_result.stage | default('execution') }}:
+          {{ dhcp_client_result.error | default(dhcp_client_raw.stderr) }}
+          Applied before failure: {{ dhcp_client_result.applied_commands | default([]) }}
+      when: dhcp_client_result.status != 'success' or dhcp_client_raw.rc != 0
+
+    - name: Display DHCP client configuration result
+      ansible.builtin.debug:
+        msg: "{{ dhcp_client_result | to_nice_yaml(indent=2, sort_keys=False) }}"
+
+    - name: Save DHCP client configuration result
+      ansible.builtin.copy:
+        dest: "{{ output_dir }}/{{ ansible_host }}_dhcp_client_configuration_set.yml"
+        content: "{{ dhcp_client_result | to_nice_yaml(indent=2, sort_keys=False) }}"
+
+    - name: Display result path
+      ansible.builtin.debug:
+        msg: >-
+          DHCP client configuration applied successfully.
+          Saved to output/{{ ansible_host }}_dhcp_client_configuration_set.yml

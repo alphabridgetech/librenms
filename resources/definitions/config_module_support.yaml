@@ -40,3 +40,19 @@
 portfilterconfig:
   hide:
     - speed: 100g
+
+# DHCP / IPv6 DHCP client and server: 100G switches do not have these
+# commands (IPv6 DHCP client/pools are "Unknown command", the DHCP client
+# only has TFTP options and the DHCP server has no ICMP settings)
+dhcpclientconfig:
+  hide:
+    - speed: 100g
+dhcpserverconfig:
+  hide:
+    - speed: 100g
+ipv6dhcpclientconfig:
+  hide:
+    - speed: 100g
+ipv6dhcpserverconfig:
+  hide:
+    - speed: 100g

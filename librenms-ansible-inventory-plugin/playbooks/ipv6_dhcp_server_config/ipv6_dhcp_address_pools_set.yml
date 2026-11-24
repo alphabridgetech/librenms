@@ -1,0 +1,234 @@
+# ==========================================
+# ipv6_dhcp_address_pools_set.yml
+# Created on Nov 5, 2026 by Vikash Kumar (vikash.kumar@alphabrige.tech).
+#
+# Copyright (c), ALPHA BRIDGE, Inc.
+# 357D, Udyog Vihar Industrial Area Phase VI, Sector 37, Gurugram, Haryana.
+#
+# All rights reserved.
+#
+# This software is the confidential and proprietary information of
+# ALPHA BRIDGE, Inc. ("Confidential Information"). You shall not
+# disclose such Confidential Information and shall use it only in
+# accordance with the terms of the license agreement you entered into
+# with ALPHA BRIDGE.
+#
+# =============================================================================
+# Playbook Name : IPv6 DHCP Address Pools Set
+# =============================================================================
+#
+# Description:
+# Creates or updates an IPv6 DHCP pool profile over SSH and saves the
+# configuration with `write`.
+#
+# Pass GUI-named variables with `-e "name=value ..."`. Pool_Name is required.
+# Other fields are optional. Address_Range_Start and Address_Range_End must
+# be supplied together.
+#
+# Example (apply the supplied command values):
+# ansible-playbook -i inventory/192.168.200.241.yml \
+#   playbooks/l3/ipv6_dhcp_server_config/ipv6_dhcp_address_pools_set.yml \
+#   -e "Pool_Name=profile Domain_Name=google.com Address_Range_Start=fe80::84f7:b574:7864:eb77 Address_Range_End=fe80::84f7:b574:7864:eb78 DNS_Server=fe80::b24:dfdc:1176:5be7"
+#
+# Example (change only the DNS server):
+# ansible-playbook -i inventory/192.168.200.241.yml \
+#   playbooks/l3/ipv6_dhcp_server_config/ipv6_dhcp_address_pools_set.yml \
+#   -e "Pool_Name=profile DNS_Server=fe80::b24:dfdc:1176:5be7"
+# =============================================================================
+
+- name: Set IPv6 DHCP address pool
+  hosts: alphabridge_devices
+  gather_facts: false
+
+  vars:
+    # These files live in playbooks/<feature>/, so the plugin root is two
+    # levels up.
+    project_root: "{{ playbook_dir }}/../.."
+    output_dir: "{{ project_root }}/output"
+    tmp_dir: "{{ project_root }}/tmp"
+    ipv6_dhcp_pool:
+      name: "{{ Pool_Name | default('') }}"
+      domain_name: "{{ Domain_Name | default('') }}"
+      range_start: "{{ Address_Range_Start | default('') }}"
+      range_end: "{{ Address_Range_End | default('') }}"
+      dns_server: "{{ DNS_Server | default('') }}"
+
+  pre_tasks:
+    - name: Ensure helper and output directories exist
+      ansible.builtin.file:
+        path: "{{ item }}"
+        state: directory
+        mode: '0755'
+      loop:
+        - "{{ tmp_dir }}"
+        - "{{ output_dir }}"
+
+  tasks:
+    - name: Create IPv6 DHCP address pool SSH helper
+      ansible.builtin.copy:
+        dest: "{{ tmp_dir }}/ipv6_dhcp_address_pools_set_exec_{{ ansible_host }}.py"
+        mode: '0700'
+        content: |
+          #!/usr/bin/env python3
+
+          import ipaddress
+          import json
+          import re
+          import time
+          import paramiko
+
+          HOST = {{ ansible_host | to_json }}
+          PORT = int({{ ansible_port | default(22) | to_json }})
+          USER = {{ ansible_user | to_json }}
+          PASSWORD = {{ ansible_password | to_json }}
+          SETTINGS = json.loads({{ ipv6_dhcp_pool | to_json | to_json }})
+
+          ANSI_RE = re.compile(r'\x1b(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])')
+          PROMPT_RE = re.compile(r'[>#]\s*\Z')
+          CLI_ERROR_RE = re.compile(
+              r'(?im)^\s*%\s*(?:invalid|error|incomplete|ambiguous|'
+              r'unknown|unrecognized)\b|'
+              r'\b(?:invalid input|unknown command|incomplete command|'
+              r'command rejected|bad parameter|too many parameters|fail with ret\s*-?\d+)\b'
+          )
+
+          def read_until_prompt(shell, stage, timeout=30):
+              buffer = ""
+              deadline = time.monotonic() + timeout
+              while time.monotonic() < deadline:
+                  if shell.recv_ready():
+                      buffer += shell.recv(65535).decode(errors="replace")
+                      clean = ANSI_RE.sub("", buffer).replace("\r", "")
+                      if PROMPT_RE.search(clean.rstrip()):
+                          return clean
+                  else:
+                      time.sleep(0.1)
+              raise TimeoutError(f"Timed out waiting for switch prompt during {stage}")
+
+          def run_command(shell, command, timeout=30, check_errors=True):
+              shell.send(command + "\n")
+              output = read_until_prompt(shell, command, timeout)
+              if check_errors and CLI_ERROR_RE.search(output):
+                  raise RuntimeError(f"Switch rejected {command!r}: {output.strip()}")
+              return output
+
+          ssh = None
+          shell = None
+          stage = "input validation"
+          applied = []
+          try:
+              name = SETTINGS["name"].strip()
+              if not name or not re.fullmatch(r"[A-Za-z0-9_.-]+", name):
+                  raise ValueError("Pool_Name is required and may contain only letters, numbers, underscores, periods, and hyphens")
+              domain = SETTINGS["domain_name"].strip()
+              start_value = SETTINGS["range_start"].strip()
+              end_value = SETTINGS["range_end"].strip()
+              dns_value = SETTINGS["dns_server"].strip()
+              if not any((domain, start_value, end_value, dns_value)):
+                  raise ValueError("Pass at least one of Domain_Name, the address range, or DNS_Server")
+              if bool(start_value) != bool(end_value):
+                  raise ValueError("Address_Range_Start and Address_Range_End must be supplied together")
+              if domain and any(ch.isspace() for ch in domain):
+                  raise ValueError("Domain_Name must not contain spaces")
+              first = last = dns = None
+              try:
+                  if start_value:
+                      first = ipaddress.IPv6Address(start_value)
+                      last = ipaddress.IPv6Address(end_value)
+                  if dns_value:
+                      dns = ipaddress.IPv6Address(dns_value)
+              except ipaddress.AddressValueError as exc:
+                  raise ValueError("Address range and DNS_Server must be valid IPv6 addresses") from exc
+              if first is not None and int(first) > int(last):
+                  raise ValueError("Address_Range_Start must not be after Address_Range_End")
+
+              ssh = paramiko.SSHClient()
+              ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+              stage = "SSH connection"
+              ssh.connect(
+                  HOST, port=PORT, username=USER, password=PASSWORD,
+                  look_for_keys=False, allow_agent=False,
+                  timeout=20, auth_timeout=20, banner_timeout=20,
+              )
+              shell = ssh.invoke_shell()
+              read_until_prompt(shell, "initial prompt", timeout=10)
+              stage = "enable mode"
+              run_command(shell, "enable", timeout=10, check_errors=False)
+              stage = "disable paging"
+              run_command(shell, "terminal length 0", timeout=10, check_errors=False)
+              stage = "configuration mode"
+              run_command(shell, "config", timeout=10)
+              commands = [f"ipv6 dhcp pool {name}"]
+              if domain:
+                  commands.append(f"domain-name {domain}")
+              if first is not None:
+                  commands.append(f"non-temporary-address range {first} {last}")
+              if dns is not None:
+                  commands.append(f"dns-server {dns}")
+              commands.append("exit")
+              for command in commands:
+                  stage = command
+                  run_command(shell, command, timeout=15)
+                  applied.append(command)
+              stage = "exit configuration mode"
+              run_command(shell, "exit", timeout=10, check_errors=False)
+              stage = "save configuration"
+              write_output = ANSI_RE.sub("", run_command(shell, "write", timeout=20, check_errors=False))
+              if re.search(r"%err|invalid|error|fail", write_output, re.IGNORECASE):
+                  raise RuntimeError(f"Switch rejected 'write': {write_output.strip()}")
+              if "OK!" not in write_output:
+                  raise RuntimeError("Switch did not confirm the configuration save: " + write_output.strip())
+              print(json.dumps({"ip": HOST, "status": "success"}))
+          except Exception as exc:
+              print(json.dumps({"ip": HOST, "pool_name": SETTINGS.get("name", ""), "commands": applied, "status": "failed", "stage": stage, "error": str(exc)}))
+          finally:
+              if shell is not None:
+                  shell.close()
+              if ssh is not None:
+                  ssh.close()
+      no_log: true
+
+    - name: Execute IPv6 DHCP address pool set helper
+      ansible.builtin.command:
+        argv:
+          - "{{ project_root }}/bin/python3"   # plugin venv (has paramiko)
+          - "{{ tmp_dir }}/ipv6_dhcp_address_pools_set_exec_{{ ansible_host }}.py"
+      register: ipv6_dhcp_pool_set_raw
+      changed_when: >-
+        ipv6_dhcp_pool_set_raw.rc == 0 and
+        '"status": "success"' in ipv6_dhcp_pool_set_raw.stdout
+      failed_when: false
+
+    - name: Fail if helper returned no JSON
+      ansible.builtin.fail:
+        msg: >-
+          IPv6 DHCP address pool SET helper returned no JSON.
+          rc={{ ipv6_dhcp_pool_set_raw.rc }}; stderr={{ ipv6_dhcp_pool_set_raw.stderr }}
+      when: ipv6_dhcp_pool_set_raw.stdout | trim | length == 0
+
+    - name: Parse IPv6 DHCP address pool set result
+      ansible.builtin.set_fact:
+        ipv6_dhcp_pool_set_result: "{{ ipv6_dhcp_pool_set_raw.stdout | from_json }}"
+
+    - name: Fail if IPv6 DHCP address pool set failed
+      ansible.builtin.fail:
+        msg: >-
+          IPv6 DHCP address pool SET failed during
+          {{ ipv6_dhcp_pool_set_result.stage | default('execution') }}:
+          {{ ipv6_dhcp_pool_set_result.error | default(ipv6_dhcp_pool_set_raw.stderr) }}
+      when: ipv6_dhcp_pool_set_result.status != 'success' or ipv6_dhcp_pool_set_raw.rc != 0
+
+    - name: Display IPv6 DHCP address pool set result
+      ansible.builtin.debug:
+        msg: "{{ ipv6_dhcp_pool_set_result | to_nice_yaml(indent=2, sort_keys=False) }}"
+
+    - name: Save IPv6 DHCP address pool set result
+      ansible.builtin.copy:
+        dest: "{{ output_dir }}/{{ ansible_host }}_ipv6_dhcp_address_pools_set.yml"
+        content: "{{ ipv6_dhcp_pool_set_result | to_nice_yaml(indent=2, sort_keys=False) }}"
+
+    - name: Display result path
+      ansible.builtin.debug:
+        msg: >-
+          IPv6 DHCP address pool configuration completed successfully.
+          Saved to output/{{ ansible_host }}_ipv6_dhcp_address_pools_set.yml

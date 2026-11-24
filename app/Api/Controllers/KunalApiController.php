@@ -1596,6 +1596,354 @@ public function getmtu($hostname)
 
 
     #------------------------------------------------------------
+    #          DHCP / IPv6 DHCP (CLIENT + SERVER) - shared helpers
+    #------------------------------------------------------------
+    /*
+     * Playbooks (10G switches - 100G has no matching DHCP commands, the
+     * tabs are hidden there by config_module_support.yaml):
+     *   dhcp_client_config/       dhcp_client_configuration_{get,set}.yml
+     *   dhcp_server_config/       dhcp_server_configuration_{get,set}.yml,
+     *                             dhcp_address_pools_{get,edit,delete}.yml
+     *   ipv6_dhcp_client_config/  ipv6_dhcp_client_configuration_{get,set,edit}.yml
+     *   ipv6_dhcp_server_config/  ipv6_dhcp_address_pools_{get,set,edit,delete}.yml
+     */
+
+    /**
+     * Read one or more DHCP get playbooks. Serves the last result straight away
+     * and refreshes it in the background; runs them live the first time.
+     *
+     * @param  array  $gets  key => [playbook path below playbooks/, output name]
+     * @return array|\Illuminate\Http\JsonResponse  key => parsed output, or an error response
+     */
+    private function dhcpRead(string $hostname, array $gets, bool $cachedOk = true)
+    {
+        $hosts = "{$this->pluginPath}/hosts/{$hostname}.yml";
+        $files = [];
+        foreach ($gets as $key => [$playbook, $name]) {
+            $files[$key] = "{$this->pluginPath}/output/{$hostname}_{$name}.yml";
+        }
+
+        $cached = array_map(fn ($file) => $this->parseYamlSafely($file), $files);
+        if ($cachedOk && !array_filter($cached, fn ($d) => ($d['status'] ?? null) !== 'success')) {
+            foreach ($gets as [$playbook]) {
+                $this->runAnsibleAsync("{$this->pluginPath}/playbooks/{$playbook}", $hosts);
+            }
+
+            return $cached + ['_cached' => true];
+        }
+
+        $result = [];
+        foreach ($gets as $key => [$playbook]) {
+            $output = $this->runAnsible("{$this->pluginPath}/playbooks/{$playbook}", $hosts);
+            $result[$key] = $this->parseYamlSafely($files[$key]);
+            if (($result[$key]['status'] ?? null) !== 'success') {
+                $reason = $result[$key]['error'] ?? $this->extractPortConfigFailureReason($output);
+                return $this->error($reason ?: 'DHCP configuration read failed', $output);
+            }
+        }
+
+        return $result + ['_cached' => false];
+    }
+
+    /**
+     * Run a set/edit/delete playbook with GUI-named extra vars, then re-read
+     * the given get playbooks so the page reloads with the switch's values.
+     */
+    private function dhcpWrite(string $hostname, string $playbook, string $outName, array $vars, array $refresh, string $message)
+    {
+        $hosts    = "{$this->pluginPath}/hosts/{$hostname}.yml";
+        $yamlFile = "{$this->pluginPath}/output/{$hostname}_{$outName}.yml";
+
+        $output = $this->runAnsiblejs("{$this->pluginPath}/playbooks/{$playbook}", $hosts, $vars);
+
+        if ($reason = $this->verifyFreshPlaybookOutput($yamlFile, $output)) {
+            return $this->error($reason, $output);
+        }
+        $result = $this->parseYamlSafely($yamlFile);
+        if (($result['status'] ?? null) !== 'success') {
+            return $this->error($result['error'] ?? 'Change failed on the switch', $result);
+        }
+
+        $read = $this->dhcpRead($hostname, $refresh, false);
+
+        return $this->success(["message" => $message] + (is_array($read) ? ["refreshed" => true] : []));
+    }
+
+    /** Drop empty values - the playbooks leave omitted fields unchanged. */
+    private function dhcpVars(array $data): array
+    {
+        return array_map('strval', array_filter($data, fn ($v) => $v !== null && $v !== ''));
+    }
+
+    private const DHCP_CLIENT_GET = ['client' => ['dhcp_client_config/dhcp_client_configuration_get.yml', 'dhcp_client_configuration_get']];
+    private const DHCP_SERVER_GET = [
+        'server' => ['dhcp_server_config/dhcp_server_configuration_get.yml', 'dhcp_server_configuration_get'],
+        'pools'  => ['dhcp_server_config/dhcp_address_pools_get.yml', 'dhcp_address_pools_get'],
+    ];
+    private const IPV6_DHCP_CLIENT_GET = ['client' => ['ipv6_dhcp_client_config/ipv6_dhcp_client_configuration_get.yml', 'ipv6_dhcp_client_configuration_get']];
+    private const IPV6_DHCP_SERVER_GET = ['pools' => ['ipv6_dhcp_server_config/ipv6_dhcp_address_pools_get.yml', 'ipv6_dhcp_address_pools_get']];
+
+    #------------------------------------------------------------
+    #                    DHCP CLIENT
+    #------------------------------------------------------------
+    public function getdhcpclient($hostname)
+    {
+        $read = $this->dhcpRead($hostname, self::DHCP_CLIENT_GET);
+        if (!is_array($read)) {
+            return $read;
+        }
+
+        return $this->success(["client" => $read['client']['dhcp_client'] ?? [], "cached" => $read['_cached']]);
+    }
+
+    public function setdhcpclient(Request $request, $hostname)
+    {
+        $data = $request->validate([
+            'Boot_file_Name'                         => 'nullable|in:Enable,Disable',
+            'Vendor_Class_Identifier'                => ['nullable', 'string', 'max:64', 'regex:/^[A-Za-z0-9_.\-]+$/'],
+            'Client_Identifier'                      => 'nullable|in:Enable,Disable',
+            'Minimal_acceptable_lease_time'          => 'nullable|integer|min:60|max:86400',
+            'Number_of_packet_retransmission_times'  => 'nullable|integer|min:1|max:10',
+            'Retry_interval'                         => 'nullable|integer|min:1|max:1440',
+            'Select_interval'                        => 'nullable|integer|min:5|max:30',
+            'TFTP_Download'                          => 'nullable|in:Enable,Disable',
+            'Shut_down_port_when_timeout'            => 'nullable|in:Enable,Disable',
+        ]);
+        $vars = $this->dhcpVars($data);
+        if (!$vars) {
+            return $this->error('Nothing to change');
+        }
+
+        return $this->dhcpWrite($hostname, 'dhcp_client_config/dhcp_client_configuration_set.yml',
+            'dhcp_client_configuration_set', $vars, self::DHCP_CLIENT_GET, 'DHCP client configuration saved');
+    }
+
+    #------------------------------------------------------------
+    #                    DHCP SERVER
+    #------------------------------------------------------------
+    public function getdhcpserver($hostname)
+    {
+        $read = $this->dhcpRead($hostname, self::DHCP_SERVER_GET);
+        if (!is_array($read)) {
+            return $read;
+        }
+
+        return $this->success([
+            "server" => $read['server']['dhcp_server'] ?? [],
+            "pools"  => $read['pools']['address_pools'] ?? [],
+            "cached" => $read['_cached'],
+        ]);
+    }
+
+    public function setdhcpserver(Request $request, $hostname)
+    {
+        $data = $request->validate([
+            'DHCP_Server'            => 'nullable|in:Enable,Disable',
+            'Number_of_ICMP_packets' => 'nullable|integer|min:0|max:10',
+            'ICMP_timeout'           => 'nullable|integer|min:0|max:20',
+        ]);
+        $vars = $this->dhcpVars($data);
+        if (!$vars) {
+            return $this->error('Nothing to change');
+        }
+
+        return $this->dhcpWrite($hostname, 'dhcp_server_config/dhcp_server_configuration_set.yml',
+            'dhcp_server_config_set', $vars, self::DHCP_SERVER_GET, 'DHCP server configuration saved');
+    }
+
+    /** Add (create=1) or edit an IPv4 address pool. */
+    public function savedhcppool(Request $request, $hostname)
+    {
+        $ipv4 = 'ipv4';
+        $data = $request->validate([
+            'Pool_Name'           => ['required', 'string', 'max:32', 'regex:/^[A-Za-z0-9_.\-]+$/'],
+            'create'              => 'nullable|boolean',
+            'Network_Number'      => "nullable|{$ipv4}|required_with:Network_Mask",
+            'Network_Mask'        => "nullable|{$ipv4}|required_with:Network_Number",
+            'Gateway'             => "nullable|{$ipv4}",
+            'Address_Range_Start' => "nullable|{$ipv4}|required_with:Address_Range_End",
+            'Address_Range_End'   => "nullable|{$ipv4}|required_with:Address_Range_Start",
+            // Default, Infinite or "<days> <hours> <minutes>"
+            'Address_Lease_Time'  => ['nullable', 'regex:/^(Default|Infinite|\d{1,3} \d{1,2} \d{1,2})$/'],
+            'DNS_1'               => "nullable|{$ipv4}",
+            'DNS_2'               => "nullable|{$ipv4}",
+            'DNS_3'               => "nullable|{$ipv4}",
+            'DNS_4'               => "nullable|{$ipv4}",
+        ]);
+        $create = !empty($data['create']);
+        unset($data['create']);
+
+        $vars = $this->dhcpVars($data);
+        if (count($vars) < 2) {
+            return $this->error('Enter at least one pool setting');
+        }
+        if ($create) {
+            $vars['Create_If_Missing'] = 'yes';
+        }
+
+        return $this->dhcpWrite($hostname, 'dhcp_server_config/dhcp_address_pools_edit.yml',
+            'dhcp_address_pools_edit', $vars, self::DHCP_SERVER_GET,
+            "Address pool {$data['Pool_Name']} " . ($create ? 'added' : 'updated'));
+    }
+
+    public function deletedhcppool(Request $request, $hostname)
+    {
+        $data = $request->validate([
+            'Pool_Name' => ['required', 'string', 'max:32', 'regex:/^[A-Za-z0-9_.\-]+$/'],
+        ]);
+
+        return $this->dhcpWrite($hostname, 'dhcp_server_config/dhcp_address_pools_delete.yml',
+            'dhcp_address_pools_delete', ['Pool_Name' => $data['Pool_Name']], self::DHCP_SERVER_GET,
+            "Address pool {$data['Pool_Name']} deleted");
+    }
+
+    #------------------------------------------------------------
+    #                    IPv6 DHCP CLIENT
+    #------------------------------------------------------------
+    public function getipv6dhcpclient($hostname)
+    {
+        $read = $this->dhcpRead($hostname, self::IPV6_DHCP_CLIENT_GET);
+        if (!is_array($read)) {
+            return $read;
+        }
+
+        return $this->success(["vlans" => $read['client']['ipv6_dhcp_client'] ?? [], "cached" => $read['_cached']]);
+    }
+
+    /**
+     * Set a VLAN's IPv6 DHCP client settings. A new Prefix_Name goes through
+     * ..._set.yml (which also turns Stateless off); everything else through
+     * ..._edit.yml, which keeps the existing prefix.
+     */
+    public function setipv6dhcpclient(Request $request, $hostname)
+    {
+        $data = $request->validate([
+            'mode'                        => 'nullable|in:add,edit',
+            'VLAN_ID'                     => 'required|integer|min:1|max:4094',
+            'Prefix_Name'                 => ['nullable', 'string', 'max:32', 'regex:/^[A-Za-z0-9_.\-]+$/'],
+            'Stateless_Allocation'        => 'nullable|in:Enable,Disable',
+            'Rapid_Commit'                => 'nullable|in:Enable,Disable',
+            'Non_temp_Address_Allocation' => 'nullable|in:Enable,Disable',
+        ]);
+        $add = ($data['mode'] ?? 'edit') === 'add';
+        unset($data['mode']);
+        $vlan = (int) $data['VLAN_ID'];
+
+        $vars = $this->dhcpVars($data);
+        if (count($vars) < 2) {
+            return $this->error('Nothing to change');
+        }
+
+        // Add only works on an existing VLAN interface - the playbook's
+        // "interface vlan <id>" would otherwise create a new one.
+        if ($add) {
+            $known = $this->parseYamlSafely("{$this->pluginPath}/output/{$hostname}_ipv6_dhcp_client_configuration_get.yml");
+            $vlans = array_map(fn ($v) => (int) ($v['vlan_id'] ?? 0), $known['ipv6_dhcp_client'] ?? []);
+            if (($known['status'] ?? null) === 'success' && !in_array($vlan, $vlans, true)) {
+                return $this->error("VLAN {$vlan} has no VLAN interface on this switch - create it under VLAN Interfaces and IP Addresses first");
+            }
+        }
+
+        // Add, or a new Prefix_Name: ..._set.yml (it turns Stateless off
+        // itself when a prefix is given). Other edits: ..._edit.yml, which
+        // keeps the existing prefix.
+        if ($add || !empty($vars['Prefix_Name'])) {
+            if (!empty($vars['Prefix_Name'])) {
+                unset($vars['Stateless_Allocation']);
+            }
+
+            return $this->dhcpWrite($hostname, 'ipv6_dhcp_client_config/ipv6_dhcp_client_configuration_set.yml',
+                'ipv6_dhcp_client_set', $vars, self::IPV6_DHCP_CLIENT_GET,
+                "IPv6 DHCP client " . ($add ? 'added' : 'saved') . " on VLAN {$vlan}");
+        }
+
+        return $this->dhcpWrite($hostname, 'ipv6_dhcp_client_config/ipv6_dhcp_client_configuration_edit.yml',
+            'ipv6_dhcp_client_edit', $vars, self::IPV6_DHCP_CLIENT_GET, "IPv6 DHCP client saved on VLAN {$vlan}");
+    }
+
+    #------------------------------------------------------------
+    #                    IPv6 DHCP SERVER
+    #------------------------------------------------------------
+    public function getipv6dhcpserver($hostname)
+    {
+        $read = $this->dhcpRead($hostname, self::IPV6_DHCP_SERVER_GET);
+        if (!is_array($read)) {
+            return $read;
+        }
+
+        return $this->success(["pools" => $read['pools']['ipv6_dhcp_address_pools'] ?? [], "cached" => $read['_cached']]);
+    }
+
+    /**
+     * Add (create=1, ..._set.yml) or edit (..._edit.yml) an IPv6 pool. When
+     * editing, a changed address range is replaced: the old range is deleted
+     * first (Old_Range_Start/End), then the new one added.
+     */
+    public function saveipv6dhcppool(Request $request, $hostname)
+    {
+        $data = $request->validate([
+            'Pool_Name'           => ['required', 'string', 'max:32', 'regex:/^[A-Za-z0-9_.\-]+$/'],
+            'create'              => 'nullable|boolean',
+            'Domain_Name'         => ['nullable', 'string', 'max:64', 'regex:/^[A-Za-z0-9.\-]+$/'],
+            'Address_Range_Start' => 'nullable|ipv6|required_with:Address_Range_End',
+            'Address_Range_End'   => 'nullable|ipv6|required_with:Address_Range_Start',
+            'Old_Range_Start'     => 'nullable|ipv6|required_with:Old_Range_End',
+            'Old_Range_End'       => 'nullable|ipv6|required_with:Old_Range_Start',
+            'DNS_Server'          => 'nullable|ipv6',
+        ]);
+        $create = !empty($data['create']);
+        $name = $data['Pool_Name'];
+
+        if ($create) {
+            $vars = $this->dhcpVars(array_intersect_key($data, array_flip(['Pool_Name', 'Domain_Name', 'Address_Range_Start', 'Address_Range_End', 'DNS_Server'])));
+
+            return $this->dhcpWrite($hostname, 'ipv6_dhcp_server_config/ipv6_dhcp_address_pools_set.yml',
+                'ipv6_dhcp_address_pools_set', $vars, self::IPV6_DHCP_SERVER_GET, "IPv6 pool {$name} added");
+        }
+
+        $playbook = 'ipv6_dhcp_server_config/ipv6_dhcp_address_pools_edit.yml';
+        $rangeChanged = !empty($data['Address_Range_Start'])
+            && ($data['Address_Range_Start'] !== ($data['Old_Range_Start'] ?? null) || $data['Address_Range_End'] !== ($data['Old_Range_End'] ?? null));
+
+        // 1. remove the old range when it is being replaced
+        if ($rangeChanged && !empty($data['Old_Range_Start'])) {
+            $resp = $this->dhcpWrite($hostname, $playbook, 'ipv6_dhcp_address_pools_edit', [
+                'Pool_Name' => $name, 'Address_Range_Action' => 'Delete',
+                'Address_Range_Start' => $data['Old_Range_Start'], 'Address_Range_End' => $data['Old_Range_End'],
+            ], [], 'old range removed');
+            if (($resp->getData(true)['status'] ?? null) !== 'success') {
+                return $resp;
+            }
+        }
+
+        // 2. everything else in one edit
+        $vars = ['Pool_Name' => $name] + $this->dhcpVars(array_intersect_key($data, array_flip(['Domain_Name', 'DNS_Server'])));
+        if ($rangeChanged) {
+            $vars += ['Address_Range_Action' => 'Add', 'Address_Range_Start' => $data['Address_Range_Start'], 'Address_Range_End' => $data['Address_Range_End']];
+        }
+        if (count($vars) < 2) {
+            // only the old range was removed (or nothing changed)
+            $this->dhcpRead($hostname, self::IPV6_DHCP_SERVER_GET, false);
+
+            return $this->success(["message" => "IPv6 pool {$name} updated"]);
+        }
+
+        return $this->dhcpWrite($hostname, $playbook, 'ipv6_dhcp_address_pools_edit', $vars,
+            self::IPV6_DHCP_SERVER_GET, "IPv6 pool {$name} updated");
+    }
+
+    public function deleteipv6dhcppool(Request $request, $hostname)
+    {
+        $data = $request->validate([
+            'Pool_Name' => ['required', 'string', 'max:32', 'regex:/^[A-Za-z0-9_.\-]+$/'],
+        ]);
+
+        return $this->dhcpWrite($hostname, 'ipv6_dhcp_server_config/ipv6_dhcp_address_pools_delete.yml',
+            'ipv6_dhcp_address_pools_delete', ['Pool_Name' => $data['Pool_Name']], self::IPV6_DHCP_SERVER_GET,
+            "IPv6 pool {$data['Pool_Name']} deleted");
+    }
+
+    #------------------------------------------------------------
     #                    STORM CONTROL (SHOW)
     #------------------------------------------------------------
     /** Storm type => playbook/output name in playbooks/strom_control/. */

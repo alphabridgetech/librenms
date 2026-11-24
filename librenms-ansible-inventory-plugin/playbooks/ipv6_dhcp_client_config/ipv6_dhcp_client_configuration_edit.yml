@@ -1,0 +1,268 @@
+# ==========================================
+# ipv6_dhcp_client_configuration_edit.yml
+# Created on Nov 5, 2026 by Vikash Kumar (vikash.kumar@alphabrige.tech).
+#
+# Copyright (c), ALPHA BRIDGE, Inc.
+# 357D, Udyog Vihar Industrial Area Phase VI, Sector 37, Gurugram, Haryana.
+#
+# All rights reserved.
+#
+# This software is the confidential and proprietary information of
+# ALPHA BRIDGE, Inc. ("Confidential Information"). You shall not
+# disclose such Confidential Information and shall use it only in
+# accordance with the terms of the license agreement you entered into
+# with ALPHA BRIDGE.
+#
+# =============================================================================
+# Playbook Name : IPv6 DHCP Client Configuration Edit
+# =============================================================================
+#
+# Description:
+# Updates one or more settings on an existing VLAN IPv6 DHCP client profile.
+# VLAN_ID selects the interface and Prefix_Name identifies the profile; neither
+# is changed. Omitted fields remain unchanged. Stateless Allocation cannot be
+# changed when a Prefix_Name is configured. Toggle values accept Enable or
+# Disable.
+#
+# Pass GUI-named variables with `-e "name=value ..."`.
+#
+# Example (change Rapid Commit and Non-temp Address Allocation):
+# ansible-playbook -i inventory/192.168.200.241.yml \
+#   playbooks/l3/ipv6_dhcp_client_config/ipv6_dhcp_client_configuration_edit.yml \
+#   -e "VLAN_ID=209 Rapid_Commit=Enable Non_temp_Address_Allocation=Enable"
+#
+# =============================================================================
+
+- name: Edit IPv6 DHCP client configuration
+  hosts: alphabridge_devices
+  gather_facts: false
+
+  vars:
+    # These files live in playbooks/<feature>/, so the plugin root is two
+    # levels up.
+    project_root: "{{ playbook_dir }}/../.."
+    output_dir: "{{ project_root }}/output"
+    tmp_dir: "{{ project_root }}/tmp"
+    ipv6_dhcp_client_edit:
+      vlan_id: "{{ VLAN_ID | default('') }}"
+      stateless_allocation: "{{ Stateless_Allocation | default('') }}"
+      rapid_commit: "{{ Rapid_Commit | default('') }}"
+      non_temp_address_allocation: "{{ Non_temp_Address_Allocation | default('') }}"
+
+  pre_tasks:
+    - name: Ensure helper and output directories exist
+      ansible.builtin.file:
+        path: "{{ item }}"
+        state: directory
+        mode: '0755'
+      loop:
+        - "{{ tmp_dir }}"
+        - "{{ output_dir }}"
+
+  tasks:
+    - name: Create IPv6 DHCP client edit SSH helper
+      ansible.builtin.copy:
+        dest: "{{ tmp_dir }}/ipv6_dhcp_client_edit_exec_{{ ansible_host }}.py"
+        mode: '0700'
+        content: |
+          #!/usr/bin/env python3
+
+          import json
+          import re
+          import time
+          import paramiko
+
+          HOST = {{ ansible_host | to_json }}
+          PORT = int({{ ansible_port | default(22) | to_json }})
+          USER = {{ ansible_user | to_json }}
+          PASSWORD = {{ ansible_password | to_json }}
+          SETTINGS = json.loads({{ ipv6_dhcp_client_edit | to_json | to_json }})
+
+          ANSI_RE = re.compile(r'\x1b(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])')
+          PROMPT_RE = re.compile(r'[>#]\s*\Z')
+          CLI_ERROR_RE = re.compile(
+              r'(?im)^\s*%\s*(?:invalid|error|incomplete|ambiguous|'
+              r'unknown|unrecognized)\b|'
+              r'\b(?:invalid input|unknown command|incomplete command|'
+              r'command rejected|bad parameter|too many parameters|fail with ret\s*-?\d+)\b'
+          )
+
+          def read_until_prompt(shell, stage, timeout=30):
+              buffer = ""
+              deadline = time.monotonic() + timeout
+              while time.monotonic() < deadline:
+                  if shell.recv_ready():
+                      buffer += shell.recv(65535).decode(errors="replace")
+                      clean = ANSI_RE.sub("", buffer).replace("\r", "")
+                      if PROMPT_RE.search(clean.rstrip()):
+                          return clean
+                  else:
+                      time.sleep(0.1)
+              raise TimeoutError(f"Timed out waiting for switch prompt during {stage}")
+
+          def run_command(shell, command, timeout=30, check_errors=True):
+              shell.send(command + "\n")
+              output = read_until_prompt(shell, command, timeout)
+              if check_errors and CLI_ERROR_RE.search(output):
+                  raise RuntimeError(f"Switch rejected {command!r}: {output.strip()}")
+              return output
+
+          def toggle_command(value, label, enabled_command, disabled_command):
+              normalized = value.strip().lower()
+              if not normalized:
+                  return None
+              if normalized in ("enable", "enabled", "yes", "true"):
+                  return enabled_command
+              if normalized in ("disable", "disabled", "no", "false"):
+                  return disabled_command
+              raise ValueError(f"{label} must be Enable or Disable")
+
+          def build_commands(settings):
+              vlan = settings.get("vlan_id", "").strip()
+              if not vlan.isdigit() or not 1 <= int(vlan) <= 4094:
+                  raise ValueError("VLAN_ID is required and must be between 1 and 4094")
+
+              commands = []
+              command = toggle_command(
+                  settings.get("stateless_allocation", ""),
+                  "Stateless_Allocation",
+                  "ipv6 dhcp client stateless",
+                  "no ipv6 dhcp client stateless",
+              )
+              if command:
+                  commands.append(command)
+
+              command = toggle_command(
+                  settings.get("rapid_commit", ""), "Rapid_Commit",
+                  "ipv6 dhcp client rapid-commit",
+                  "no ipv6 dhcp client rapid-commit",
+              )
+              if command:
+                  commands.append(command)
+
+              command = toggle_command(
+                  settings.get("non_temp_address_allocation", ""),
+                  "Non_temp_Address_Allocation",
+                  "ipv6 dhcp client na",
+                  "no ipv6 dhcp client na",
+              )
+              if command:
+                  commands.append(command)
+
+              if not commands:
+                  raise ValueError("Pass at least one editable field")
+              return vlan, commands
+
+          ssh = None
+          shell = None
+          stage = "input validation"
+          applied = []
+          try:
+              vlan, commands = build_commands(SETTINGS)
+              ssh = paramiko.SSHClient()
+              ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+              stage = "SSH connection"
+              ssh.connect(
+                  HOST, port=PORT, username=USER, password=PASSWORD,
+                  look_for_keys=False, allow_agent=False,
+                  timeout=20, auth_timeout=20, banner_timeout=20,
+              )
+              shell = ssh.invoke_shell()
+              read_until_prompt(shell, "initial prompt", timeout=10)
+              stage = "enable mode"
+              run_command(shell, "enable", timeout=10, check_errors=False)
+              stage = "disable paging"
+              run_command(shell, "terminal length 0", timeout=10, check_errors=False)
+              stage = f"verify VLAN interface {vlan}"
+              config = run_command(shell, f"show running-config interface vlan {vlan}", timeout=30)
+              clean_config = ANSI_RE.sub("", config).replace("\r", "").lower()
+              if not re.search(rf"\binterface\s+vlan\s+{re.escape(vlan)}\b", clean_config):
+                  raise ValueError(f"VLAN interface {vlan} was not found")
+              if SETTINGS.get("stateless_allocation", "").strip() and re.search(
+                  r"(?im)^\s*ipv6\s+dhcp\s+client\s+pd\s+\S+", clean_config
+              ):
+                  raise ValueError(
+                      "Stateless_Allocation cannot be changed while Prefix_Name is configured"
+                  )
+              stage = "configuration mode"
+              run_command(shell, "config", timeout=10)
+              stage = f"select VLAN interface {vlan}"
+              run_command(shell, f"interface vlan {vlan}", timeout=15)
+              for command in commands:
+                  stage = command
+                  run_command(shell, command, timeout=15)
+                  applied.append(command)
+              stage = "exit VLAN interface configuration"
+              run_command(shell, "exit", timeout=10, check_errors=False)
+              stage = "exit configuration mode"
+              run_command(shell, "exit", timeout=10, check_errors=False)
+              stage = f"verify edited VLAN interface {vlan}"
+              run_command(shell, f"show running-config interface vlan {vlan}", timeout=30)
+              stage = "save configuration"
+              write_output = ANSI_RE.sub("", run_command(shell, "write", timeout=20, check_errors=False))
+              if re.search(r"%err|invalid|error|fail", write_output, re.IGNORECASE):
+                  raise RuntimeError(f"Switch rejected 'write': {write_output.strip()}")
+              if "OK!" not in write_output:
+                  raise RuntimeError("Switch did not confirm the configuration save: " + write_output.strip())
+              print(json.dumps({"ip": HOST, "status": "success"}))
+          except Exception as exc:
+              print(json.dumps({
+                  "ip": HOST,
+                  "status": "failed",
+                  "stage": stage,
+                  "applied_commands": applied,
+                  "error": str(exc),
+              }))
+          finally:
+              if shell is not None:
+                  shell.close()
+              if ssh is not None:
+                  ssh.close()
+      no_log: true
+
+    - name: Execute IPv6 DHCP client edit helper
+      ansible.builtin.command:
+        argv:
+          - "{{ project_root }}/bin/python3"   # plugin venv (has paramiko)
+          - "{{ tmp_dir }}/ipv6_dhcp_client_edit_exec_{{ ansible_host }}.py"
+      register: ipv6_dhcp_client_edit_raw
+      changed_when: >-
+        ipv6_dhcp_client_edit_raw.rc == 0 and
+        '"status": "success"' in ipv6_dhcp_client_edit_raw.stdout
+      failed_when: false
+
+    - name: Fail if helper returned no JSON
+      ansible.builtin.fail:
+        msg: >-
+          IPv6 DHCP client EDIT helper returned no JSON.
+          rc={{ ipv6_dhcp_client_edit_raw.rc }}; stderr={{ ipv6_dhcp_client_edit_raw.stderr }}
+      when: ipv6_dhcp_client_edit_raw.stdout | trim | length == 0
+
+    - name: Parse IPv6 DHCP client edit result
+      ansible.builtin.set_fact:
+        ipv6_dhcp_client_edit_result: "{{ ipv6_dhcp_client_edit_raw.stdout | from_json }}"
+
+    - name: Fail if IPv6 DHCP client edit failed
+      ansible.builtin.fail:
+        msg: >-
+          IPv6 DHCP client EDIT failed during
+          {{ ipv6_dhcp_client_edit_result.stage | default('execution') }}:
+          {{ ipv6_dhcp_client_edit_result.error | default(ipv6_dhcp_client_edit_raw.stderr) }}
+          Commands applied before failure:
+          {{ ipv6_dhcp_client_edit_result.applied_commands | default([]) }}
+      when: ipv6_dhcp_client_edit_result.status != 'success' or ipv6_dhcp_client_edit_raw.rc != 0
+
+    - name: Display IPv6 DHCP client edit result
+      ansible.builtin.debug:
+        msg: "{{ ipv6_dhcp_client_edit_result | to_nice_yaml(indent=2, sort_keys=False) }}"
+
+    - name: Save IPv6 DHCP client edit result
+      ansible.builtin.copy:
+        dest: "{{ output_dir }}/{{ ansible_host }}_ipv6_dhcp_client_edit.yml"
+        content: "{{ ipv6_dhcp_client_edit_result | to_nice_yaml(indent=2, sort_keys=False) }}"
+
+    - name: Display result path
+      ansible.builtin.debug:
+        msg: >-
+          IPv6 DHCP client edit completed successfully.
+          Saved to output/{{ ansible_host }}_ipv6_dhcp_client_edit.yml

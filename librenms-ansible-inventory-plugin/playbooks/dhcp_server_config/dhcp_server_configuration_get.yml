@@ -1,0 +1,237 @@
+# ==========================================
+# dhcp_server_configuration_get.yml
+# Created on Nov 4, 2026 by Vikash Kumar (vikash.kumar@alphabrige.tech).
+#
+# Copyright (c), ALPHA BRIDGE, Inc.
+# 357D, Udyog Vihar Industrial Area Phase VI, Sector 37, Gurugram, Haryana.
+#
+# All rights reserved.
+#
+# This software is the confidential and proprietary information of
+# ALPHA BRIDGE, Inc. ("Confidential Information"). You shall not
+# disclose such Confidential Information and shall use it only in
+# accordance with the terms of the license agreement you entered into
+# with ALPHA BRIDGE.
+#
+# =============================================================================
+# Playbook Name : DHCP Server Configuration Get
+# =============================================================================
+#
+# Description:
+# Reads global DHCP server settings from `show running non-interface`.
+# The switch omits default settings from running config, so missing settings
+# are returned using the defaults shown in the web UI.
+#
+# GUI defaults:
+#   DHCP Server             : Disable
+#   Number of ICMP packets  : 2
+#   ICMP timeout            : 5 (100 ms units)
+#
+# Output:
+#   output/<switch_ip>_dhcp_server_configuration_get.yml
+# =============================================================================
+
+- name: Get DHCP server configuration
+  hosts: alphabridge_devices
+  gather_facts: false
+
+  vars:
+    # These files live in playbooks/<feature>/, so the plugin root is two
+    # levels up.
+    project_root: "{{ playbook_dir }}/../.."
+    output_dir: "{{ project_root }}/output"
+    tmp_dir: "{{ project_root }}/tmp"
+
+  pre_tasks:
+    - name: Ensure helper and output directories exist
+      ansible.builtin.file:
+        path: "{{ item }}"
+        state: directory
+        mode: '0755'
+      loop:
+        - "{{ tmp_dir }}"
+        - "{{ output_dir }}"
+
+  tasks:
+    - name: Create DHCP server configuration SSH helper
+      ansible.builtin.copy:
+        dest: "{{ tmp_dir }}/dhcp_server_configuration_get_exec_{{ ansible_host }}.py"
+        mode: '0700'
+        content: |
+          #!/usr/bin/env python3
+
+          import json
+          import re
+          import time
+          import paramiko
+
+          HOST = {{ ansible_host | to_json }}
+          PORT = int({{ ansible_port | default(22) | to_json }})
+          USER = {{ ansible_user | to_json }}
+          PASSWORD = {{ ansible_password | to_json }}
+
+          ANSI_RE = re.compile(r'\x1b(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])')
+          PROMPT_RE = re.compile(r'[>#]\s*\Z')
+          CLI_ERROR_RE = re.compile(
+              r'(?im)^\s*%\s*(?:invalid|error|incomplete|ambiguous|'
+              r'unknown|unrecognized)\b|'
+              r'\b(?:invalid input|unknown command|incomplete command|'
+              r'command rejected|bad parameter|too many parameters|fail with ret\s*-?\d+)\b'
+          )
+
+          DEFAULTS = {
+              "dhcp_server": "Disable",
+              "number_of_icmp_packets": 2,
+              "icmp_timeout": 5,
+          }
+
+          def read_until_prompt(shell, stage, timeout=30):
+              buffer = ""
+              deadline = time.monotonic() + timeout
+              while time.monotonic() < deadline:
+                  if shell.recv_ready():
+                      buffer += shell.recv(65535).decode(errors="replace")
+                      clean = ANSI_RE.sub("", buffer).replace("\r", "")
+                      if PROMPT_RE.search(clean.rstrip()):
+                          return clean
+                  else:
+                      time.sleep(0.1)
+              raise TimeoutError(f"Timed out waiting for switch prompt during {stage}")
+
+          def run_command(shell, command, timeout=30):
+              shell.send(command + "\n")
+              output = read_until_prompt(shell, command, timeout)
+              if CLI_ERROR_RE.search(output):
+                  raise RuntimeError(f"Switch rejected {command!r}: {output.strip()}")
+              return output
+
+          def parse_dhcp_server_config(output):
+              lines = [line.strip() for line in output.splitlines()]
+              if not any(
+                  line.lower().startswith("!version ")
+                  or line.lower() == "current configuration:"
+                  for line in lines
+              ):
+                  raise ValueError("SHOW output does not contain a running-config header")
+
+              result = dict(DEFAULTS)
+              seen = set()
+
+              for line in lines:
+                  words = line.lower().split()
+                  disabled = words[:1] == ["no"]
+                  command = words[1:] if disabled else words
+                  if len(command) < 2 or command[:2] != ["ip", "dhcpd"]:
+                      continue
+
+                  if command == ["ip", "dhcpd", "enable"]:
+                      key = "enable"
+                      if key in seen:
+                          raise ValueError(f"Duplicate DHCP server setting: {line}")
+                      seen.add(key)
+                      result["dhcp_server"] = "Disable" if disabled else "Enable"
+                  elif len(command) == 5 and command[:4] == ["ip", "dhcpd", "ping", "packets"]:
+                      key = "ping packets"
+                      if key in seen or (not disabled and not command[4].isdigit()):
+                          raise ValueError(f"Invalid DHCP server setting: {line}")
+                      value = DEFAULTS["number_of_icmp_packets"] if disabled else int(command[4])
+                      if not 0 <= value <= 10:
+                          raise ValueError(f"ICMP packet count out of range: {line}")
+                      seen.add(key)
+                      result["number_of_icmp_packets"] = value
+                  elif len(command) == 5 and command[:4] == ["ip", "dhcpd", "ping", "timeout"]:
+                      key = "ping timeout"
+                      if key in seen or (not disabled and not command[4].isdigit()):
+                          raise ValueError(f"Invalid DHCP server setting: {line}")
+                      value = DEFAULTS["icmp_timeout"] if disabled else int(command[4])
+                      if not 0 <= value <= 20:
+                          raise ValueError(f"ICMP timeout out of range: {line}")
+                      seen.add(key)
+                      result["icmp_timeout"] = value
+                  else:
+                      raise ValueError(f"Unknown DHCP server setting: {line}")
+
+              return result
+
+          ssh = None
+          shell = None
+          stage = "SSH connection"
+          try:
+              ssh = paramiko.SSHClient()
+              ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+              ssh.connect(
+                  HOST, port=PORT, username=USER, password=PASSWORD,
+                  look_for_keys=False, allow_agent=False,
+                  timeout=20, auth_timeout=20, banner_timeout=20,
+              )
+              shell = ssh.invoke_shell()
+              read_until_prompt(shell, "initial prompt", timeout=10)
+              stage = "enable mode"
+              run_command(shell, "enable", timeout=10)
+              stage = "disable paging"
+              run_command(shell, "terminal length 0", timeout=10)
+              stage = "show running non-interface"
+              config = run_command(shell, "show running non-interface", timeout=60)
+              stage = "parse DHCP server configuration"
+              settings = parse_dhcp_server_config(config)
+              print(json.dumps({
+                  "ip": HOST,
+                  "dhcp_server": settings,
+                  "status": "success",
+              }))
+          except Exception as exc:
+              print(json.dumps({
+                  "ip": HOST,
+                  "status": "failed",
+                  "stage": stage,
+                  "error": str(exc),
+              }))
+          finally:
+              if shell is not None:
+                  shell.close()
+              if ssh is not None:
+                  ssh.close()
+      no_log: true
+
+    - name: Execute DHCP server configuration helper
+      ansible.builtin.command:
+        argv:
+          - "{{ project_root }}/bin/python3"   # plugin venv (has paramiko)
+          - "{{ tmp_dir }}/dhcp_server_configuration_get_exec_{{ ansible_host }}.py"
+      register: dhcp_server_raw
+      changed_when: false
+      failed_when: false
+
+    - name: Fail if helper returned no JSON
+      ansible.builtin.fail:
+        msg: >-
+          DHCP server GET helper returned no JSON.
+          rc={{ dhcp_server_raw.rc }}; stderr={{ dhcp_server_raw.stderr }}
+      when: dhcp_server_raw.stdout | trim | length == 0
+
+    - name: Parse DHCP server configuration result
+      ansible.builtin.set_fact:
+        dhcp_server_result: "{{ dhcp_server_raw.stdout | from_json }}"
+
+    - name: Fail if DHCP server configuration retrieval failed
+      ansible.builtin.fail:
+        msg: >-
+          DHCP server GET failed during
+          {{ dhcp_server_result.stage | default('execution') }}:
+          {{ dhcp_server_result.error | default(dhcp_server_raw.stderr) }}
+      when: dhcp_server_result.status != 'success' or dhcp_server_raw.rc != 0
+
+    - name: Display DHCP server configuration
+      ansible.builtin.debug:
+        msg: "{{ dhcp_server_result | to_nice_yaml(indent=2, sort_keys=False) }}"
+
+    - name: Save DHCP server configuration to YAML
+      ansible.builtin.copy:
+        dest: "{{ output_dir }}/{{ ansible_host }}_dhcp_server_configuration_get.yml"
+        content: "{{ dhcp_server_result | to_nice_yaml(indent=2, sort_keys=False) }}"
+
+    - name: Display report path
+      ansible.builtin.debug:
+        msg: >-
+          DHCP server configuration collected successfully.
+          Saved to output/{{ ansible_host }}_dhcp_server_configuration_get.yml

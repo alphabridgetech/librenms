@@ -89,6 +89,17 @@ Route::prefix('v0')->group(function () {
         Route::post('portmirror/set/{hostname}', [App\Api\Controllers\KunalApiController::class, 'setportmirror'])->name('portmirror.set');
         Route::get('keepalive/show/{hostname}', [App\Api\Controllers\KunalApiController::class, 'getkeepalive'])->name('keepalive.show');
         Route::post('keepalive/set/{hostname}', [App\Api\Controllers\KunalApiController::class, 'setkeepalive'])->name('keepalive.set');
+        Route::get('dhcp/client/show/{hostname}', [App\Api\Controllers\KunalApiController::class, 'getdhcpclient'])->name('dhcp.client.show');
+        Route::post('dhcp/client/set/{hostname}', [App\Api\Controllers\KunalApiController::class, 'setdhcpclient'])->name('dhcp.client.set');
+        Route::get('dhcp/server/show/{hostname}', [App\Api\Controllers\KunalApiController::class, 'getdhcpserver'])->name('dhcp.server.show');
+        Route::post('dhcp/server/set/{hostname}', [App\Api\Controllers\KunalApiController::class, 'setdhcpserver'])->name('dhcp.server.set');
+        Route::post('dhcp/server/pool/{hostname}', [App\Api\Controllers\KunalApiController::class, 'savedhcppool'])->name('dhcp.server.pool');
+        Route::post('dhcp/server/pool/delete/{hostname}', [App\Api\Controllers\KunalApiController::class, 'deletedhcppool'])->name('dhcp.server.pool.delete');
+        Route::get('ipv6dhcp/client/show/{hostname}', [App\Api\Controllers\KunalApiController::class, 'getipv6dhcpclient'])->name('ipv6dhcp.client.show');
+        Route::post('ipv6dhcp/client/set/{hostname}', [App\Api\Controllers\KunalApiController::class, 'setipv6dhcpclient'])->name('ipv6dhcp.client.set');
+        Route::get('ipv6dhcp/server/show/{hostname}', [App\Api\Controllers\KunalApiController::class, 'getipv6dhcpserver'])->name('ipv6dhcp.server.show');
+        Route::post('ipv6dhcp/server/pool/{hostname}', [App\Api\Controllers\KunalApiController::class, 'saveipv6dhcppool'])->name('ipv6dhcp.server.pool');
+        Route::post('ipv6dhcp/server/pool/delete/{hostname}', [App\Api\Controllers\KunalApiController::class, 'deleteipv6dhcppool'])->name('ipv6dhcp.server.pool.delete');
         Route::get('stormcontrol/show/{hostname}', [App\Api\Controllers\KunalApiController::class, 'getstormcontrol'])->name('stormcontrol.show');
         Route::post('stormcontrol/set/{hostname}', [App\Api\Controllers\KunalApiController::class, 'setstormcontrol'])->name('stormcontrol.set');
         Route::get('portfilter/show/{hostname}', [App\Api\Controllers\KunalApiController::class, 'getportfilter'])->name('portfilter.show');

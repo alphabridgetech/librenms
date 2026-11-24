@@ -1,0 +1,346 @@
+# ==========================================
+# dhcp_address_pools_edit.yml
+#
+# Description:
+# Updates fields on an existing DHCP address pool. Pool_Name selects the
+# existing profile and is never changed. Omitted fields are left unchanged.
+#
+# Example:
+# ansible-playbook -i inventory/192.168.200.241.yml \
+#   playbooks/l3/dhcp_server_config/dhcp_address_pools_edit.yml \
+#   -e "Pool_Name=testing Network_Number=192.168.100.0 Network_Mask=255.255.255.0 Gateway=192.168.100.1 Address_Range_Start=192.168.100.100 Address_Range_End=192.168.100.200 Address_Lease_Time=Default DNS_1=8.8.8.8"
+#
+# Editable variables: Network_Number, Network_Mask, Gateway,
+# Address_Range_Start, Address_Range_End, Address_Lease_Time, DNS_1..DNS_4.
+# Address_Lease_Time accepts Default, Infinite, or "<days> <hours> <minutes>".
+# Create_If_Missing=yes creates the pool when Pool_Name does not exist yet
+# (used by the Telequill DHCP Server page to add pools); without it a missing
+# pool is an error, as before.
+# ==========================================
+
+- name: Edit DHCP address pool
+  hosts: alphabridge_devices
+  gather_facts: false
+
+  vars:
+    # These files live in playbooks/<feature>/, so the plugin root is two
+    # levels up.
+    project_root: "{{ playbook_dir }}/../.."
+    output_dir: "{{ project_root }}/output"
+    tmp_dir: "{{ project_root }}/tmp"
+    dhcp_pool_edit:
+      name: "{{ Pool_Name | default('') }}"
+      create_if_missing: "{{ Create_If_Missing | default('') }}"
+      network_number: "{{ Network_Number | default('') }}"
+      network_mask: "{{ Network_Mask | default('') }}"
+      gateway: "{{ Gateway | default('') }}"
+      range_start: "{{ Address_Range_Start | default('') }}"
+      range_end: "{{ Address_Range_End | default('') }}"
+      lease: "{{ Address_Lease_Time | default('') }}"
+      dns:
+        - "{{ DNS_1 | default('') }}"
+        - "{{ DNS_2 | default('') }}"
+        - "{{ DNS_3 | default('') }}"
+        - "{{ DNS_4 | default('') }}"
+
+  pre_tasks:
+    - name: Ensure helper and output directories exist
+      ansible.builtin.file:
+        path: "{{ item }}"
+        state: directory
+        mode: '0755'
+      loop:
+        - "{{ tmp_dir }}"
+        - "{{ output_dir }}"
+
+  tasks:
+    - name: Create DHCP address pool edit SSH helper
+      ansible.builtin.copy:
+        dest: "{{ tmp_dir }}/dhcp_address_pools_edit_exec_{{ ansible_host }}.py"
+        mode: '0700'
+        content: |
+          #!/usr/bin/env python3
+
+          import ipaddress
+          import json
+          import re
+          import time
+          import paramiko
+
+          HOST = {{ ansible_host | to_json }}
+          PORT = int({{ ansible_port | default(22) | to_json }})
+          USER = {{ ansible_user | to_json }}
+          PASSWORD = {{ ansible_password | to_json }}
+          SETTINGS = json.loads({{ dhcp_pool_edit | to_json | to_json }})
+
+          ANSI_RE = re.compile(r'\x1b(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])')
+          PROMPT_RE = re.compile(r'[>#]\s*\Z')
+          CLI_ERROR_RE = re.compile(
+              r'(?im)^\s*%\s*(?:invalid|error|incomplete|ambiguous|'
+              r'unknown|unrecognized)\b|'
+              r'\b(?:invalid input|unknown command|incomplete command|'
+              r'command rejected|bad parameter|too many parameters|fail with ret\s*-?\d+)\b'
+          )
+
+          def valid_ipv4(value, label):
+              try:
+                  return str(ipaddress.IPv4Address(value))
+              except ipaddress.AddressValueError as exc:
+                  raise ValueError(f"{label} must be a valid IPv4 address") from exc
+
+          def build_commands(settings, current):
+              name = settings.get("name", "").strip()
+              if not name or not re.fullmatch(r"[A-Za-z0-9_.-]+", name):
+                  raise ValueError(
+                      "Pool_Name is required and may contain only letters, "
+                      "numbers, underscores, periods, and hyphens"
+                  )
+
+              commands = []
+              network = settings.get("network_number", "").strip()
+              mask = settings.get("network_mask", "").strip()
+              if bool(network) != bool(mask):
+                  raise ValueError("Network_Number and Network_Mask must be supplied together")
+              if network:
+                  network = valid_ipv4(network, "Network_Number")
+                  mask = valid_ipv4(mask, "Network_Mask")
+                  try:
+                      ipaddress.IPv4Network(f"{network}/{mask}", strict=False)
+                  except ValueError as exc:
+                      raise ValueError("Network_Mask must be a valid subnet mask") from exc
+                  if current.get("network") != (network, mask):
+                      commands.append(f"network {network} {mask}")
+
+              gateway = settings.get("gateway", "").strip()
+              if gateway:
+                  gateway = valid_ipv4(gateway, "Gateway")
+                  if current.get("gateway") != gateway:
+                      commands.append(f"default-router {gateway}")
+
+              start = settings.get("range_start", "").strip()
+              end = settings.get("range_end", "").strip()
+              if bool(start) != bool(end):
+                  raise ValueError(
+                      "Address_Range_Start and Address_Range_End must be supplied together"
+                  )
+              if start:
+                  first = ipaddress.IPv4Address(valid_ipv4(start, "Address_Range_Start"))
+                  last = ipaddress.IPv4Address(valid_ipv4(end, "Address_Range_End"))
+                  if int(first) > int(last):
+                      raise ValueError("Address_Range_Start must not be after Address_Range_End")
+                  new_range = (str(first), str(last))
+                  if current.get("range") != new_range:
+                      if current.get("range"):
+                          old_start, old_end = current["range"]
+                          commands.append(f"no range {old_start} {old_end}")
+                      commands.append(f"range {first} {last}")
+
+              lease = settings.get("lease", "").strip()
+              if lease:
+                  if lease.lower() == "default":
+                      if current.get("lease") is not None:
+                          commands.append("no lease")
+                  elif lease.lower() == "infinite":
+                      if current.get("lease") != "infinite":
+                          commands.append("lease infinite")
+                  else:
+                      parts = lease.split()
+                      if len(parts) != 3 or not all(part.isdigit() for part in parts):
+                          raise ValueError(
+                              "Address_Lease_Time must be Default, Infinite, or "
+                              "'<days> <hours> <minutes>'"
+                          )
+                      new_lease = " ".join(parts)
+                      if current.get("lease") != new_lease:
+                          commands.append("lease " + new_lease)
+
+              dns = [value.strip() for value in settings.get("dns", []) if value.strip()]
+              if dns:
+                  addresses = [valid_ipv4(value, "DNS server") for value in dns]
+                  # The pool CLI accepts multiple DNS addresses on one line.
+                  if current.get("dns") != addresses:
+                      commands.append("dns-server " + " ".join(addresses))
+
+              if not commands:
+                  raise ValueError("Pass at least one editable pool field")
+              return name, commands
+
+          def find_pool_config(output, pool_name):
+              lines = output.replace("\r", "").splitlines()
+              if not any(
+                  line.strip().lower().startswith("!version ")
+                  or line.strip().lower() == "current configuration:"
+                  for line in lines
+              ):
+                  raise ValueError("SHOW output does not contain a running-config header")
+              target = f"ip dhcpd pool {pool_name}".lower()
+              found = False
+              result = {"network": None, "gateway": None, "range": None,
+                        "lease": None, "dns": []}
+              for raw in lines:
+                  stripped = raw.strip()
+                  lower = stripped.lower()
+                  if lower.startswith("ip dhcpd pool "):
+                      if found:
+                          break
+                      found = lower == target
+                      continue
+                  if not found:
+                      continue
+                  if stripped == "!" or (raw and not raw[0].isspace()):
+                      break
+                  words = stripped.split()
+                  if len(words) == 3 and words[0].lower() == "network":
+                      result["network"] = (words[1], words[2])
+                  elif len(words) >= 2 and words[0].lower() == "default-router":
+                      result["gateway"] = words[1]
+                  elif len(words) == 3 and words[0].lower() == "range":
+                      result["range"] = (words[1], words[2])
+                  elif words and words[0].lower() == "lease":
+                      result["lease"] = "infinite" if len(words) == 2 and words[1].lower() == "infinite" else " ".join(words[1:])
+                  elif len(words) >= 2 and words[0].lower() == "dns-server":
+                      result["dns"].extend(word.rstrip(",;") for word in words[1:])
+              if not found:
+                  # New pool: "ip dhcpd pool <name>" below creates it
+                  if str(SETTINGS.get("create_if_missing", "")).strip().lower() in ("yes", "true", "1"):
+                      return result
+                  raise ValueError(f"DHCP pool {pool_name!r} was not found")
+              return result
+
+          def read_until_prompt(shell, stage, timeout=30):
+              buffer = ""
+              deadline = time.monotonic() + timeout
+              while time.monotonic() < deadline:
+                  if shell.recv_ready():
+                      buffer += shell.recv(65535).decode(errors="replace")
+                      clean = ANSI_RE.sub("", buffer).replace("\r", "")
+                      if PROMPT_RE.search(clean.rstrip()):
+                          return clean
+                  else:
+                      time.sleep(0.1)
+              raise TimeoutError(f"Timed out waiting for switch prompt during {stage}")
+
+          def run_command(shell, command, timeout=30, check_errors=True):
+              shell.send(command + "\n")
+              output = read_until_prompt(shell, command, timeout)
+              if check_errors and CLI_ERROR_RE.search(output):
+                  raise RuntimeError(f"Switch rejected {command!r}: {output.strip()}")
+              return output
+
+          ssh = None
+          shell = None
+          stage = "input validation"
+          applied = []
+          try:
+              pool_name, _ = build_commands(SETTINGS, {})
+              ssh = paramiko.SSHClient()
+              ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+              stage = "SSH connection"
+              ssh.connect(
+                  HOST, port=PORT, username=USER, password=PASSWORD,
+                  look_for_keys=False, allow_agent=False,
+                  timeout=20, auth_timeout=20, banner_timeout=20,
+              )
+              shell = ssh.invoke_shell()
+              read_until_prompt(shell, "initial prompt", timeout=10)
+              stage = "enable mode"
+              run_command(shell, "enable", timeout=10, check_errors=False)
+              stage = "disable paging"
+              run_command(shell, "terminal length 0", timeout=10, check_errors=False)
+              stage = "read existing pool configuration"
+              running_config = run_command(shell, "show run non-interface", timeout=60)
+              current_pool = find_pool_config(running_config, pool_name)
+              pool_name, commands = build_commands(SETTINGS, current_pool)
+              if not commands:
+                  raise ValueError("No changes requested: supplied values already match the pool")
+              stage = "configuration mode"
+              run_command(shell, "config", timeout=10)
+              stage = f"select pool {pool_name}"
+              run_command(shell, f"ip dhcpd pool {pool_name}", timeout=15)
+              for command in commands:
+                  stage = command
+                  run_command(shell, command, timeout=15)
+                  applied.append(command)
+              stage = "exit pool configuration"
+              run_command(shell, "exit", timeout=10, check_errors=False)
+              stage = "exit configuration mode"
+              run_command(shell, "exit", timeout=10, check_errors=False)
+              stage = "save configuration"
+              write_output = ANSI_RE.sub(
+                  "", run_command(shell, "write", timeout=20, check_errors=False)
+              )
+              if re.search(r"%err|invalid|error|fail", write_output, re.IGNORECASE):
+                  raise RuntimeError(f"Switch rejected 'write': {write_output.strip()}")
+              if "OK!" not in write_output:
+                  raise RuntimeError(
+                      "Switch did not confirm the configuration save: "
+                      + write_output.strip()
+                  )
+              print(json.dumps({
+                  "ip": HOST,
+                  "pool_name": pool_name,
+                  "updated_commands": applied,
+                  "status": "success",
+              }))
+          except Exception as exc:
+              print(json.dumps({
+                  "ip": HOST,
+                  "pool_name": SETTINGS.get("name", ""),
+                  "status": "failed",
+                  "stage": stage,
+                  "updated_commands": applied,
+                  "error": str(exc),
+              }))
+          finally:
+              if shell is not None:
+                  shell.close()
+              if ssh is not None:
+                  ssh.close()
+      no_log: true
+
+    - name: Execute DHCP address pool edit helper
+      ansible.builtin.command:
+        argv:
+          - "{{ project_root }}/bin/python3"   # plugin venv (has paramiko)
+          - "{{ tmp_dir }}/dhcp_address_pools_edit_exec_{{ ansible_host }}.py"
+      register: dhcp_pool_edit_raw
+      changed_when: >-
+        dhcp_pool_edit_raw.rc == 0 and
+        '"status": "success"' in dhcp_pool_edit_raw.stdout
+      failed_when: false
+
+    - name: Fail if helper returned no JSON
+      ansible.builtin.fail:
+        msg: >-
+          DHCP address pool EDIT helper returned no JSON.
+          rc={{ dhcp_pool_edit_raw.rc }}; stderr={{ dhcp_pool_edit_raw.stderr }}
+      when: dhcp_pool_edit_raw.stdout | trim | length == 0
+
+    - name: Parse DHCP address pool edit result
+      ansible.builtin.set_fact:
+        dhcp_pool_edit_result: "{{ dhcp_pool_edit_raw.stdout | from_json }}"
+
+    - name: Fail if DHCP address pool edit failed
+      ansible.builtin.fail:
+        msg: >-
+          DHCP address pool EDIT failed during
+          {{ dhcp_pool_edit_result.stage | default('execution') }}:
+          {{ dhcp_pool_edit_result.error | default(dhcp_pool_edit_raw.stderr) }}
+          Commands applied before failure:
+          {{ dhcp_pool_edit_result.updated_commands | default([]) }}
+      when: dhcp_pool_edit_result.status != 'success' or dhcp_pool_edit_raw.rc != 0
+
+    - name: Display DHCP address pool edit result
+      ansible.builtin.debug:
+        msg: "{{ dhcp_pool_edit_result | to_nice_yaml(indent=2, sort_keys=False) }}"
+
+    - name: Save DHCP address pool edit result
+      ansible.builtin.copy:
+        dest: "{{ output_dir }}/{{ ansible_host }}_dhcp_address_pools_edit.yml"
+        content: "{{ dhcp_pool_edit_result | to_nice_yaml(indent=2, sort_keys=False) }}"
+
+    - name: Display result path
+      ansible.builtin.debug:
+        msg: >-
+          DHCP address pool {{ dhcp_pool_edit_result.pool_name }} updated successfully.
+          Saved to output/{{ ansible_host }}_dhcp_address_pools_edit.yml

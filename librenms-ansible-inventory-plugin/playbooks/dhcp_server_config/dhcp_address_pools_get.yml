@@ -1,0 +1,296 @@
+# ==========================================
+# dhcp_address_pools_get.yml
+# Created on Nov 4, 2026 by Vikash Kumar (vikash.kumar@alphabrige.tech).
+#
+# Copyright (c), ALPHA BRIDGE, Inc.
+# 357D, Udyog Vihar Industrial Area Phase VI, Sector 37, Gurugram, Haryana.
+#
+# All rights reserved.
+#
+# This software is the confidential and proprietary information of
+# ALPHA BRIDGE, Inc. ("Confidential Information"). You shall not
+# disclose such Confidential Information and shall use it only in
+# accordance with the terms of the license agreement you entered into
+# with ALPHA BRIDGE.
+#
+# =============================================================================
+# Playbook Name : DHCP Address Pools Get
+# =============================================================================
+#
+# Description:
+# Reads DHCP address pools from `show run non-interface`.
+# Pool field names in the output match the GUI table labels.
+# An unconfigured pool page returns an empty `address_pools` list.
+# A pool without a `lease` line uses the GUI's Default lease mode.
+#
+# Lease modes:
+#   no lease command      -> Default
+#   lease infinite       -> Infinite
+#   lease <days> <hours> <minutes> -> Setting
+#
+# Output:
+#   output/<switch_ip>_dhcp_address_pools_get.yml
+# =============================================================================
+
+- name: Get DHCP address pools
+  hosts: alphabridge_devices
+  gather_facts: false
+
+  vars:
+    # These files live in playbooks/<feature>/, so the plugin root is two
+    # levels up.
+    project_root: "{{ playbook_dir }}/../.."
+    output_dir: "{{ project_root }}/output"
+    tmp_dir: "{{ project_root }}/tmp"
+
+  pre_tasks:
+    - name: Ensure helper and output directories exist
+      ansible.builtin.file:
+        path: "{{ item }}"
+        state: directory
+        mode: '0755'
+      loop:
+        - "{{ tmp_dir }}"
+        - "{{ output_dir }}"
+
+  tasks:
+    - name: Create DHCP address pools SSH helper
+      ansible.builtin.copy:
+        dest: "{{ tmp_dir }}/dhcp_address_pools_get_exec_{{ ansible_host }}.py"
+        mode: '0700'
+        content: |
+          #!/usr/bin/env python3
+
+          import ipaddress
+          import json
+          import re
+          import time
+          import paramiko
+
+          HOST = {{ ansible_host | to_json }}
+          PORT = int({{ ansible_port | default(22) | to_json }})
+          USER = {{ ansible_user | to_json }}
+          PASSWORD = {{ ansible_password | to_json }}
+
+          ANSI_RE = re.compile(r'\x1b(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])')
+          PROMPT_RE = re.compile(r'[>#]\s*\Z')
+          CLI_ERROR_RE = re.compile(
+              r'(?im)^\s*%\s*(?:invalid|error|incomplete|ambiguous|'
+              r'unknown|unrecognized)\b|'
+              r'\b(?:invalid input|unknown command|incomplete command|'
+              r'command rejected|bad parameter|too many parameters|fail with ret\s*-?\d+)\b'
+          )
+
+          def read_until_prompt(shell, stage, timeout=30):
+              buffer = ""
+              deadline = time.monotonic() + timeout
+              while time.monotonic() < deadline:
+                  if shell.recv_ready():
+                      buffer += shell.recv(65535).decode(errors="replace")
+                      clean = ANSI_RE.sub("", buffer).replace("\r", "")
+                      if PROMPT_RE.search(clean.rstrip()):
+                          return clean
+                  else:
+                      time.sleep(0.1)
+              raise TimeoutError(f"Timed out waiting for switch prompt during {stage}")
+
+          def run_command(shell, command, timeout=30):
+              shell.send(command + "\n")
+              output = read_until_prompt(shell, command, timeout)
+              if CLI_ERROR_RE.search(output):
+                  raise RuntimeError(f"Switch rejected {command!r}: {output.strip()}")
+              return output
+
+          def parse_address_pools(output):
+              lines = output.splitlines()
+              if not any(
+                  line.strip().lower().startswith("!version ")
+                  or line.strip().lower() == "current configuration:"
+                  for line in lines
+              ):
+                  raise ValueError("SHOW output does not contain a running-config header")
+
+              pools = []
+              current = None
+
+              def finish_pool():
+                  nonlocal current
+                  if current is None:
+                      return
+                  # Some valid pool definitions only specify the subnet and
+                  # gateway; the GUI displays their address range as blank.
+                  required = ("Network number", "Network mask")
+                  missing = [key for key in required if not current.get(key)]
+                  if missing:
+                      raise ValueError(
+                          f"Pool {current['Name']!r} is missing: {', '.join(missing)}"
+                      )
+                  if current["Address lease time"] is None:
+                      current["Address lease time"] = "Default"
+                  current["DNS"] = ", ".join(current["DNS"])
+                  pools.append(current)
+                  current = None
+
+              for raw_line in lines:
+                  stripped = raw_line.strip()
+                  if not stripped:
+                      continue
+                  lower = stripped.lower()
+
+                  if lower.startswith("ip dhcpd pool "):
+                      finish_pool()
+                      name = stripped.split(None, 3)[3]
+                      if not name:
+                          raise ValueError(f"Missing pool name: {raw_line}")
+                      current = {
+                          "Name": name,
+                          "Network number": None,
+                          "Network mask": None,
+                          "Gateway": "",
+                          "Address range": "",
+                          "Address lease time": None,
+                          "DNS": [],
+                      }
+                      continue
+
+                  if current is None:
+                      continue
+
+                  if stripped == "!":
+                      finish_pool()
+                      continue
+
+                  # Pool properties are indented in the running config. A new
+                  # global command ends this stanza even if a separator is absent.
+                  if not raw_line[:1].isspace():
+                      finish_pool()
+                      continue
+
+                  words = stripped.split()
+                  key = words[0].lower()
+
+                  if key == "network" and len(words) == 3:
+                      try:
+                          network = ipaddress.IPv4Network(
+                              f"{words[1]}/{words[2]}", strict=False
+                          )
+                      except ValueError as exc:
+                          raise ValueError(f"Invalid pool network: {raw_line}") from exc
+                      current["Network number"] = words[1]
+                      current["Network mask"] = words[2]
+                  elif key == "range" and len(words) == 3:
+                      try:
+                          start = ipaddress.IPv4Address(words[1])
+                          end = ipaddress.IPv4Address(words[2])
+                      except ipaddress.AddressValueError as exc:
+                          raise ValueError(f"Invalid pool address range: {raw_line}") from exc
+                      if int(start) > int(end):
+                          raise ValueError(f"Pool range start is after its end: {raw_line}")
+                      current["Address range"] = f"{start}-{end}"
+                  elif key == "default-router" and len(words) >= 2:
+                      current["Gateway"] = words[1]
+                  elif key == "dns-server" and len(words) >= 2:
+                      for address in words[1:]:
+                          address = address.rstrip(",;")
+                          try:
+                              current["DNS"].append(
+                                  str(ipaddress.IPv4Address(address))
+                              )
+                          except ipaddress.AddressValueError as exc:
+                              raise ValueError(f"Invalid DNS server: {raw_line}") from exc
+                  elif key == "lease":
+                      if len(words) == 2 and words[1].lower() == "infinite":
+                          current["Address lease time"] = "Infinite"
+                      elif len(words) == 4 and all(part.isdigit() for part in words[1:]):
+                          days, hours, minutes = (int(part) for part in words[1:])
+                          current["Address lease time"] = (
+                              f"{days} Day {hours} Hour {minutes} Minute"
+                          )
+                      else:
+                          raise ValueError(f"Invalid pool lease command: {raw_line}")
+
+              finish_pool()
+              return pools
+
+          ssh = None
+          shell = None
+          stage = "SSH connection"
+          try:
+              ssh = paramiko.SSHClient()
+              ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+              ssh.connect(
+                  HOST, port=PORT, username=USER, password=PASSWORD,
+                  look_for_keys=False, allow_agent=False,
+                  timeout=20, auth_timeout=20, banner_timeout=20,
+              )
+              shell = ssh.invoke_shell()
+              read_until_prompt(shell, "initial prompt", timeout=10)
+              stage = "enable mode"
+              run_command(shell, "enable", timeout=10)
+              stage = "disable paging"
+              run_command(shell, "terminal length 0", timeout=10)
+              stage = "show run non-interface"
+              running_config = run_command(shell, "show run non-interface", timeout=60)
+              stage = "parse DHCP address pools"
+              address_pools = parse_address_pools(running_config)
+              print(json.dumps({
+                  "ip": HOST,
+                  "address_pools": address_pools,
+                  "status": "success",
+              }))
+          except Exception as exc:
+              print(json.dumps({
+                  "ip": HOST,
+                  "status": "failed",
+                  "stage": stage,
+                  "error": str(exc),
+              }))
+          finally:
+              if shell is not None:
+                  shell.close()
+              if ssh is not None:
+                  ssh.close()
+      no_log: true
+
+    - name: Execute DHCP address pools helper
+      ansible.builtin.command:
+        argv:
+          - "{{ project_root }}/bin/python3"   # plugin venv (has paramiko)
+          - "{{ tmp_dir }}/dhcp_address_pools_get_exec_{{ ansible_host }}.py"
+      register: dhcp_pools_raw
+      changed_when: false
+      failed_when: false
+
+    - name: Fail if helper returned no JSON
+      ansible.builtin.fail:
+        msg: >-
+          DHCP address pools GET helper returned no JSON.
+          rc={{ dhcp_pools_raw.rc }}; stderr={{ dhcp_pools_raw.stderr }}
+      when: dhcp_pools_raw.stdout | trim | length == 0
+
+    - name: Parse DHCP address pools result
+      ansible.builtin.set_fact:
+        dhcp_pools_result: "{{ dhcp_pools_raw.stdout | from_json }}"
+
+    - name: Fail if DHCP address pools retrieval failed
+      ansible.builtin.fail:
+        msg: >-
+          DHCP address pools GET failed during
+          {{ dhcp_pools_result.stage | default('execution') }}:
+          {{ dhcp_pools_result.error | default(dhcp_pools_raw.stderr) }}
+      when: dhcp_pools_result.status != 'success' or dhcp_pools_raw.rc != 0
+
+    - name: Display DHCP address pools
+      ansible.builtin.debug:
+        msg: "{{ dhcp_pools_result | to_nice_yaml(indent=2, sort_keys=False) }}"
+
+    - name: Save DHCP address pools to YAML
+      ansible.builtin.copy:
+        dest: "{{ output_dir }}/{{ ansible_host }}_dhcp_address_pools_get.yml"
+        content: "{{ dhcp_pools_result | to_nice_yaml(indent=2, sort_keys=False) }}"
+
+    - name: Display report path
+      ansible.builtin.debug:
+        msg: >-
+          DHCP address pools collected successfully.
+          Saved to output/{{ ansible_host }}_dhcp_address_pools_get.yml
