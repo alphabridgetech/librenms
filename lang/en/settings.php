@@ -8,6 +8,7 @@ return [
         'api' => 'API',
         'auth' => 'Authentication',
         'authorization' => 'Authorization',
+        'chatbot' => 'AI Chatbot',
         'external' => 'External',
         'global' => 'Global',
         'os' => 'OS',
@@ -19,6 +20,9 @@ return [
         'default_snmp' => 'Default SNMP',
     ],
     'sections' => [
+        'chatbot' => [
+            'general' => ['name' => 'TeleQuill AI'],
+        ],
         'alerting' => [
             'general' => ['name' => 'General Alert Settings'],
             'email' => ['name' => 'Email Options'],
@@ -660,6 +664,28 @@ return [
         'customers_descr' => [
             'description' => 'Customer Port Types',
             'help' => 'Ports of the listed description type(s) will be shown under the customers ports menu entry.  See Interface Description Parsing docs for more info.',
+        ],
+        'chatbot' => [
+            'enabled' => [
+                'description' => 'Use the AI',
+                'help' => 'When on and an API key is set, the chatbot answers with the AI whenever the internet is available, and uses built-in offline answers otherwise. Turn off to keep the chatbot fully offline: no data is ever sent to the AI.',
+            ],
+            'provider' => [
+                'description' => 'AI provider',
+                'help' => 'Google Gemini, or any OpenAI-compatible service: OpenAI, Groq, Mistral, OpenRouter, or a local offline server such as Ollama, LM Studio or vLLM.',
+            ],
+            'api_key' => [
+                'description' => 'AI API key',
+                'help' => 'API key for the AI service. Not needed for a local server such as Ollama. Leave empty to use CHATBOT_API_KEY from the environment file, if set.',
+            ],
+            'endpoint' => [
+                'description' => 'AI endpoint URL',
+                'help' => 'Gemini: full model URL, e.g. https://generativelanguage.googleapis.com/v1beta/models/<model>:generateContent (or leave empty and set the model). OpenAI-compatible: the chat completions URL, e.g. https://api.openai.com/v1/chat/completions or http://<ollama-server>:11434/v1/chat/completions (empty = OpenAI). Leave empty to use CHATBOT_ENDPOINT from the environment file, if set.',
+            ],
+            'model' => [
+                'description' => 'AI model',
+                'help' => 'Model name, e.g. gpt-4o-mini for OpenAI or llama3.1 / qwen2.5 for Ollama. Required for OpenAI-compatible. For Gemini it is only used when the endpoint URL is empty.',
+            ],
         ],
         'base_url' => [
             'description' => 'Base URL',

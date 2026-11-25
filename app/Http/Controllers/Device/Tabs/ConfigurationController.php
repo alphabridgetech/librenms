@@ -39,9 +39,9 @@ use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\Validator;
 use LibreNMS\Interfaces\UI\DeviceTab;
-use App\Models\ApiToken;
+use App\Http\Middleware\TelequillDeviceAccess;
+use App\Services\ChatbotApi;
 use Illuminate\Support\Facades\File;
-use Illuminate\Database\Eloquent\ModelNotFoundException;
 
 class ConfigurationController implements DeviceTab
 {
@@ -137,6 +137,15 @@ class ConfigurationController implements DeviceTab
             $tab = 'notsupported';
         }
 
+        // Every Configuration page drives the switch through the /api/v0
+        // configuration routes: admins may configure any device, other users
+        // only devices granted to them (TelequillDeviceAccess). Show a notice
+        // instead of forms that would only fail for users without permission.
+        $canConfigure = $request->user() && TelequillDeviceAccess::canConfigure($request->user(), $device);
+        if (! $canConfigure) {
+            $tab = 'noaccess';
+        }
+
         return array_merge([
             'tab' => $tab,
             'unsupported_tab' => $unsupportedTab,
@@ -150,7 +159,7 @@ class ConfigurationController implements DeviceTab
             'backup_retention_days' => \DB::table('config')->where('config_name', 'backup_retention_days')->value('config_value') ?: 30,
             'config_backup_logs' => \App\Models\ConfigBackupLog::with('user')->where('device_id', $device->device_id)->latest()->limit(10)->get(),
             'interfaces' => $device->ports()->pluck('ifName')->toArray(),
-            'api_token' => $this->getUserLibreNMSToken(),
+            'api_token' => $canConfigure ? $this->getUserLibreNMSToken() : null,
             'dropdownLinks' => $this->pageLinks($request),
             'perPage' => $this->settings['perPage'],
             'sort' => $this->settings['sort'],
@@ -162,16 +171,20 @@ class ConfigurationController implements DeviceTab
 
      #------------------------------------------------------------
 
-    private function getUserLibreNMSToken()
+    /**
+     * The logged-in user's "Telequill UI (auto)" token (created if missing),
+     * shared with the chatbot. Kept separate from tokens handed out to external
+     * API users, so deleting or disabling those never breaks the web UI.
+     *
+     * Only called for users allowed to configure the device being viewed; the
+     * API still checks each request (TelequillDeviceAccess), so a non-admin's
+     * token only reaches the devices granted to them.
+     */
+    private function getUserLibreNMSToken(): ?string
     {
-        try {
-            $apiToken = ApiToken::select('token_hash')
-                ->where('user_id', Auth::user()->user_id)
-                ->firstOrFail();
-            return $apiToken->token_hash;
-        } catch (ModelNotFoundException $e) {
-            return null;
-        }
+        $user = Auth::user();
+
+        return $user ? ChatbotApi::uiToken($user) : null;
     }
 
     private function portData(Device $device, Request $request): array

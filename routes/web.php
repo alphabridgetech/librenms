@@ -255,7 +255,18 @@ Route::middleware(['auth', 'license'])->group(function () {
     Route::post('ztp/{ztp}/reset', [ZtpController::class, 'resetStatus'])->name('ztp.reset');
 
 
-    //kunal add 
+    //kunal add
+    // Saved chats (registered before the resource so "conversations" is not taken as {chatbot})
+    Route::prefix('chatbot/conversations')->name('chatbot.conversations.')->group(function () {
+        Route::get('/', [ChatBotController::class, 'conversations'])->name('index');
+        Route::get('{id}', [ChatBotController::class, 'showConversation'])->whereNumber('id')->name('show');
+        Route::patch('{id}', [ChatBotController::class, 'renameConversation'])->whereNumber('id')->name('rename');
+        Route::delete('{id}/messages', [ChatBotController::class, 'clearConversation'])->whereNumber('id')->name('clear');
+        Route::delete('{id}', [ChatBotController::class, 'deleteConversation'])->whereNumber('id')->name('delete');
+        Route::post('{id}/confirm', [ChatBotController::class, 'confirmAction'])->whereNumber('id')->name('confirm');
+        Route::post('{id}/cancel', [ChatBotController::class, 'cancelAction'])->whereNumber('id')->name('cancel');
+        Route::post('{id}/resend', [ChatBotController::class, 'resend'])->whereNumber('id')->name('resend');
+    });
     Route::resource('chatbot', ChatBotController::class);
     Route::post('chatbot/messages', [ChatBotController::class, 'message'])
     ->name('chatbot.message');

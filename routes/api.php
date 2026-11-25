@@ -64,6 +64,68 @@ Route::prefix('v0')->group(function () {
         Route::post('templates/push', [App\Api\Controllers\TemplatePushApiController::class, 'push'])->name('templates.push');
         Route::get('templates/{name}', [App\Api\Controllers\TemplatePushApiController::class, 'show'])->name('templates.show');
 
+
+
+
+
+
+
+        Route::prefix('devices')->group(function () {
+            Route::post('', [App\Api\Controllers\LegacyApiController::class, 'add_device'])->name('add_device');
+            Route::delete('{hostname}', [App\Api\Controllers\LegacyApiController::class, 'del_device'])->name('del_device');
+            Route::patch('{hostname}', [App\Api\Controllers\LegacyApiController::class, 'update_device'])->name('update_device_field');
+            Route::patch('{hostname}/rename/{new_hostname}', [App\Api\Controllers\LegacyApiController::class, 'rename_device'])->name('rename_device');
+            Route::post('{hostname}/components/{type}', [App\Api\Controllers\LegacyApiController::class, 'add_components'])->name('add_components');
+            Route::put('{hostname}/components', [App\Api\Controllers\LegacyApiController::class, 'edit_components'])->name('edit_components');
+            Route::delete('{hostname}/components/{component}', [App\Api\Controllers\LegacyApiController::class, 'delete_components'])->name('delete_components');
+            Route::post('{hostname}/maintenance', [App\Api\Controllers\LegacyApiController::class, 'maintenance_device'])->name('maintenance_device');
+        });
+
+        Route::prefix('devicegroups')->group(function () {
+            Route::patch('{name}', [App\Api\Controllers\LegacyApiController::class, 'update_device_group'])->name('update_device_group');
+            Route::delete('{name}', [App\Api\Controllers\LegacyApiController::class, 'delete_device_group'])->name('delete_device_group');
+            Route::post('{name}/devices', [App\Api\Controllers\LegacyApiController::class, 'update_device_group_add_devices'])->name('update_device_group_add_devices');
+            Route::delete('{name}/devices', [App\Api\Controllers\LegacyApiController::class, 'update_device_group_remove_devices'])->name('update_device_group_remove_devices');
+            Route::post('{name}/maintenance', [App\Api\Controllers\LegacyApiController::class, 'maintenance_devicegroup'])->name('maintenance_devicegroup');
+        });
+
+        Route::post('bills', [App\Api\Controllers\LegacyApiController::class, 'create_edit_bill'])->name('create_bill');
+        Route::delete('bills/{bill_id}', [App\Api\Controllers\LegacyApiController::class, 'delete_bill'])->name('delete_bill');
+        Route::put('alerts/{id}', [App\Api\Controllers\LegacyApiController::class, 'ack_alert'])->name('ack_alert');
+        Route::put('alerts/unmute/{id}', [App\Api\Controllers\LegacyApiController::class, 'unmute_alert'])->name('unmute_alert');
+        Route::post('rules', [App\Api\Controllers\LegacyApiController::class, 'add_edit_rule'])->name('add_rule');
+        Route::put('rules', [App\Api\Controllers\LegacyApiController::class, 'add_edit_rule'])->name('edit_rule');
+        Route::delete('rules/{id}', [App\Api\Controllers\LegacyApiController::class, 'delete_rule'])->name('delete_rule');
+        Route::post('services/{hostname}', [App\Api\Controllers\LegacyApiController::class, 'add_service_for_host'])->name('add_service_for_host');
+        Route::get('oxidized/config/search/{searchstring}', [App\Api\Controllers\LegacyApiController::class, 'search_oxidized'])->name('search_oxidized');
+        Route::get('oxidized/config/{device_name}', [App\Api\Controllers\LegacyApiController::class, 'get_oxidized_config'])->name('get_oxidized_config');
+        Route::post('devicegroups', [App\Api\Controllers\LegacyApiController::class, 'add_device_group'])->name('add_device_group');
+        Route::patch('devices/{hostname}/port/{portid}', [App\Api\Controllers\LegacyApiController::class, 'update_device_port_notes'])->name('update_device_port_notes');
+        Route::post('port_groups', [App\Api\Controllers\LegacyApiController::class, 'add_port_group'])->name('add_port_group');
+        Route::post('port_groups/{port_group_id}/assign', [App\Api\Controllers\LegacyApiController::class, 'assign_port_group'])->name('assign_port_group');
+        Route::post('port_groups/{port_group_id}/remove', [App\Api\Controllers\LegacyApiController::class, 'remove_port_group'])->name('remove_port_group');
+        Route::post('devices/{id}/parents', [App\Api\Controllers\LegacyApiController::class, 'add_parents_to_host'])->name('add_parents_to_host');
+        Route::delete('/devices/{id}/parents', [App\Api\Controllers\LegacyApiController::class, 'del_parents_from_host'])->name('del_parents_from_host');
+        Route::post('locations', [App\Api\Controllers\LegacyApiController::class, 'add_location'])->name('add_location');
+        Route::get('location/{location_id_or_name}', [App\Api\Controllers\LegacyApiController::class, 'get_location'])->name('get_location');
+        Route::patch('locations/{location_id_or_name}', [App\Api\Controllers\LegacyApiController::class, 'edit_location'])->name('edit_location');
+        Route::delete('locations/{location}', [App\Api\Controllers\LegacyApiController::class, 'del_location'])->name('del_location');
+        Route::delete('services/{id}', [App\Api\Controllers\LegacyApiController::class, 'del_service_from_host'])->name('del_service_from_host');
+        Route::patch('services/{id}', [App\Api\Controllers\LegacyApiController::class, 'edit_service_for_host'])->name('edit_service_for_host');
+        Route::post('bgp/{id}', [App\Api\Controllers\LegacyApiController::class, 'edit_bgp_descr'])->name('edit_bgp_descr');
+        Route::post('syslogsink', [App\Api\Controllers\LegacyApiController::class, 'post_syslogsink'])->name('post_syslogsink');
+
+        Route::get('poller_group/{poller_group_id_or_name?}', [App\Api\Controllers\LegacyApiController::class, 'get_poller_group'])->name('get_poller_group');
+
+        Route::post('chatbot/message', [App\Http\Controllers\ChatBotController::class, 'message']);
+
+        
+    });
+
+    // Telequill device configuration (KunalApiController).
+    // Admins: every device. Other users: only devices granted to them.
+    // Routes without a {hostname} stay admin-only. See TelequillDeviceAccess.
+    Route::middleware([\App\Http\Middleware\TelequillDeviceAccess::class])->group(function () {
         //kunal api add for configuration changes
         Route::post('testapi', [App\Api\Controllers\KunalApiController::class, 'testFunction'])->name('testFunction');
         Route::get('systeminfo/{hostname}', [App\Api\Controllers\KunalApiController::class, 'systeminfo'])->name('systeminfo');
@@ -220,62 +282,6 @@ Route::prefix('v0')->group(function () {
 
         //particular interface show cmd
         Route::post('network/interface/show/{hostname}', [App\Api\Controllers\KunalApiController::class, 'network_interface_show'])->name('network.interface.show');
-
-
-
-
-
-
-        Route::prefix('devices')->group(function () {
-            Route::post('', [App\Api\Controllers\LegacyApiController::class, 'add_device'])->name('add_device');
-            Route::delete('{hostname}', [App\Api\Controllers\LegacyApiController::class, 'del_device'])->name('del_device');
-            Route::patch('{hostname}', [App\Api\Controllers\LegacyApiController::class, 'update_device'])->name('update_device_field');
-            Route::patch('{hostname}/rename/{new_hostname}', [App\Api\Controllers\LegacyApiController::class, 'rename_device'])->name('rename_device');
-            Route::post('{hostname}/components/{type}', [App\Api\Controllers\LegacyApiController::class, 'add_components'])->name('add_components');
-            Route::put('{hostname}/components', [App\Api\Controllers\LegacyApiController::class, 'edit_components'])->name('edit_components');
-            Route::delete('{hostname}/components/{component}', [App\Api\Controllers\LegacyApiController::class, 'delete_components'])->name('delete_components');
-            Route::post('{hostname}/maintenance', [App\Api\Controllers\LegacyApiController::class, 'maintenance_device'])->name('maintenance_device');
-        });
-
-        Route::prefix('devicegroups')->group(function () {
-            Route::patch('{name}', [App\Api\Controllers\LegacyApiController::class, 'update_device_group'])->name('update_device_group');
-            Route::delete('{name}', [App\Api\Controllers\LegacyApiController::class, 'delete_device_group'])->name('delete_device_group');
-            Route::post('{name}/devices', [App\Api\Controllers\LegacyApiController::class, 'update_device_group_add_devices'])->name('update_device_group_add_devices');
-            Route::delete('{name}/devices', [App\Api\Controllers\LegacyApiController::class, 'update_device_group_remove_devices'])->name('update_device_group_remove_devices');
-            Route::post('{name}/maintenance', [App\Api\Controllers\LegacyApiController::class, 'maintenance_devicegroup'])->name('maintenance_devicegroup');
-        });
-
-        Route::post('bills', [App\Api\Controllers\LegacyApiController::class, 'create_edit_bill'])->name('create_bill');
-        Route::delete('bills/{bill_id}', [App\Api\Controllers\LegacyApiController::class, 'delete_bill'])->name('delete_bill');
-        Route::put('alerts/{id}', [App\Api\Controllers\LegacyApiController::class, 'ack_alert'])->name('ack_alert');
-        Route::put('alerts/unmute/{id}', [App\Api\Controllers\LegacyApiController::class, 'unmute_alert'])->name('unmute_alert');
-        Route::post('rules', [App\Api\Controllers\LegacyApiController::class, 'add_edit_rule'])->name('add_rule');
-        Route::put('rules', [App\Api\Controllers\LegacyApiController::class, 'add_edit_rule'])->name('edit_rule');
-        Route::delete('rules/{id}', [App\Api\Controllers\LegacyApiController::class, 'delete_rule'])->name('delete_rule');
-        Route::post('services/{hostname}', [App\Api\Controllers\LegacyApiController::class, 'add_service_for_host'])->name('add_service_for_host');
-        Route::get('oxidized/config/search/{searchstring}', [App\Api\Controllers\LegacyApiController::class, 'search_oxidized'])->name('search_oxidized');
-        Route::get('oxidized/config/{device_name}', [App\Api\Controllers\LegacyApiController::class, 'get_oxidized_config'])->name('get_oxidized_config');
-        Route::post('devicegroups', [App\Api\Controllers\LegacyApiController::class, 'add_device_group'])->name('add_device_group');
-        Route::patch('devices/{hostname}/port/{portid}', [App\Api\Controllers\LegacyApiController::class, 'update_device_port_notes'])->name('update_device_port_notes');
-        Route::post('port_groups', [App\Api\Controllers\LegacyApiController::class, 'add_port_group'])->name('add_port_group');
-        Route::post('port_groups/{port_group_id}/assign', [App\Api\Controllers\LegacyApiController::class, 'assign_port_group'])->name('assign_port_group');
-        Route::post('port_groups/{port_group_id}/remove', [App\Api\Controllers\LegacyApiController::class, 'remove_port_group'])->name('remove_port_group');
-        Route::post('devices/{id}/parents', [App\Api\Controllers\LegacyApiController::class, 'add_parents_to_host'])->name('add_parents_to_host');
-        Route::delete('/devices/{id}/parents', [App\Api\Controllers\LegacyApiController::class, 'del_parents_from_host'])->name('del_parents_from_host');
-        Route::post('locations', [App\Api\Controllers\LegacyApiController::class, 'add_location'])->name('add_location');
-        Route::get('location/{location_id_or_name}', [App\Api\Controllers\LegacyApiController::class, 'get_location'])->name('get_location');
-        Route::patch('locations/{location_id_or_name}', [App\Api\Controllers\LegacyApiController::class, 'edit_location'])->name('edit_location');
-        Route::delete('locations/{location}', [App\Api\Controllers\LegacyApiController::class, 'del_location'])->name('del_location');
-        Route::delete('services/{id}', [App\Api\Controllers\LegacyApiController::class, 'del_service_from_host'])->name('del_service_from_host');
-        Route::patch('services/{id}', [App\Api\Controllers\LegacyApiController::class, 'edit_service_for_host'])->name('edit_service_for_host');
-        Route::post('bgp/{id}', [App\Api\Controllers\LegacyApiController::class, 'edit_bgp_descr'])->name('edit_bgp_descr');
-        Route::post('syslogsink', [App\Api\Controllers\LegacyApiController::class, 'post_syslogsink'])->name('post_syslogsink');
-
-        Route::get('poller_group/{poller_group_id_or_name?}', [App\Api\Controllers\LegacyApiController::class, 'get_poller_group'])->name('get_poller_group');
-
-        Route::post('chatbot/message', [App\Http\Controllers\ChatBotController::class, 'message']);
-
-        
     });
 
     // restricted by access

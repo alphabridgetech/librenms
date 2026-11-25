@@ -1119,6 +1119,48 @@
       "default": null,
       "type": "text"
     },
+    "chatbot.enabled": {
+      "default": true,
+      "group": "chatbot",
+      "section": "general",
+      "order": 0,
+      "type": "boolean"
+    },
+    "chatbot.provider": {
+      "default": "gemini",
+      "group": "chatbot",
+      "section": "general",
+      "order": 1,
+      "type": "select",
+      "options": {
+        "gemini": "Google Gemini",
+        "openai": "OpenAI-compatible (OpenAI, Ollama, LM Studio, Groq, ...)"
+      }
+    },
+    "chatbot.api_key": {
+      "default": null,
+      "group": "chatbot",
+      "section": "general",
+      "order": 2,
+      "type": "password"
+    },
+    "chatbot.endpoint": {
+      "default": null,
+      "group": "chatbot",
+      "section": "general",
+      "order": 3,
+      "type": "text",
+      "validate": {
+        "value": ["nullable", "url"]
+      }
+    },
+    "chatbot.model": {
+      "default": null,
+      "group": "chatbot",
+      "section": "general",
+      "order": 4,
+      "type": "text"
+    },
     "collectd_dir": {
       "default": null,
       "type": "directory",
