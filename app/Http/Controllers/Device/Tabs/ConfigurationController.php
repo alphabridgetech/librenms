@@ -41,6 +41,7 @@ use Illuminate\Support\Facades\Validator;
 use LibreNMS\Interfaces\UI\DeviceTab;
 use App\Http\Middleware\TelequillDeviceAccess;
 use App\Services\ChatbotApi;
+use App\Services\SwitchSsh;
 use Illuminate\Support\Facades\File;
 
 class ConfigurationController implements DeviceTab
@@ -146,9 +147,21 @@ class ConfigurationController implements DeviceTab
             $tab = 'noaccess';
         }
 
+        // Nearly every Configuration page logs in to the switch over SSH. When
+        // SSH is off, say so instead of showing empty forms and failed calls.
+        $sshCheck = null;
+        if ($canConfigure && $tab !== 'notsupported') {
+            $sshCheck = SwitchSsh::check($device->hostname, $request->boolean('recheck'));
+            if (! $sshCheck['ok']) {
+                $tab = 'nossh';
+            }
+        }
+
         return array_merge([
             'tab' => $tab,
             'unsupported_tab' => $unsupportedTab,
+            'ssh_check' => $sshCheck,
+            'ssh_message' => $sshCheck && ! $sshCheck['ok'] ? SwitchSsh::message($sshCheck) : null,
             'details' => $this->detail,
             
             'submenu' => $submenu,
@@ -495,7 +508,7 @@ class ConfigurationController implements DeviceTab
      */
     private function parseTab(Request $request): string
     {
-        if (preg_match('#view=([^/]+)#', $request->fullUrl(), $matches)) {
+        if (preg_match('#view=([^/?&]+)#', $request->fullUrl(), $matches)) {
             return match ($matches[1]) {
                 'neighbours' => 'links',
                 default => $matches[1],

@@ -1,6 +1,10 @@
 {{-- remove dd() otherwise JS will not run --}}
 @php
-
+    // Shown at once from TeleQuill's own SNMP polling, then replaced by live values from the switch.
+    $polledAt = $device->last_polled;
+    $polledUptime = $device->status && $device->uptime && $polledAt
+        ? (int) $device->uptime + max(0, now()->getTimestamp() - $polledAt->getTimestamp())
+        : null;
 @endphp
 {{-- @php dd($data['api_token']); @endphp --}}
 
@@ -99,6 +103,11 @@
         margin-top: 2px;
     }
 
+    .sysinfo-status { margin: 8px 2px 0; font-size: 12.5px; color: #6b7280; }
+    .sysinfo-status.live { color: #15803d; }
+    .sysinfo-status.failed { color: #b45309; }
+    .sysinfo-warn { margin-top: 6px; font-size: 12px; font-weight: 600; color: #b45309; }
+
     .sysinfo-card-value.loading {
         color: #b0b7c3;
         font-weight: 500;
@@ -113,6 +122,7 @@
             <i class="fa fa-refresh" aria-hidden="true"></i> Refresh
         </button>
     </div>
+    <div class="sysinfo-status" id="sysinfo_status"></div>
 
     <div class="sysinfo-grid">
         <div class="sysinfo-card" style="--accent:#4e73df;">
@@ -120,7 +130,7 @@
                 <div class="sysinfo-card-label">Device Type</div>
                 <div class="sysinfo-card-icon"><i class="fa fa-microchip" aria-hidden="true"></i></div>
             </div>
-            <div class="sysinfo-card-value loading" id="device_type">Loading...</div>
+            <div class="sysinfo-card-value" id="device_type">{{ $device->hardware ?: '—' }}</div>
         </div>
 
         <div class="sysinfo-card" style="--accent:#1cc88a;">
@@ -128,7 +138,7 @@
                 <div class="sysinfo-card-label">Firmware Version</div>
                 <div class="sysinfo-card-icon"><i class="fa fa-code" aria-hidden="true"></i></div>
             </div>
-            <div class="sysinfo-card-value loading" id="firmware">Loading...</div>
+            <div class="sysinfo-card-value" id="firmware">{{ $device->version ?: '—' }}</div>
         </div>
 
         <div class="sysinfo-card" style="--accent:#f6c23e;">
@@ -136,7 +146,7 @@
                 <div class="sysinfo-card-label">BIOS Version</div>
                 <div class="sysinfo-card-icon"><i class="fa fa-cogs" aria-hidden="true"></i></div>
             </div>
-            <div class="sysinfo-card-value loading" id="bios_version">Loading...</div>
+            <div class="sysinfo-card-value loading" id="bios_version">—</div>
         </div>
 
         <div class="sysinfo-card" style="--accent:#e74a3b;">
@@ -144,7 +154,7 @@
                 <div class="sysinfo-card-label">Serial Num</div>
                 <div class="sysinfo-card-icon"><i class="fa fa-barcode" aria-hidden="true"></i></div>
             </div>
-            <div class="sysinfo-card-value loading" id="serial">Loading...</div>
+            <div class="sysinfo-card-value" id="serial">{{ $device->serial ?: '—' }}</div>
         </div>
 
         <div class="sysinfo-card" style="--accent:#36b9cc;">
@@ -152,7 +162,7 @@
                 <div class="sysinfo-card-label">MAC Address</div>
                 <div class="sysinfo-card-icon"><i class="fa fa-sitemap" aria-hidden="true"></i></div>
             </div>
-            <div class="sysinfo-card-value loading" id="mac">Loading...</div>
+            <div class="sysinfo-card-value loading" id="mac">—</div>
         </div>
 
         <div class="sysinfo-card" style="--accent:#4e73df;">
@@ -168,7 +178,8 @@
                 <div class="sysinfo-card-label">Current Time</div>
                 <div class="sysinfo-card-icon"><i class="fa fa-calendar" aria-hidden="true"></i></div>
             </div>
-            <div class="sysinfo-card-value loading" id="current_time">Loading...</div>
+            <div class="sysinfo-card-value loading" id="current_time">—</div>
+            <div class="sysinfo-warn" id="clock_warn" style="display:none;"></div>
         </div>
 
         <div class="sysinfo-card" style="--accent:#6f42c1;">
@@ -176,93 +187,107 @@
                 <div class="sysinfo-card-label">Uptime</div>
                 <div class="sysinfo-card-icon"><i class="fa fa-clock-o" aria-hidden="true"></i></div>
             </div>
-            <div class="sysinfo-card-value loading" id="uptime">Loading...</div>
+            <div class="sysinfo-card-value{{ $polledUptime === null ? ' loading' : '' }}" id="uptime">—</div>
         </div>
     </div>
 </div>
 <script>
+(function () {
+    const host = @json($device->hostname);
+    const apiToken = @json($data['api_token']);
+    const polledAt = @json($polledAt ? $polledAt->format('H:i:s') : null);
+    let uptimeBase = @json($polledUptime);   // seconds, from TeleQuill's last poll
+    let uptimeFrom = Date.now();
+    let clockBase = null, clockFrom = 0;      // the switch's own clock, once read live
+    let timer = null;
 
-function setCookie(name, value, days = 7) {
-    let expires = "";
-    if (days) {
-        const date = new Date();
-        date.setTime(date.getTime() + (days * 24*60*60*1000));
-        expires = "; expires=" + date.toUTCString();
+    // Values used to be cached in cookies (stale after failures, and the API token
+    // sat in a readable cookie). Remove those cookies for this switch.
+    ['device_type', 'bios_version', 'firmware', 'serial', 'mac', 'current_time', 'uptime', 'device_ip', 'api_token']
+        .forEach(k => { document.cookie = host + '_' + k + '=; expires=Thu, 01 Jan 1970 00:00:00 GMT; path=/'; });
+
+    const el = (id) => document.getElementById(id);
+    function setCard(id, value) {
+        el(id).textContent = value || '—';
+        el(id).classList.toggle('loading', !value);
     }
-    document.cookie = name + "=" + (value || "") + expires + "; path=/";
-}
-
-function getCookie(name) {
-    const nameEQ = name + "=";
-    const ca = document.cookie.split(';');
-    for (let c of ca) {
-        c = c.trim();
-        if (c.indexOf(nameEQ) === 0)
-            return c.substring(nameEQ.length);
+    function status(text, kind) {
+        el('sysinfo_status').textContent = text;
+        el('sysinfo_status').className = 'sysinfo-status' + (kind ? ' ' + kind : '');
     }
-    return null;
-}
 
-// Add prefix based on hostname
-function ck(key) {
-    let host = "{{ $device->hostname }}";
-    return host + "_" + key;
-}
+    // "0:00:38:13" (days:hours:minutes:seconds) -> seconds
+    function parseUptime(v) {
+        const p = String(v || '').trim().split(':').map(Number);
+        if (p.length !== 4 || p.some(isNaN)) return null;
+        return ((p[0] * 24 + p[1]) * 60 + p[2]) * 60 + p[3];
+    }
+    function formatUptime(sec) {
+        const d = Math.floor(sec / 86400), h = Math.floor(sec % 86400 / 3600), m = Math.floor(sec % 3600 / 60), s = sec % 60;
+        const pad = (n) => String(n).padStart(2, '0');
+        return (d ? d + (d === 1 ? ' day ' : ' days ') : '') + pad(h) + ':' + pad(m) + ':' + pad(s);
+    }
+    // "2025-1-1 1:26:47" -> Date (switch local time)
+    function parseClock(v) {
+        const m = String(v || '').match(/(\d{4})-(\d{1,2})-(\d{1,2})\s+(\d{1,2}):(\d{1,2}):(\d{1,2})/);
+        return m ? new Date(+m[1], m[2] - 1, +m[3], +m[4], +m[5], +m[6]) : null;
+    }
+    function formatClock(d) {
+        const pad = (n) => String(n).padStart(2, '0');
+        return d.getFullYear() + '-' + pad(d.getMonth() + 1) + '-' + pad(d.getDate()) + ' ' + pad(d.getHours()) + ':' + pad(d.getMinutes()) + ':' + pad(d.getSeconds());
+    }
 
-function setCardValue(id, value) {
-    const el = document.getElementById(id);
-    el.innerText = value || "Loading...";
-    el.classList.toggle('loading', !value);
-}
+    // Uptime and the switch clock keep counting between refreshes.
+    function tick() {
+        if (uptimeBase !== null) setCard('uptime', formatUptime(uptimeBase + Math.floor((Date.now() - uptimeFrom) / 1000)));
+        if (clockBase) setCard('current_time', formatClock(new Date(clockBase.getTime() + (Date.now() - clockFrom))));
+    }
+    function checkClock() {
+        if (!clockBase) { el('clock_warn').style.display = 'none'; return; }
+        const offMin = Math.round((clockBase.getTime() - clockFrom) / 60000);
+        if (Math.abs(offMin) < 15) { el('clock_warn').style.display = 'none'; return; }
+        const days = Math.abs(offMin) / 1440, hours = Math.abs(offMin) / 60;
+        const size = days >= 1 ? Math.round(days) + ' day(s)' : hours >= 1 ? Math.round(hours) + ' hour(s)' : Math.abs(offMin) + ' min';
+        el('clock_warn').textContent = '⚠ Switch clock is wrong: ' + size + (offMin < 0 ? ' behind' : ' ahead') + '. Set NTP or the time on the switch.';
+        el('clock_warn').style.display = '';
+    }
 
-function loadFromCookies() {
-    setCardValue("device_type", getCookie(ck("device_type")));
-    setCardValue("bios_version", getCookie(ck("bios_version")));
-    setCardValue("firmware", getCookie(ck("firmware")));
-    setCardValue("serial", getCookie(ck("serial")));
-    setCardValue("mac", getCookie(ck("mac")));
-    setCardValue("current_time", getCookie(ck("current_time")));
-    setCardValue("uptime", getCookie(ck("uptime")));
-}
+    window.loadSystemInfo = function () {
+        status(polledAt
+            ? `Showing values TeleQuill polled at ${polledAt}. Reading live values from the switch…`
+            : 'Reading live values from the switch…');
+        fetch(`/api/v0/systeminfo/${encodeURIComponent(host)}`, {
+            headers: { 'Authorization': 'Bearer ' + apiToken, 'Accept': 'application/json' },
+        })
+        .then(res => res.json().catch(() => ({})).then(body => ({ ok: res.ok, body })))
+        .then(({ ok, body }) => {
+            if (!ok || body.status !== 'success' || !body.data) {
+                const why = body.message || 'the switch did not answer';
+                status(`Couldn't read live values: ${why}` + (polledAt ? ` Showing what TeleQuill polled at ${polledAt}.` : ''), 'failed');
+                return;
+            }
+            const d = body.data;
+            // A field the switch didn't report keeps the value TeleQuill already had.
+            const live = (id, value) => { if (value && String(value).trim()) setCard(id, String(value).trim()); };
+            live('device_type', d.device_type || d.model);
+            live('firmware', d.firmware);
+            live('bios_version', d.bios_version);
+            live('serial', d.serial);
+            live('mac', d.mac);
+            const up = parseUptime(d.uptime);
+            if (up !== null) { uptimeBase = up; uptimeFrom = Date.now(); } else { uptimeBase = null; setCard('uptime', d.uptime); }
+            clockBase = parseClock(d.current_time); clockFrom = Date.now();
+            if (!clockBase) setCard('current_time', d.current_time);
+            checkClock();
+            tick();
+            status('Live from the switch at ' + new Date().toLocaleTimeString() + '.', 'live');
+        })
+        .catch(() => status("Couldn't reach the TeleQuill server." + (polledAt ? ` Showing what TeleQuill polled at ${polledAt}.` : ''), 'failed'));
+    };
 
-function loadSystemInfo() {
-    let ip = getCookie(ck("device_ip")) || "{{ $device->hostname }}";
-    let apiToken = "{{ $data['api_token'] }}";
-    let apiUrl = `/api/v0/systeminfo/${ip}`;
-
-
-    setCookie(ck("device_ip"), ip);
-    setCookie(ck("api_token"), apiToken);
-
-
-    fetch(apiUrl, {
-        method: "GET",
-        headers: {
-            "Authorization": "Bearer " + apiToken,
-            "Accept": "application/json"
-        }
-    })
-    .then(res => res.json())
-    .then(res => {
-        if (res.status !== "success") return;
-
-        const d = res.data;
-
-        setCookie(ck("device_type"), d.device_type);
-        setCookie(ck("bios_version"), d.bios_version);
-        setCookie(ck("firmware"), d.firmware);
-        setCookie(ck("serial"), d.serial);
-        setCookie(ck("mac"), d.mac);
-        setCookie(ck("current_time"), d.current_time);
-        setCookie(ck("uptime"), d.uptime);
-
-        loadFromCookies();
-    });
-}
-
-loadFromCookies();
-loadSystemInfo();
-
-
+    tick();
+    clearInterval(timer);
+    timer = setInterval(tick, 1000);
+    loadSystemInfo();
+})();
 </script>
-

@@ -125,7 +125,7 @@ Route::prefix('v0')->group(function () {
     // Telequill device configuration (KunalApiController).
     // Admins: every device. Other users: only devices granted to them.
     // Routes without a {hostname} stay admin-only. See TelequillDeviceAccess.
-    Route::middleware([\App\Http\Middleware\TelequillDeviceAccess::class])->group(function () {
+    Route::middleware([\App\Http\Middleware\TelequillDeviceAccess::class, \App\Http\Middleware\TelequillSshCheck::class])->group(function () {
         //kunal api add for configuration changes
         Route::post('testapi', [App\Api\Controllers\KunalApiController::class, 'testFunction'])->name('testFunction');
         Route::get('systeminfo/{hostname}', [App\Api\Controllers\KunalApiController::class, 'systeminfo'])->name('systeminfo');

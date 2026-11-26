@@ -111,16 +111,18 @@ class KunalApiController
     $playbook = "{$this->pluginPath}/playbooks/device/devicedetails.yml";
     $hosts    = "{$this->pluginPath}/hosts/{$hostname}.yml";
 
+    $yamlFile = "{$this->pluginPath}/output/{$hostname}_devicedetails.yml";
+    $startedAt = time();
+
     // Run Ansible
     $ansibleOutput = $this->runAnsible($playbook, $hosts);
-    
 
-    // Correct YAML file
-    $yamlFile = "{$this->pluginPath}/output/{$hostname}_devicedetails.yml";
-
-    if (!file_exists($yamlFile)) {
+    // The playbook writes this file only when it reaches the switch. A file from
+    // an earlier run must not be returned as if it were fresh.
+    clearstatcache(true, $yamlFile);
+    if (!file_exists($yamlFile) || filemtime($yamlFile) < $startedAt) {
         return $this->error(
-            "System info output file not found",
+            "Could not read system info from the switch (no fresh answer)",
             $ansibleOutput
         );
     }
@@ -142,15 +144,22 @@ class KunalApiController
         );
     }
 
-    
-
     $raw = trim($data['show_version']);
+
+    // When the switch can't be reached the playbook saves its error here
+    // ("ERROR: timed out") instead of the "show version" output.
+    if (str_starts_with($raw, 'ERROR')) {
+        return $this->error(
+            'The switch did not answer: ' . trim(substr($raw, strlen('ERROR')), ": \n"),
+            $ansibleOutput
+        );
+    }
 
     // ---------- Extract system info ----------
     $info = [
     "device_type" => $this->extract(
         $raw,
-        '([A-Z0-9\/]+)\s+Software, Version'
+        '([A-Za-z0-9\/\-\.]+)\s+Software, Version' // model names contain "-" (AS200/12/XTS-2AC)
     ),
 
     "bios_version" => $this->extract(
