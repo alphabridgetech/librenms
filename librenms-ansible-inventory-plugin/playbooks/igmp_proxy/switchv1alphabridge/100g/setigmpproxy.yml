@@ -1,0 +1,449 @@
+
+# ------------------------------------------------------------
+# IGMP Snooping and Proxy Configuration
+#
+# Ansible Commands:
+#
+# 1. Enable IGMP Snooping:
+# ansible-playbook -i inventory/10.10.10.1.yml playbooks/100G/l3config/igmp/setigmpproxy.yml -e '{"igmp_snooping":"enable"}'
+#
+# 2. Disable IGMP Snooping:
+# ansible-playbook -i inventory/10.10.10.1.yml playbooks/100G/l3config/igmp/setigmpproxy.yml -e '{"igmp_snooping":"disable"}'
+#
+# 3. Enable IGMP Proxy:
+# ansible-playbook -i inventory/10.10.10.1.yml playbooks/100G/l3config/igmp/setigmpproxy.yml -e '{"igmp_proxy_status":"enable"}'
+#
+# 4. Disable IGMP Proxy:
+# ansible-playbook -i inventory/10.10.10.1.yml playbooks/100G/l3config/igmp/setigmpproxy.yml -e '{"igmp_proxy_status":"disable"}'
+#
+# 5. Add IGMP Proxy VLAN Mapping:
+# ansible-playbook -i inventory/10.10.10.1.yml playbooks/100G/l3config/igmp/setigmpproxy.yml -e '{"igmp_snooping":"enable","igmp_proxy_status":"enable","proxy_action":"add","agent_vlan":34,"client_vlan":36}'
+#
+# 6. Delete IGMP Proxy VLAN Mapping:
+# ansible-playbook -i inventory/10.10.10.1.yml playbooks/100G/l3config/igmp/setigmpproxy.yml -e '{"proxy_action":"delete","agent_vlan":34,"client_vlan":36}'
+#
+# 7. Add Multiple IGMP Proxy Mappings:
+# Run the add command once for each Agent VLAN and Client VLAN pair.
+# ansible-playbook -i inventory/10.10.10.1.yml playbooks/100G/l3config/igmp/setigmpproxy.yml -e '{"igmp_snooping":"enable","igmp_proxy_status":"enable","proxy_action":"add","agent_vlan":34,"client_vlan":36}'
+# ansible-playbook -i inventory/10.10.10.1.yml playbooks/100G/l3config/igmp/setigmpproxy.yml -e '{"proxy_action":"add","agent_vlan":34,"client_vlan":37}'
+# ansible-playbook -i inventory/10.10.10.1.yml playbooks/100G/l3config/igmp/setigmpproxy.yml -e '{"proxy_action":"add","agent_vlan":35,"client_vlan":38}'
+#
+# Switch CLI Commands:
+# enable
+# config
+# ip igmp-snooping enable
+# ip igmp-proxy enable
+# ip igmp-proxy agent-vlan 34 client-vlan map 36
+#
+# VLAN Creation:
+# vlan 90
+#
+# Delete VLAN Mapping:
+# no ip igmp-proxy agent-vlan 34 client-vlan map 36
+#
+# Disable IGMP Proxy:
+# no ip igmp-proxy enable
+#
+# Disable IGMP Snooping:
+# no ip igmp-snooping enable
+# ------------------------------------------------------------
+
+---
+- name: Set IGMP Snooping and Proxy Configuration
+  hosts: alphabridge_devices
+  gather_facts: no
+  connection: local
+
+  vars:
+    project_root: "{{ playbook_dir }}/../../../.."
+    output_dir: "{{ project_root }}/output"
+    tmp_dir: "{{ project_root }}/tmp"
+    output_file: "{{ output_dir }}/{{ ansible_host | default(inventory_hostname) }}_setigmpproxy.yml"
+    temp_script: "{{ tmp_dir }}/set_igmp_proxy_{{ ansible_host | default(inventory_hostname) }}.py"
+
+  tasks:
+    - name: Validate IGMP configuration parameters
+      assert:
+        that:
+          - (igmp_snooping | default('') | lower) in ['', 'enable', 'disable']
+          - (igmp_proxy_status | default('') | lower) in ['', 'enable', 'disable']
+          - (proxy_action | default('') | lower) in ['', 'add', 'delete']
+          - not ((igmp_snooping | default('') | lower) == 'disable' and ((igmp_proxy_status | default('') | lower) == 'enable' or (proxy_action | default('') | lower) != ''))
+          - (proxy_action | default('') | lower) == '' or ((agent_vlan | default('') | string | length > 0) and (client_vlan | default('') | string | length > 0))
+          - (proxy_action | default('') | lower) not in ['add', 'delete'] or ((agent_vlan | string is match('^[0-9]+$')) and (client_vlan | string is match('^[0-9]+$')))
+          - (proxy_action | default('') | lower) not in ['add', 'delete'] or (agent_vlan | int >= 1 and agent_vlan | int <= 4094 and client_vlan | int >= 1 and client_vlan | int <= 4094)
+          - (igmp_snooping | default('') | lower) != '' or (igmp_proxy_status | default('') | lower) != '' or (proxy_action | default('') | lower) != ''
+        fail_msg: "Invalid IGMP parameters. Snooping/Proxy must be enable or disable, and proxy_action must be add or delete."
+
+    - name: Create output and temporary directories
+      file:
+        path: "{{ item }}"
+        state: directory
+        mode: '0755'
+      loop:
+        - "{{ output_dir }}"
+        - "{{ tmp_dir }}"
+
+    - name: Remove the previous result file
+      file:
+        path: "{{ output_file }}"
+        state: absent
+
+    - name: Create IGMP configuration script
+      copy:
+        dest: "{{ temp_script }}"
+        mode: '0700'
+        content: |
+          import sys
+          import json
+          import re
+          import time
+          import paramiko
+          import yaml
+
+          params = json.loads(sys.argv[1])
+
+          host = params["host"]
+          username = params["username"]
+          password = params["password"]
+          port = int(params["port"])
+
+          snooping_target = params["igmp_snooping"].lower()
+          proxy_target = params["igmp_proxy_status"].lower()
+          proxy_action = params["proxy_action"].lower()
+          agent_vlan = str(params["agent_vlan"])
+          client_vlan = str(params["client_vlan"])
+          output_file = params["output_file"]
+
+          def save_result(result):
+              report = {"host": host}
+              report.update(result)
+              with open(output_file, "w") as report_file:
+                  yaml.safe_dump(report, report_file, default_flow_style=False, sort_keys=False)
+
+          ssh = None
+          channel = None
+
+          def clean_output(value):
+              value = re.sub(r'\x1b\[[0-9;?]*[A-Za-z]', '', value)
+              value = value.replace('\x08', '')
+              value = value.replace('\r', '')
+              return value
+
+          def read_output(timeout=120):
+              output = ""
+              start = time.time()
+
+              while time.time() - start < timeout:
+                  if channel.recv_ready():
+                      data = channel.recv(65535).decode(
+                          "utf-8", errors="ignore"
+                      )
+                      output += data
+                      cleaned = clean_output(output)
+
+                      if re.search(r'--\s*more\s*--', cleaned, re.IGNORECASE):
+                          channel.send(" ")
+                          output = re.sub(
+                              r'--\s*more\s*--', '', output,
+                              flags=re.IGNORECASE
+                          )
+                          start = time.time()
+                          continue
+
+                      if re.search(r'(?m)^[^\r\n]*[>#]\s*$', cleaned):
+                          return cleaned
+
+                  time.sleep(0.2)
+
+              raise Exception(
+                  "Timeout waiting for switch CLI prompt. Last output: "
+                  + clean_output(output)[-1000:]
+              )
+
+          def run_command(command):
+              channel.send(command + "\n")
+              output = read_output()
+
+              if re.search(
+                  r'Unknown command|Bad parameter|Too many parameters|Invalid input|Incomplete command|% Error|% Invalid',
+                  output,
+                  re.IGNORECASE
+              ):
+                  raise Exception(
+                      "Command failed: " + command + "\n" + output
+                  )
+
+              return output
+
+          def get_running_config():
+              return clean_output(run_command("show running-config"))
+
+          def get_vlan_ids():
+              output = clean_output(run_command("show vlan"))
+
+              vlan_ids = set(
+                  int(vlan)
+                  for vlan in re.findall(
+                      r'(?m)^\s*(\d+)\s+(?:Static|Dynamic)\b',
+                      output,
+                      re.IGNORECASE
+                  )
+              )
+
+              return vlan_ids
+
+          def ensure_vlan_exists(vlan_id):
+              vlan_id = int(vlan_id)
+
+              existing_vlans = get_vlan_ids()
+
+              if vlan_id not in existing_vlans:
+                  output = clean_output(run_command("vlan " + str(vlan_id)))
+                  # "vlan N" can enter the VLAN sub-mode - go back to (config)#
+                  if re.search(r'\(config-[^)]*\)#\s*$', output.strip()):
+                      run_command("exit")
+
+                  existing_vlans = get_vlan_ids()
+
+                  if vlan_id not in existing_vlans:
+                      raise Exception(
+                          "VLAN " + str(vlan_id)
+                          + " creation verification failed."
+                      )
+
+          def get_igmp_state(config):
+              snooping = bool(re.search(
+                  r'^\s*#?\s*ip\s+igmp-snooping(?:\s+enable)?\s*$',
+                  config,
+                  re.MULTILINE | re.IGNORECASE
+              ))
+
+              proxy = bool(re.search(
+                  r'^\s*#?\s*ip\s+igmp-proxy\s+enable\s*$',
+                  config,
+                  re.MULTILINE | re.IGNORECASE
+              ))
+
+              mappings = set(
+                  (int(agent), int(client))
+                  for agent, client in re.findall(
+                      r'^\s*#?\s*(?:ip\s+)?igmp-proxy\s+'
+                      r'agent-vlan\s+(\d+)\s+'
+                      r'client-vlan\s+map\s+(\d+)'
+                      r'(?:\s+.*)?\s*$',
+                      config,
+                      re.MULTILINE | re.IGNORECASE
+                  )
+              )
+
+              return snooping, proxy, mappings
+
+          try:
+              ssh = paramiko.SSHClient()
+              ssh.set_missing_host_key_policy(
+                  paramiko.AutoAddPolicy()
+              )
+
+              ssh.connect(
+                  hostname=host,
+                  port=port,
+                  username=username,
+                  password=password,
+                  look_for_keys=False,
+                  allow_agent=False,
+                  timeout=20,
+                  banner_timeout=30,
+                  auth_timeout=30
+              )
+
+              channel = ssh.invoke_shell()
+              read_output()
+
+              run_command("enable")
+              run_command("config")
+
+              changed = False
+
+              if proxy_action == "add":
+                  ensure_vlan_exists(agent_vlan)
+                  ensure_vlan_exists(client_vlan)
+
+              initial_config = get_running_config()
+              snooping_enabled, proxy_enabled, mappings = (
+                  get_igmp_state(initial_config)
+              )
+
+              if snooping_target == "disable":
+                  if proxy_enabled:
+                      run_command("no ip igmp-proxy enable")
+                      proxy_enabled = False
+                      changed = True
+
+                  if snooping_enabled:
+                      run_command("no ip igmp-snooping enable")
+                      snooping_enabled = False
+                      changed = True
+
+              else:
+                  requires_snooping = (
+                      snooping_target == "enable"
+                      or proxy_target == "enable"
+                      or proxy_action in ("add", "delete")
+                  )
+
+                  if requires_snooping and not snooping_enabled:
+                      run_command("ip igmp-snooping enable")
+                      snooping_enabled = True
+                      changed = True
+
+                  if proxy_target == "enable" and not proxy_enabled:
+                      run_command("ip igmp-proxy enable")
+                      proxy_enabled = True
+                      changed = True
+
+                  elif proxy_target == "disable" and proxy_enabled:
+                      run_command("no ip igmp-proxy enable")
+                      proxy_enabled = False
+                      changed = True
+
+                  if proxy_action == "add":
+                      mapping = (int(agent_vlan), int(client_vlan))
+
+                      if mapping not in mappings:
+                          command = (
+                              "ip igmp-proxy agent-vlan "
+                              + agent_vlan
+                              + " client-vlan map "
+                              + client_vlan
+                          )
+                          run_command(command)
+                          changed = True
+
+                  elif proxy_action == "delete":
+                      mapping = (int(agent_vlan), int(client_vlan))
+
+                      command = (
+                          "no ip igmp-proxy agent-vlan "
+                          + agent_vlan
+                          + " client-vlan map "
+                          + client_vlan
+                      )
+
+                      run_command(command)
+
+                      if mapping in mappings:
+                          changed = True
+
+              final_config = get_running_config()
+              final_snooping, final_proxy, final_mappings = (
+                  get_igmp_state(final_config)
+              )
+
+              if snooping_target == "enable" and not final_snooping:
+                  raise Exception(
+                      "IGMP Snooping enable verification failed."
+                  )
+
+              if snooping_target == "disable" and final_snooping:
+                  raise Exception(
+                      "IGMP Snooping disable verification failed."
+                  )
+
+              if (
+                  snooping_target == ""
+                  and (
+                      proxy_target == "enable"
+                      or proxy_action in ("add", "delete")
+                  )
+                  and not final_snooping
+              ):
+                  raise Exception(
+                      "IGMP Snooping verification failed."
+                  )
+
+              if proxy_target == "enable" and not final_proxy:
+                  raise Exception(
+                      "IGMP Proxy enable verification failed."
+                  )
+
+              if (
+                  proxy_target == "disable"
+                  or snooping_target == "disable"
+              ) and final_proxy:
+                  raise Exception(
+                      "IGMP Proxy disable verification failed."
+                  )
+
+              if proxy_action == "add":
+                  if (int(agent_vlan), int(client_vlan)) not in final_mappings:
+                      raise Exception(
+                          "IGMP Proxy mapping add verification failed."
+                      )
+
+              if proxy_action == "delete":
+                  if (int(agent_vlan), int(client_vlan)) in final_mappings:
+                      raise Exception(
+                          "IGMP Proxy mapping delete verification failed."
+                      )
+
+              result = {
+                  "status": "success",
+                  "changed": changed,
+                  "igmp_snooping": (
+                      "enabled" if final_snooping else "disabled"
+                  ),
+                  "igmp_proxy": (
+                      "enabled" if final_proxy else "disabled"
+                  ),
+                  "mappings": [
+                      {
+                          "agent_vlan": agent,
+                          "client_vlan": client
+                      }
+                      for agent, client in sorted(final_mappings)
+                  ]
+              }
+              save_result(result)
+              print(json.dumps(result))
+
+          except Exception as error:
+              result = {
+                  "status": "failed",
+                  "error": str(error)
+              }
+              save_result(result)
+              print(json.dumps(result))
+              sys.exit(1)
+
+          finally:
+              if channel:
+                  channel.close()
+              if ssh:
+                  ssh.close()
+
+    - name: Execute IGMP configuration
+      command:
+        argv:
+          - "{{ project_root }}/bin/python3"
+          - "{{ temp_script }}"
+          - "{{ {
+              'host': ansible_host | default(inventory_hostname),
+              'username': ansible_user | default('admin'),
+              'password': ansible_password | default(ansible_ssh_pass | default('')),
+              'port': ansible_port | default(22),
+              'igmp_snooping': igmp_snooping | default('') | lower,
+              'igmp_proxy_status': igmp_proxy_status | default('') | lower,
+              'proxy_action': proxy_action | default('') | lower,
+              'agent_vlan': agent_vlan | default(''),
+              'client_vlan': client_vlan | default(''),
+              'output_file': output_file
+            } | to_json }}"
+      register: igmp_result
+      no_log: true
+      changed_when: "'\"changed\": true' in igmp_result.stdout"
+
+    - name: Display IGMP configuration result
+      debug:
+        msg: "{{ lookup('file', output_file) }}"
+

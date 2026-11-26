@@ -7069,6 +7069,8 @@ public function getvlan($hostname)
         'staticroute'=> ['dir' => 'static_route_l3',   'get' => 'getstaticroute',       'set' => 'setstaticroute',       'get_out' => 'staticroute',                'set_out' => 'staticroute',                'key' => 'static_routes',                      'label' => 'Static route'],
         'vlanip'     => ['dir' => 'vlan_interface_IP', 'get' => 'getvlaninterfaceip',   'set' => 'setvlaninterfaceip',   'get_out' => 'vlan_interface_ip_attribute', 'set_out' => 'vlan_interface_ip_attribute', 'key' => 'vlan_interface_ip_attribute',     'label' => 'VLAN interface IPv4'],
         'vlanipv6'   => ['dir' => 'vlan_IPv6_L3',      'get' => 'getvlaninterfaceipv6', 'set' => 'setvlaninterfaceipv6', 'get_out' => 'vlan_interface_ipv6',        'set_out' => 'vlan_interface_ipv6_set',    'key' => 'vlan_interface_ipv6',                'label' => 'VLAN interface IPv6'],
+        // Only switchv1alphabridge/100g has these playbooks (igmp_proxy/switchv1alphabridge/100g/).
+        'igmpproxy'  => ['dir' => 'igmp_proxy',        'get' => 'getigmpproxy',         'set' => 'setigmpproxy',         'get_out' => 'getigmpproxy',               'set_out' => 'setigmpproxy',               'key' => 'igmp_proxy',                         'label' => 'IGMP proxy'],
     ];
 
     private const L3_STATIC_INTERFACE_TYPES = ['Interface VLAN', 'Null0', 'Gateway IP Address'];
@@ -7504,6 +7506,100 @@ public function getvlan($hostname)
         sort($ids);
 
         return $ids;
+    }
+
+    /* ---------------------------- IGMP PROXY ---------------------------- */
+
+    /** null when this switch has an IGMP proxy playbook, otherwise the error response. */
+    private function igmpProxyUnsupported(string $hostname)
+    {
+        return is_file($this->l3Playbook('igmpproxy', 'get', $hostname))
+            ? null
+            : $this->error("IGMP proxy is not supported on this switch (only on 100G V1 switches)", null);
+    }
+
+    private function formatL3IgmpProxy(array $d, string $hostname): array
+    {
+        $mappings = [];
+        foreach (is_array($d['igmp_proxy'] ?? null) ? $d['igmp_proxy'] : [] as $m) {
+            $agent  = (int) ($m['agent_vlan'] ?? 0);
+            $client = (int) ($m['client_vlan'] ?? 0);
+            if ($agent >= 1 && $client >= 1) {
+                $mappings["{$agent}-{$client}"] = ['agent_vlan' => $agent, 'client_vlan' => $client];
+            }
+        }
+        $mappings = array_values($mappings);
+        usort($mappings, fn ($a, $b) => [$a['agent_vlan'], $a['client_vlan']] <=> [$b['agent_vlan'], $b['client_vlan']]);
+
+        return [
+            'igmp_snooping' => strtolower((string) ($d['igmp_snooping'] ?? 'unknown')),
+            'igmp_proxy'    => strtolower((string) ($d['igmp_proxy_status'] ?? 'unknown')),
+            'mappings'      => $mappings,
+            'known_vlans'   => $this->l3KnownVlans($hostname),
+        ];
+    }
+
+    /** GET l3/igmpproxy/show/{hostname}: IGMP snooping / proxy state and agent -> client VLAN maps. */
+    public function getigmpproxy(Request $request, $hostname)
+    {
+        if ($unsupported = $this->igmpProxyUnsupported($hostname)) {
+            return $unsupported;
+        }
+
+        return $this->l3CachedGet($request, $hostname, 'igmpproxy', fn (array $d) => $this->formatL3IgmpProxy($d, $hostname));
+    }
+
+    /**
+     * POST l3/igmpproxy/set/{hostname}
+     *   igmp_snooping:     enable|disable          (optional)
+     *   igmp_proxy_status: enable|disable          (optional)
+     *   proxy_action:      add|delete + agent_vlan, client_vlan (1-4094)
+     * At least one is required. Adding a map creates missing VLANs and turns
+     * IGMP snooping on; disabling snooping also disables the proxy.
+     */
+    public function setigmpproxy(Request $request, $hostname)
+    {
+        if ($unsupported = $this->igmpProxyUnsupported($hostname)) {
+            return $unsupported;
+        }
+
+        $data = $request->validate([
+            'igmp_snooping'     => 'nullable|string|in:enable,disable',
+            'igmp_proxy_status' => 'nullable|string|in:enable,disable',
+            'proxy_action'      => 'nullable|string|in:add,delete',
+            'agent_vlan'        => 'required_with:proxy_action|nullable|integer|min:1|max:4094',
+            'client_vlan'       => 'required_with:proxy_action|nullable|integer|min:1|max:4094|different:agent_vlan',
+        ]);
+
+        $snooping = $data['igmp_snooping'] ?? null;
+        $proxy    = $data['igmp_proxy_status'] ?? null;
+        $action   = $data['proxy_action'] ?? null;
+
+        if (!$snooping && !$proxy && !$action) {
+            return $this->l3ValidationError('igmp_snooping', 'Nothing to change: send igmp_snooping, igmp_proxy_status or proxy_action.');
+        }
+        if ($snooping === 'disable' && ($proxy === 'enable' || $action)) {
+            return $this->l3ValidationError('igmp_snooping', 'IGMP proxy needs IGMP snooping: it can\'t be enabled or mapped while snooping is disabled.');
+        }
+
+        $vars = ['igmp_snooping' => $snooping, 'igmp_proxy_status' => $proxy];
+        if ($action) {
+            $vars += ['proxy_action' => $action, 'agent_vlan' => (int) $data['agent_vlan'], 'client_vlan' => (int) $data['client_vlan']];
+        }
+
+        [$error, $fresh] = $this->l3RunSet($hostname, 'igmpproxy', $vars, 'IGMP proxy change');
+        if ($error) {
+            return $error;
+        }
+
+        $message = match (true) {
+            $action === 'add'    => "Mapped agent VLAN {$data['agent_vlan']} to client VLAN {$data['client_vlan']}",
+            $action === 'delete' => "Removed the map agent VLAN {$data['agent_vlan']} -> client VLAN {$data['client_vlan']}",
+            $proxy !== null      => 'IGMP proxy ' . ($proxy === 'enable' ? 'enabled' : 'disabled'),
+            default              => 'IGMP snooping ' . ($snooping === 'enable' ? 'enabled' : 'disabled'),
+        };
+
+        return $this->l3SetResponse($message, $fresh, fn (array $d) => $this->formatL3IgmpProxy($d, $hostname));
     }
 
     /* ---------------------------- IPv6 ROUTE ---------------------------- */

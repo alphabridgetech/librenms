@@ -56,3 +56,10 @@ ipv6dhcpclientconfig:
 ipv6dhcpserverconfig:
   hide:
     - speed: 100g
+
+# IGMP Proxy (L3): playbooks exist only for V1 100G switches
+# (igmp_proxy/switchv1alphabridge/100g)
+igmpproxyconfig:
+  only:
+    - family: switchv1alphabridge
+      speed: 100g

@@ -1,0 +1,425 @@
+
+---
+# ============================================================
+# Get IGMP Proxy Configuration
+#
+# Retrieves IGMP Snooping and IGMP Proxy configuration
+# from the AS300/28/C switch.
+# Extracts agent VLAN and client VLAN mappings.
+# Saves the execution result in YAML format using switch IP.
+#
+# CLI Commands:
+# - enable
+# - show ip igmp-proxy
+# - config
+# - show running-config
+# ============================================================
+
+- name: Get IGMP Proxy Configuration
+  hosts: alphabridge_devices
+  gather_facts: false
+  connection: local
+
+  vars:
+    project_root: "{{ playbook_dir }}/../../../.."
+    output_dir: "{{ project_root }}/output"
+    tmp_dir: "{{ project_root }}/tmp"
+
+  tasks:
+    - name: Create output directory
+      ansible.builtin.file:
+        path: "{{ output_dir }}"
+        state: directory
+        mode: "0755"
+
+    - name: Create temporary directory
+      ansible.builtin.file:
+        path: "{{ tmp_dir }}"
+        state: directory
+        mode: "0755"
+
+    - name: Generate IGMP Proxy retrieval script
+      ansible.builtin.copy:
+        dest: "{{ tmp_dir }}/get_igmpproxy_{{ ansible_host | default(inventory_hostname) }}.py"
+        mode: "0700"
+        content: |
+          import sys
+          import time
+          import re
+          import yaml
+          import paramiko
+
+          HOST = {{ (ansible_host | default(inventory_hostname)) | to_json }}
+          PORT = int({{ (ansible_port | default(22)) | to_json }})
+          USERNAME = {{ (ansible_user | default(ansible_ssh_user | default('admin'))) | to_json }}
+          PASSWORD = {{ (ansible_password | default(ansible_ssh_pass | default(''))) | to_json }}
+
+          OUTPUT_FILE = {{ (output_dir ~ '/' ~ (ansible_host | default(inventory_hostname)) ~ '_getigmpproxy.yml') | to_json }}
+
+          def clean_output(output):
+              output = re.sub(
+                  r"\x1b\[[0-9;]*[A-Za-z]",
+                  "",
+                  output
+              )
+              return output.replace("\r", "")
+
+          def read_output(channel, timeout=30):
+              output = ""
+              start_time = time.time()
+              last_data_time = None
+
+              while time.time() - start_time < timeout:
+
+                  if channel.recv_ready():
+                      data = channel.recv(65535).decode(
+                          "utf-8", errors="ignore"
+                      )
+
+                      output += data
+                      last_data_time = time.time()
+
+                      # 100G CLI pages long output ("--More--")
+                      if re.search(r"--\s*more\s*--", data, re.IGNORECASE):
+                          output = re.sub(r"--\s*more\s*--", "", output, flags=re.IGNORECASE)
+                          channel.send(" ")
+                          continue
+
+                      lines = [
+                          line.strip()
+                          for line in clean_output(output).splitlines()
+                          if line.strip()
+                      ]
+
+                      if lines and re.search(
+                          r"[>#]\s*$",
+                          lines[-1]
+                      ):
+                          return clean_output(output)
+
+                  else:
+                      if (
+                          output
+                          and last_data_time is not None
+                          and time.time() - last_data_time >= 2
+                      ):
+                          return clean_output(output)
+
+                      time.sleep(0.2)
+
+              if output:
+                  return clean_output(output)
+
+              raise RuntimeError(
+                  "No response received from switch."
+              )
+
+          def run_command(channel, command, timeout=30):
+              channel.send(command + "\n")
+              return read_output(channel, timeout)
+
+          def last_prompt(output):
+              lines = [
+                  line.strip()
+                  for line in clean_output(output).splitlines()
+                  if line.strip()
+              ]
+
+              return lines[-1] if lines else ""
+
+          def is_config_prompt(prompt):
+              return bool(
+                  re.search(
+                      r"\(config[^)]*\)#\s*$",
+                      prompt,
+                      re.IGNORECASE
+                  )
+              )
+
+          def has_cli_error(output):
+              patterns = [
+                  r"Unknown command",
+                  r"Invalid command",
+                  r"Bad parameter",
+                  r"Too many parameters",
+                  r"invalid input",
+                  r"Incomplete command",
+                  r"% Error",
+                  r"% Invalid"
+              ]
+
+              return any(
+                  re.search(pattern, output, re.IGNORECASE)
+                  for pattern in patterns
+              )
+
+          def parse_igmpproxy(output):
+              proxy_status = "unknown"
+              mappings = []
+              current_agent = None
+
+              output = clean_output(output)
+
+              match = re.search(
+                  r"Global IGMP proxy:\s*(Enabled|Disabled)",
+                  output,
+                  re.IGNORECASE
+              )
+
+              if match:
+                  proxy_status = match.group(1).lower()
+
+              for line in output.splitlines():
+                  line = line.strip()
+
+                  agent_match = re.search(
+                      r"Agent VLAN\s+(\d+)",
+                      line,
+                      re.IGNORECASE
+                  )
+
+                  if agent_match:
+                      current_agent = int(agent_match.group(1))
+                      continue
+
+                  client_match = re.search(
+                      r"Client VLANs\s*:\s*(.*)",
+                      line,
+                      re.IGNORECASE
+                  )
+
+                  if client_match and current_agent is not None:
+                      client_vlans = re.findall(
+                          r"\d+",
+                          client_match.group(1)
+                      )
+
+                      for client_vlan in client_vlans:
+                          mappings.append({
+                              "agent_vlan": current_agent,
+                              "client_vlan": int(client_vlan)
+                          })
+
+              if proxy_status == "unknown":
+                  raise RuntimeError(
+                      "Global IGMP proxy status not found."
+                  )
+
+              return proxy_status, mappings
+
+          def parse_igmpsnooping(output):
+              # Global snooping is on only with "ip igmp-snooping [enable]";
+              # "ip igmp-snooping vlan ..." / "querier" lines are per-VLAN
+              # settings and don't turn it on. No line = default (disabled).
+              snooping = "disabled"
+
+              for line in clean_output(output).splitlines():
+                  line = line.strip()
+
+                  if re.match(
+                      r"^no\s+ip\s+igmp-snooping(?:\s+enable)?\s*$",
+                      line,
+                      re.IGNORECASE
+                  ):
+                      snooping = "disabled"
+
+                  elif re.match(
+                      r"^ip\s+igmp-snooping(?:\s+enable)?\s*$",
+                      line,
+                      re.IGNORECASE
+                  ):
+                      snooping = "enabled"
+
+              return snooping
+
+          def parse_config_mappings(output):
+              # "ip igmp-proxy agent-vlan 34 client-vlan map 36"
+              return [
+                  {"agent_vlan": int(agent), "client_vlan": int(client)}
+                  for agent, client in re.findall(
+                      r"(?m)^\s*(?:ip\s+)?igmp-proxy\s+agent-vlan\s+(\d+)\s+client-vlan\s+map\s+(\d+)",
+                      clean_output(output),
+                      re.IGNORECASE
+                  )
+              ]
+
+          def main():
+              client = None
+              status = "failed"
+              proxy_status = "unknown"
+              snooping = "unknown"
+              mappings = []
+              error = ""
+
+              try:
+                  client = paramiko.SSHClient()
+
+                  client.set_missing_host_key_policy(
+                      paramiko.AutoAddPolicy()
+                  )
+
+                  client.connect(
+                      hostname=HOST,
+                      port=PORT,
+                      username=USERNAME,
+                      password=PASSWORD,
+                      look_for_keys=False,
+                      allow_agent=False,
+                      timeout=15,
+                      banner_timeout=15,
+                      auth_timeout=15
+                  )
+
+                  channel = client.invoke_shell()
+
+                  initial_output = read_output(channel, 15)
+                  prompt = last_prompt(initial_output)
+
+                  if not prompt:
+                      raise RuntimeError(
+                          "Could not read switch prompt."
+                      )
+
+                  if not is_config_prompt(prompt):
+
+                      if prompt.endswith(">"):
+                          output = run_command(
+                              channel, "enable", 15
+                          )
+
+                          if has_cli_error(output):
+                              raise RuntimeError(
+                                  "Enable command failed."
+                              )
+
+                          prompt = last_prompt(output)
+
+                          if not prompt.endswith("#"):
+                              raise RuntimeError(
+                                  "Could not enter privileged mode."
+                              )
+
+                  # Get IGMP Proxy configuration
+
+                  proxy_output = run_command(
+                      channel,
+                      "show ip igmp-proxy",
+                      30
+                  )
+
+                  if has_cli_error(proxy_output):
+                      raise RuntimeError(
+                          "Failed to retrieve IGMP Proxy configuration."
+                      )
+
+                  proxy_status, mappings = parse_igmpproxy(
+                      proxy_output
+                  )
+
+                  # Enter configuration mode
+
+                  prompt = last_prompt(proxy_output)
+
+                  if not is_config_prompt(prompt):
+                      output = run_command(
+                          channel, "config", 15
+                      )
+
+                      prompt = last_prompt(output)
+
+                      if (
+                          has_cli_error(output)
+                          or not is_config_prompt(prompt)
+                      ):
+                          raise RuntimeError(
+                              "Could not enter configuration mode."
+                          )
+
+                  # Get IGMP Snooping configuration
+
+                  running_output = run_command(
+                      channel,
+                      "show running-config",
+                      60
+                  )
+
+                  if has_cli_error(running_output):
+                      raise RuntimeError(
+                          "Failed to retrieve running configuration."
+                      )
+
+                  if "Current configuration:" not in running_output:
+                      raise RuntimeError(
+                          "Incomplete running configuration received."
+                      )
+
+                  snooping = parse_igmpsnooping(
+                      running_output
+                  )
+
+                  # Maps from "show ip igmp-proxy" and the running config
+                  seen = set()
+                  merged = []
+                  for item in mappings + parse_config_mappings(running_output):
+                      key = (item["agent_vlan"], item["client_vlan"])
+                      if key not in seen:
+                          seen.add(key)
+                          merged.append(item)
+                  mappings = merged
+
+                  # Leave config mode so the session ends cleanly
+                  run_command(channel, "end", 10)
+
+                  status = "success"
+
+              except Exception as exc:
+                  status = "failed"
+                  error = str(exc)
+
+              finally:
+                  if client:
+                      client.close()
+
+              report = {
+                  "host": HOST,
+                  "status": status,
+                  "igmp_snooping": snooping,
+                  "igmp_proxy_status": proxy_status,
+                  "igmp_proxy": mappings
+              }
+
+              if error:
+                  report["error"] = error
+
+              with open(OUTPUT_FILE, "w") as report_file:
+                  yaml.safe_dump(
+                      report,
+                      report_file,
+                      default_flow_style=False,
+                      sort_keys=False
+                  )
+
+              print("IP: " + HOST)
+              print("Status: " + status.upper())
+
+              if error:
+                  print("Error: " + error)
+
+              sys.exit(0 if status == "success" else 1)
+
+          if __name__ == "__main__":
+              main()
+
+    - name: Execute IGMP Proxy retrieval script
+      ansible.builtin.command:
+        argv:
+          - "{{ project_root }}/bin/python3"
+          - "{{ tmp_dir }}/get_igmpproxy_{{ ansible_host | default(inventory_hostname) }}.py"
+      register: igmp_proxy_result
+      changed_when: false
+      failed_when: igmp_proxy_result.rc != 0
+
+    - name: Display IGMP Proxy retrieval result
+      ansible.builtin.debug:
+        msg: "{{ igmp_proxy_result.stdout_lines }}"
+

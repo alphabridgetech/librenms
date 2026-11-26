@@ -232,6 +232,8 @@ Route::prefix('v0')->group(function () {
         Route::post('l3/vlanip/set/{hostname}', [App\Api\Controllers\KunalApiController::class, 'setvlaninterfaceip'])->name('l3.vlanip.set');
         Route::get('l3/vlanipv6/show/{hostname}', [App\Api\Controllers\KunalApiController::class, 'getvlaninterfaceipv6'])->name('l3.vlanipv6.show');
         Route::post('l3/vlanipv6/set/{hostname}', [App\Api\Controllers\KunalApiController::class, 'setvlaninterfaceipv6'])->name('l3.vlanipv6.set');
+        Route::get('l3/igmpproxy/show/{hostname}', [App\Api\Controllers\KunalApiController::class, 'getigmpproxy'])->name('l3.igmpproxy.show');
+        Route::post('l3/igmpproxy/set/{hostname}', [App\Api\Controllers\KunalApiController::class, 'setigmpproxy'])->name('l3.igmpproxy.set');
         Route::post('l3/ipv6route/batchdelete/{hostname}', [App\Api\Controllers\KunalApiController::class, 'batchdeleteipv6route'])->name('l3.ipv6route.batchdelete');
         Route::post('l3/staticroute/batchdelete/{hostname}', [App\Api\Controllers\KunalApiController::class, 'batchdeletestaticroute'])->name('l3.staticroute.batchdelete');
         Route::post('l3/vlanip/batchdelete/{hostname}', [App\Api\Controllers\KunalApiController::class, 'batchdeletevlaninterfaceip'])->name('l3.vlanip.batchdelete');

@@ -409,6 +409,7 @@ class ConfigurationController implements DeviceTab
             ['name' => __('VLAN Interface IPv6'), 'url' => 'vlaninterfaceipv6config'],
             ['name' => __('Static Route'), 'url' => 'staticrouteconfig'],
             ['name' => __('IPv6 Route'), 'url' => 'ipv6routeconfig'],
+            ['name' => __('IGMP Proxy'), 'url' => 'igmpproxyconfig'],
             ['name' => __('DHCP Client'), 'url' => 'dhcpclientconfig'],
             ['name' => __('DHCP Server'), 'url' => 'dhcpserverconfig'],
             ['name' => __('IPv6 DHCP Client'), 'url' => 'ipv6dhcpclientconfig'],
